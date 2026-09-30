@@ -636,13 +636,13 @@ def _reply_text(reply: Any) -> str:
     return "" if reply is None else str(reply)
 
 
-def _iter_json_objects(text: str):
-    """Yield each balanced ``{...}`` span in *text*, outermost first.
+def _iter_json_spans(text: str):
+    """Yield every balanced ``{...}`` / ``[...]`` span in *text*, outermost first.
 
     A regex such as ``\\{.*?\\}`` cannot be used here: ``arguments`` routinely
     nests objects and arrays, and a non-greedy match stops at the *first*
     closing brace and hands back unparseable JSON. This scanner tracks depth
-    while skipping braces that sit inside JSON strings, and honours backslash
+    while skipping brackets that sit inside JSON strings, and honours backslash
     escapes, so a literal ``"}"`` inside a value cannot unbalance it.
     """
     depth = 0
@@ -660,18 +660,212 @@ def _iter_json_objects(text: str):
             continue
         if char == '"':
             in_string = True
-        elif char == "{":
+        elif char in "{[":
             if depth == 0:
                 start = index
             depth += 1
-        elif char == "}" and depth > 0:
+        elif char in "}]" and depth > 0:
             depth -= 1
             if depth == 0 and start != -1:
                 yield text[start : index + 1]
                 start = -1
 
 
-def parse_tool_calls(reply: Any) -> tuple[list[dict[str, Any]], str]:
+# Backwards-compatible alias: the Stage 1/2 callers only ever needed objects.
+_iter_json_objects = _iter_json_spans
+
+
+def _straighten_quotes(text: str) -> str:
+    """Replace curly quotes, which models sometimes emit, with ASCII ones."""
+    return (
+        text.replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u201e", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
+
+
+def _single_quotes_to_double(text: str) -> str:
+    """Rewrite bare ``'`` as ``"`` while leaving double-quoted spans alone.
+
+    Only valid JSON ever contains ``"``, so anything else outside a string is
+    a single-quote typo and can be swapped safely.
+    """
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+        elif char == "'":
+            out.append('"')
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def _drop_trailing_commas(text: str) -> str:
+    """Remove ``,`` that sits immediately before ``}`` or ``]`` outside strings."""
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    length = len(text)
+    for index, char in enumerate(text):
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            continue
+        if char == ",":
+            look = index + 1
+            while look < length and text[look] in " \t\r\n":
+                look += 1
+            if look < length and text[look] in "}]":
+                continue  # trailing comma: drop it
+        out.append(char)
+    return "".join(out)
+
+
+def _try_loads(raw: str) -> Any:
+    """``json.loads`` with a small ladder of repairs, or ``None`` on failure."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    for variant in (raw, _straighten_quotes(raw)):
+        try:
+            return json.loads(variant)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    for base in (_straighten_quotes(raw), raw):
+        repaired = _drop_trailing_commas(_single_quotes_to_double(base))
+        try:
+            return json.loads(repaired)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
+def _json_payloads(text: str) -> list[Any]:
+    """Parse *text* as JSON, progressively more forgiving.
+
+    Attempts, in order: the text as given; the ``{`` .. last ``}`` slice (this
+    discards any prose the model wrapped around the payload); then every
+    balanced span, so two calls emitted back to back are both recovered.
+    """
+    out: list[Any] = []
+
+    def _add(raw: str) -> None:
+        if not raw.strip():
+            return
+        value = _try_loads(raw)
+        if value is not None and value not in out:
+            out.append(value)
+
+    _add(text)
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        _add(text[start : end + 1])
+    for span in _iter_json_spans(text):
+        _add(span)
+    return out
+
+
+# Keys a model may plausibly use for the function name and the argument bag.
+_NAME_KEYS = ("name", "tool_name", "function_name", "tool")
+_ARG_KEYS = ("arguments", "parameters", "args", "input")
+_ENVELOPE_KEYS = ("function", "tool_call", "call")
+
+# A runaway or looping model must not be able to fan out unbounded tool calls.
+_MAX_CALLS_PER_BODY = 8
+
+
+def _normalize_call(value: Any, depth: int = 0) -> list[tuple[str, dict[str, Any]]]:
+    """Pull ``(name, arguments)`` pairs out of one parsed JSON value.
+
+    Handles the shapes a 7B model actually emits: a bare ``{"name", ...}``,
+    the OpenAI-style ``{"function": {"name", ...}}`` envelope, ``parameters``
+    instead of ``arguments``, and a top-level array of calls.
+    """
+    if depth > 4:
+        return []
+    if isinstance(value, list):
+        out: list[tuple[str, dict[str, Any]]] = []
+        for item in value:
+            out.extend(_normalize_call(item, depth + 1))
+        return out
+    if not isinstance(value, dict):
+        return []
+
+    if not any(key in value for key in _NAME_KEYS):
+        for key in _ENVELOPE_KEYS:
+            inner = value.get(key)
+            if isinstance(inner, dict):
+                return _normalize_call(inner, depth + 1)
+
+    name = next(
+        (value[k] for k in _NAME_KEYS if isinstance(value.get(k), str) and value[k].strip()),
+        None,
+    )
+    if not name:
+        return []
+    arguments = next((value[k] for k in _ARG_KEYS if k in value), {})
+    return [(str(name).strip(), _coerce_arguments(arguments))]
+
+
+def _calls_from_json(body: str) -> list[tuple[str, dict[str, Any]]]:
+    """Every call recoverable from one candidate body, tags or no tags.
+
+    All parsed payloads are visited, not just the first that works, so a model
+    that emits two calls back to back without a tag between them is not
+    truncated to the first. ``_iter_json_spans`` only ever yields outermost
+    spans, so a nested ``arguments`` object is never double-counted.
+    """
+    out: list[tuple[str, dict[str, Any]]] = []
+    for payload in _json_payloads(body):
+        for name, arguments in _normalize_call(payload):
+            if (name, json.dumps(arguments, sort_keys=True, default=str)) not in [
+                (n, json.dumps(a, sort_keys=True, default=str)) for n, a in out
+            ]:
+                out.append((name, arguments))
+        if len(out) >= _MAX_CALLS_PER_BODY:
+            break
+    return out
+
+
+def _why_unparsed(body: str) -> str:
+    """A short, human-readable reason a body yielded no call."""
+    stripped = body.strip()
+    if not stripped:
+        return "empty tool call"
+    try:
+        json.loads(stripped)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return f"not valid JSON ({exc})"
+    return "valid JSON, but no usable 'name'/'arguments' pair: " + _short(stripped, 200)
+
+
+def parse_tool_calls(
+    reply: Any, debug: bool | None = None
+) -> tuple[list[dict[str, Any]], str]:
     """Split a model reply into tool calls and the leftover prose.
 
     Accepts ``str`` or an OpenAI-style ``dict`` (any backend shape; text is
@@ -684,8 +878,13 @@ def parse_tool_calls(reply: Any) -> tuple[list[dict[str, Any]], str]:
     3. a bare JSON object ``{"name": ..., "arguments": ...}``, which small
        models produce when they forget the tags.
 
-    Never raises: unparseable payloads are skipped or reported as a
-    ``malformed`` call, and plain prose yields an empty list.
+    Bodies are salvaged rather than rejected: prose around the JSON, trailing
+    commas, single or curly quotes, stray brackets, a ``function`` envelope and
+    a top-level array are all tolerated, because a 7B model emits all of them.
+    A body that truly cannot be read becomes one ``malformed`` call carrying a
+    ``reason``, and ``GEOMAG_DEBUG_PARSER=1`` echoes the raw text for that case.
+
+    Never raises: unparseable payloads are reported, not propagated.
 
     Returns ``(calls, leftover_text)`` where each call is
     ``{"name": str, "arguments": dict, "malformed": bool}``.
@@ -715,37 +914,43 @@ def parse_tool_calls(reply: Any) -> tuple[list[dict[str, Any]], str]:
 
     if not found:
         for match in _FENCE_RE.finditer(text):
-            try:
-                candidate = json.loads(match.group("body"))
-            except json.JSONDecodeError:
-                continue
-            if isinstance(candidate, dict) and "name" in candidate:
-                found.append(_dumps(candidate))
+            if _calls_from_json(match.group("body")):
+                found.append(match.group("body"))
                 remainder = _FENCE_RE.sub("", remainder)
 
     if not found and '"name"' in text and '"arguments"' in text:
-        for span in _iter_json_objects(text):
-            probe = _coerce_arguments(span)
-            if probe.get("name"):
+        for span in _iter_json_spans(text):
+            if _calls_from_json(span):
                 found.append(span)
                 # Drop the consumed span, as the fenced branch does, so a
                 # forgotten tag cannot leak tool JSON into the final answer.
                 remainder = remainder.replace(span, "", 1)
-                break
 
     for body in found:
-        candidate = _coerce_arguments(body)
-        name = candidate.get("name")
-        if not name:
-            calls.append({"name": "", "arguments": candidate, "malformed": True})
-            continue
-        calls.append(
-            {
-                "name": str(name),
-                "arguments": _coerce_arguments(candidate.get("arguments")),
-                "malformed": False,
-            }
+        recovered = _calls_from_json(body)
+        if recovered:
+            for name, arguments in recovered:
+                calls.append({"name": name, "arguments": arguments, "malformed": False})
+        else:
+            calls.append(
+                {
+                    "name": "",
+                    "arguments": _coerce_arguments(body),
+                    "malformed": True,
+                    "reason": _why_unparsed(body),
+                }
+            )
+
+    if debug is None:
+        debug = os.environ.get("GEOMAG_DEBUG_PARSER", "").strip().lower() not in (
+            "",
+            "0",
+            "false",
+            "no",
         )
+    if debug and (any(c["malformed"] for c in calls) or os.environ.get("GEOMAG_DEBUG_PARSER")):
+        print(f"\n[DEBUG] RAW LLM OUTPUT FOR PARSING:\n{repr(text[:500])}\n")
+
     return calls, remainder
 
 
@@ -1025,7 +1230,7 @@ def run_agent(
         except Exception as exc:
             return _error("brain_failed", f"{type(exc).__name__}: {exc}", round=round_no)
 
-        content = reply.get("content") or ""
+        content = _reply_text(reply)
         calls, leftover = parse_tool_calls(reply)
 
         if not calls:
@@ -1119,6 +1324,7 @@ def run_agent(
                     '<tool_call>{"name": "<tool>", "arguments": {...}}</tool_call> '
                     "with valid JSON and nothing after the closing tag.",
                     received=_short(args),
+                    reason=call.get("reason", "unrecognised payload"),
                 )
                 entry["error"] = payload["error"]
             elif name not in HANDLERS:
@@ -1141,6 +1347,12 @@ def run_agent(
                     note = f"{name} raised {type(exc).__name__}"
 
             entry["ok"] = not is_error(payload)
+            # Surface the diagnostic fields, not just the code: without these a
+            # malformed call in Colab reports "malformed_tool_call" and nothing
+            # else, which is what sent the previous two fixes down blind paths.
+            for key in ("message", "received", "reason", "hint"):
+                if isinstance(payload, dict) and payload.get(key) is not None:
+                    entry[key] = payload[key]
             if entry["ok"] and name in PLOT_TOOLS and isinstance(payload.get("path"), str):
                 plots.append(payload["path"])
                 entry["plot"] = payload["path"]

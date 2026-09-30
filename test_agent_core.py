@@ -227,6 +227,71 @@ def test_brace_inside_string_value_does_not_unbalance():
     assert calls[0]["arguments"]["title"] == "a } b {"
 
 
+# --- repair ladder: shapes a 7B model actually emits (Colab malformed_tool_call) ---
+
+def _names(reply):
+    calls, _ = ac.parse_tool_calls(reply, debug=False)
+    return [c["name"] for c in calls if not c["malformed"]]
+
+
+@pytest.mark.parametrize(
+    "label,body,expected",
+    [
+        ("trailing comma", '{"name":"f","arguments":{},}', ["f"]),
+        ("single quotes", "{'name':'f','arguments':{}}", ["f"]),
+        ("function envelope", '{"function":{"name":"f","arguments":{"a":1}}}', ["f"]),
+        ("parameters alias", '{"name":"f","parameters":{"a":1}}', ["f"]),
+        ("args alias", '{"name":"f","args":{"a":1}}', ["f"]),
+        ("tool alias", '{"tool":"f","args":{"a":1}}', ["f"]),
+        ("top-level array", '[{"name":"f","arguments":{"a":1}}]', ["f"]),
+        ("array of two calls", '[{"name":"a","arguments":{}},{"name":"b","arguments":{}}]', ["a", "b"]),
+        ("two objects glued", '{"name":"a","arguments":{}}{"name":"b","arguments":{}}', ["a", "b"]),
+        ("stray closing brace", '{"name":"f","arguments":{}}}', ["f"]),
+        ("prose around json", 'Sure!\n{"name":"f","arguments":{"a":1}}\nDone', ["f"]),
+        ("curly quotes", "{\u201cname\u201d:\u201cf\u201d,\u201carguments\u201d:{}}", ["f"]),
+        ("zero-width inside", "{\u200b\"name\"\u200b:\u200b\"f\"\u200b,\u200b\"arguments\"\u200b:{\u200b}}", ["f"]),
+        ("arguments as string", '{"name":"f","arguments":"{\\"a\\":1}"}', ["f"]),
+        ("fence inside tag", '```json\n{"name":"f","arguments":{"a":1}}\n```', ["f"]),
+        ("nested args", '{"name":"f","arguments":{"a":{"b":{"c":1}}}}', ["f"]),
+    ],
+)
+def test_repairs_common_model_garbling(label, body, expected):
+    assert _names(T_OPEN + body + T_CLOSE) == expected, label
+
+
+def test_unrecoverable_body_reports_a_reason():
+    calls, _ = ac.parse_tool_calls(T_OPEN + "total nonsense" + T_CLOSE, debug=False)
+    assert len(calls) == 1
+    assert calls[0]["malformed"] is True
+    assert calls[0]["name"] == ""
+    assert "not valid JSON" in calls[0]["reason"]
+
+
+def test_malformed_error_payload_carries_the_reason():
+    """The Colab log must explain the failure without a second guess."""
+    brain = ac.ScriptedBrain(
+        [T_OPEN + "total nonsense" + T_CLOSE, "final answer"]
+    )
+    out = ac.run_agent("q", brain=brain, verbose=False)
+    assert out["ok"] is True
+    step = out["tool_calls"][0]
+    assert step["error"] == "malformed_tool_call"
+
+
+def test_debug_print_is_quiet_on_success_but_fires_on_failure(capsys):
+    ac.parse_tool_calls(T_OPEN + '{"name":"f","arguments":{}}' + T_CLOSE, debug=True)
+    assert "[DEBUG]" not in capsys.readouterr().out
+    ac.parse_tool_calls(T_OPEN + "junk" + T_CLOSE, debug=True)
+    assert "[DEBUG]" in capsys.readouterr().out
+
+
+def test_parse_tool_calls_still_returns_a_tuple():
+    calls, leftover = ac.parse_tool_calls(
+        T_OPEN + '{"name":"f","arguments":{}}' + T_CLOSE, debug=False
+    )
+    assert isinstance(calls, list) and isinstance(leftover, str)
+
+
 def test_handles_bare_json_without_tags():
     calls, _ = ac.parse_tool_calls({
         "content": '{"name": "get_statistics", "arguments": {"df": "raw"}}'
