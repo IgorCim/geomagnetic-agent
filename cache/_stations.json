@@ -1,0 +1,3428 @@
+{
+ "fetched_at": 1790763565.180114,
+ "stations": {
+  "AAE": {
+   "name": "Addis Ababa, Ethiopia (closed)",
+   "latitude": 9.035,
+   "longitude": 38.77,
+   "elevation": 2441,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ABG": {
+   "name": "Alibag, India",
+   "latitude": 18.638,
+   "longitude": 72.872,
+   "elevation": 7,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ABK": {
+   "name": "Abisko, Sweden",
+   "latitude": 68.358,
+   "longitude": 18.823,
+   "elevation": 380,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "AIA": {
+   "name": "Vernadsky, Agentine Islands",
+   "latitude": -65.245,
+   "longitude": 295.742,
+   "elevation": 10,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ALE": {
+   "name": "Alert, Canada (closed)",
+   "latitude": 82.497,
+   "longitude": 297.647,
+   "elevation": 60,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "AMS": {
+   "name": "Martin de Vivies, French Southern Territories (no longer IMO)",
+   "latitude": -37.8,
+   "longitude": 77.57,
+   "elevation": 50,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "API": {
+   "name": "Apia, Western Samoa",
+   "latitude": -13.816,
+   "longitude": 188.219,
+   "elevation": 2,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "AQU": {
+   "name": "L'Aquila, Italy (closed)",
+   "latitude": 42.38,
+   "longitude": 13.32,
+   "elevation": 682,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ARS": {
+   "name": "Arti, Russia",
+   "latitude": 56.433,
+   "longitude": 58.567,
+   "elevation": 290,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ASC": {
+   "name": "Ascension Island",
+   "latitude": -7.95,
+   "longitude": 345.62,
+   "elevation": 177,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ASP": {
+   "name": "Alice Springs, Australia",
+   "latitude": -23.762,
+   "longitude": 133.883,
+   "elevation": 557,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BDV": {
+   "name": "Budkov, Czech Republic",
+   "latitude": 49.08,
+   "longitude": 14.02,
+   "elevation": 496,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BEL": {
+   "name": "Belsk, Poland",
+   "latitude": 51.836,
+   "longitude": 20.789,
+   "elevation": 180,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BFE": {
+   "name": "Brorfelde, Denmark",
+   "latitude": 55.625,
+   "longitude": 11.672,
+   "elevation": 80,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BFO": {
+   "name": "Black Forest Observatory, Germany",
+   "latitude": 48.331,
+   "longitude": 8.325,
+   "elevation": 641,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BLC": {
+   "name": "Baker Lake, Canada",
+   "latitude": 64.318,
+   "longitude": 263.988,
+   "elevation": 30,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BMT": {
+   "name": "Beijing Ming Tombs, China",
+   "latitude": 40.3,
+   "longitude": 116.2,
+   "elevation": 183,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BNG": {
+   "name": "Bangui, Central African Republic (closed)",
+   "latitude": 4.33,
+   "longitude": 18.57,
+   "elevation": 395,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BOU": {
+   "name": "Boulder, USA",
+   "latitude": 40.14,
+   "longitude": 254.767,
+   "elevation": 1682,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BOX": {
+   "name": "Borok, Russia",
+   "latitude": 58.07,
+   "longitude": 38.23,
+   "elevation": 115,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BRD": {
+   "name": "Brandon, Canada",
+   "latitude": 49.87,
+   "longitude": 260.026,
+   "elevation": 380,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BRW": {
+   "name": "Barrow, USA",
+   "latitude": 71.32,
+   "longitude": 203.38,
+   "elevation": 12,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "BSL": {
+   "name": "Stennis Space Center, USA",
+   "latitude": 30.35,
+   "longitude": 270.36,
+   "elevation": 8,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CBB": {
+   "name": "Cambridge Bay, Canada",
+   "latitude": 69.123,
+   "longitude": 254.969,
+   "elevation": 20,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CKI": {
+   "name": "Cocos-Keeling Islands, Australia",
+   "latitude": -12.188,
+   "longitude": 96.834,
+   "elevation": 3,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CLF": {
+   "name": "Chambon la Foret, France",
+   "latitude": 48.025,
+   "longitude": 2.26,
+   "elevation": 145,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CMO": {
+   "name": "College, USA",
+   "latitude": 64.87,
+   "longitude": 212.14,
+   "elevation": 197,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CNB": {
+   "name": "Canberra, Australia",
+   "latitude": -35.32,
+   "longitude": 149.36,
+   "elevation": 859,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CNH": {
+   "name": "Changchun, China (no longer IMO)",
+   "latitude": 44.08,
+   "longitude": 124.86,
+   "elevation": 187,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CPL": {
+   "name": "Choutuppal, India",
+   "latitude": 17.294,
+   "longitude": 78.919,
+   "elevation": 360,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CSY": {
+   "name": "Casey, Australia",
+   "latitude": -66.283,
+   "longitude": 110.533,
+   "elevation": 41,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CTA": {
+   "name": "Charters Towers, Australia",
+   "latitude": -20.09,
+   "longitude": 146.264,
+   "elevation": 370,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CYG": {
+   "name": "Cheongyang, Republic of Korea",
+   "latitude": 36.37,
+   "longitude": 126.854,
+   "elevation": 165,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "CZT": {
+   "name": "Port Alfred, French Southern Territories (no longer IMO)",
+   "latitude": -46.43,
+   "longitude": 51.86,
+   "elevation": 160,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "DED": {
+   "name": "Deadhorse, USA",
+   "latitude": 70.36,
+   "longitude": 211.21,
+   "elevation": 10,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "DLR": {
+   "name": "Del Rio, USA (closed)",
+   "latitude": 29.49,
+   "longitude": 259.083,
+   "elevation": 355,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "DLT": {
+   "name": "Dalat, Vietnam",
+   "latitude": 11.95,
+   "longitude": 108.48,
+   "elevation": 1583,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "DMC": {
+   "name": "Dome Concordia, Antarctica (no longer IMO)",
+   "latitude": -75.25,
+   "longitude": 124.167,
+   "elevation": 3250,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "DOU": {
+   "name": "Dourbes, Belgium",
+   "latitude": 50.1,
+   "longitude": 4.6,
+   "elevation": 225,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "DRV": {
+   "name": "Dumont d'Urville, French Southern Territories (no longer IMO)",
+   "latitude": -66.67,
+   "longitude": 140.01,
+   "elevation": 30,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "DUR": {
+   "name": "Duronia, Italy",
+   "latitude": 41.65,
+   "longitude": 14.47,
+   "elevation": 920,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "EBR": {
+   "name": "Ebro, Spain",
+   "latitude": 40.957,
+   "longitude": 0.333,
+   "elevation": 532,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ESK": {
+   "name": "Eskdalemuir, United Kingdom",
+   "latitude": 55.314,
+   "longitude": 356.794,
+   "elevation": 245,
+   "data_embargo_hours": 240,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "EYR": {
+   "name": "Eyrewell, New Zealand",
+   "latitude": -43.474,
+   "longitude": 172.393,
+   "elevation": 102,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "FCC": {
+   "name": "Fort Churchill, Canada",
+   "latitude": 58.759,
+   "longitude": 265.912,
+   "elevation": 15,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "FRD": {
+   "name": "Fredericksburg, USA",
+   "latitude": 38.21,
+   "longitude": 282.633,
+   "elevation": 69,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "FRN": {
+   "name": "Fresno, USA",
+   "latitude": 37.09,
+   "longitude": 240.28,
+   "elevation": 331,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "FUR": {
+   "name": "Furstenfeldenbruck, Germany",
+   "latitude": 48.17,
+   "longitude": 11.28,
+   "elevation": 572,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GAN": {
+   "name": "Gan Int. Airpt, Addu Atoll, Maldives",
+   "latitude": -0.695,
+   "longitude": 73.154,
+   "elevation": 2,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GCK": {
+   "name": "Grocka, Serbia",
+   "latitude": 44.633,
+   "longitude": 20.767,
+   "elevation": 231,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GDH": {
+   "name": "Qeqertarsuaq (Godhavn), Greenland",
+   "latitude": 69.252,
+   "longitude": 306.467,
+   "elevation": 24,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GLN": {
+   "name": "Glenlea, Canada (closed)",
+   "latitude": 49.645,
+   "longitude": 262.88,
+   "elevation": 40,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GNA": {
+   "name": "Gnangara, Australia",
+   "latitude": -31.78,
+   "longitude": 115.947,
+   "elevation": 60,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GNG": {
+   "name": "Gingin, Australia",
+   "latitude": -31.356,
+   "longitude": 115.715,
+   "elevation": 50,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GUA": {
+   "name": "Guam, USA",
+   "latitude": 13.59,
+   "longitude": 144.87,
+   "elevation": 140,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GUI": {
+   "name": "Guimar-Tenerife, Spain",
+   "latitude": 28.321,
+   "longitude": 343.559,
+   "elevation": 868,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "GZH": {
+   "name": "Guangzhou, China (no longer IMO)",
+   "latitude": 23.97,
+   "longitude": 112.45,
+   "elevation": 14,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HAD": {
+   "name": "Hartland, United Kingdom",
+   "latitude": 51.0,
+   "longitude": 355.52,
+   "elevation": 95,
+   "data_embargo_hours": 240,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HBK": {
+   "name": "Hartebeesthoek, South Africa",
+   "latitude": -25.88,
+   "longitude": 27.71,
+   "elevation": 1555,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HER": {
+   "name": "Hermanus, South Africa",
+   "latitude": -34.43,
+   "longitude": 19.23,
+   "elevation": 26,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HLP": {
+   "name": "Hel Observatory, Poland",
+   "latitude": 54.603,
+   "longitude": 18.811,
+   "elevation": 1,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HON": {
+   "name": "Honolulu, USA",
+   "latitude": 21.32,
+   "longitude": 202.0,
+   "elevation": 4,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HRB": {
+   "name": "Hurbanovo, Slovakia",
+   "latitude": 47.873,
+   "longitude": 18.19,
+   "elevation": 120,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HRN": {
+   "name": "Hornsund, Svalbard",
+   "latitude": 77.0,
+   "longitude": 15.55,
+   "elevation": 15,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HUA": {
+   "name": "Huancayo, Peru",
+   "latitude": -12.05,
+   "longitude": 284.67,
+   "elevation": 3313,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "HYB": {
+   "name": "Hyderabad, India",
+   "latitude": 17.42,
+   "longitude": 78.55,
+   "elevation": 500,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "IPM": {
+   "name": "Isal de Pascua, Chile",
+   "latitude": -27.171,
+   "longitude": 250.58,
+   "elevation": 83,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "IQA": {
+   "name": "Iqaluit, Canada",
+   "latitude": 63.753,
+   "longitude": 291.482,
+   "elevation": 67,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "IRT": {
+   "name": "Irkutsk (Patrony), Russia",
+   "latitude": 52.17,
+   "longitude": 104.45,
+   "elevation": 478,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ISK": {
+   "name": "Istanbul-Kandili, Turkey",
+   "latitude": 41.063,
+   "longitude": 29.062,
+   "elevation": 130,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "IZN": {
+   "name": "Iznik, Turkey",
+   "latitude": 40.5,
+   "longitude": 29.72,
+   "elevation": 256,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "JAI": {
+   "name": "Jaipur, India",
+   "latitude": 26.92,
+   "longitude": 75.8,
+   "elevation": 394,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "JCO": {
+   "name": "Jim Carrigan Observatory, Alaska",
+   "latitude": 70.356,
+   "longitude": 211.201,
+   "elevation": 20,
+   "data_embargo_hours": 4320,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KAK": {
+   "name": "Kakioka, Japan",
+   "latitude": 36.232,
+   "longitude": 140.186,
+   "elevation": 36,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KDU": {
+   "name": "Kakadu, Australia",
+   "latitude": -12.69,
+   "longitude": 132.47,
+   "elevation": 15,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KEP": {
+   "name": "King Edward Point, South Georgia",
+   "latitude": -54.282,
+   "longitude": 323.507,
+   "elevation": 7,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KHB": {
+   "name": "Khabarovsk, Russia",
+   "latitude": 47.61,
+   "longitude": 134.69,
+   "elevation": 92,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KIR": {
+   "name": "Kiruna, Sweden",
+   "latitude": 67.843,
+   "longitude": 20.42,
+   "elevation": 395,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KIV": {
+   "name": "Kiev Dymer, Ukraine",
+   "latitude": 50.72,
+   "longitude": 30.3,
+   "elevation": 140,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KMH": {
+   "name": "Keetsmanshoop, Namibia",
+   "latitude": -26.54,
+   "longitude": 18.11,
+   "elevation": 1065,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KNY": {
+   "name": "Kanoya, Japan",
+   "latitude": 31.42,
+   "longitude": 130.88,
+   "elevation": 107,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "KOU": {
+   "name": "Kourou, Guyana, France",
+   "latitude": 5.21,
+   "longitude": 307.27,
+   "elevation": 10,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "LER": {
+   "name": "Lerwick, United Kingdom",
+   "latitude": 60.138,
+   "longitude": 358.817,
+   "elevation": 85,
+   "data_embargo_hours": 240,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "LNP": {
+   "name": "Lunping, Taiwan (closed)",
+   "latitude": 25.0,
+   "longitude": 121.167,
+   "elevation": 100,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "LON": {
+   "name": "Lonjsko Polje, Croatia",
+   "latitude": 45.408,
+   "longitude": 16.659,
+   "elevation": 95,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "LOV": {
+   "name": "Lovo, Sweden (closed)",
+   "latitude": 59.34,
+   "longitude": 17.82,
+   "elevation": 30,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "LRM": {
+   "name": "Learmonth, Australia",
+   "latitude": -22.22,
+   "longitude": 114.1,
+   "elevation": 4,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "LVV": {
+   "name": "Lviv, Ukraine",
+   "latitude": 49.9,
+   "longitude": 23.75,
+   "elevation": 326,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "LYC": {
+   "name": "Lycksele, Sweden",
+   "latitude": 64.612,
+   "longitude": 18.748,
+   "elevation": 270,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "LZH": {
+   "name": "Lanzhou, China (closed)",
+   "latitude": 36.087,
+   "longitude": 103.845,
+   "elevation": 1560,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MAB": {
+   "name": "Manhay, Belgium",
+   "latitude": 50.298,
+   "longitude": 5.682,
+   "elevation": 440,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MAW": {
+   "name": "Mawson, Antarctica",
+   "latitude": -67.6,
+   "longitude": 62.88,
+   "elevation": 12,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MBC": {
+   "name": "Mould Bay, Canada (closed)",
+   "latitude": 76.315,
+   "longitude": 240.638,
+   "elevation": 40,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MBO": {
+   "name": "Mbour, Senegal (closed)",
+   "latitude": 14.39,
+   "longitude": 343.04,
+   "elevation": 7,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MCQ": {
+   "name": "Macquarie Island, Australia",
+   "latitude": -54.5,
+   "longitude": 158.95,
+   "elevation": 4,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MEA": {
+   "name": "Meanook, Canada",
+   "latitude": 54.616,
+   "longitude": 246.653,
+   "elevation": 700,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MGD": {
+   "name": "Magadan, Russia",
+   "latitude": 60.051,
+   "longitude": 150.728,
+   "elevation": 226,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MID": {
+   "name": "Midway Island, USA (closed)",
+   "latitude": 28.21,
+   "longitude": 182.62,
+   "elevation": 3,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MLT": {
+   "name": "Misallat, Egypt (closed)",
+   "latitude": 29.515,
+   "longitude": 30.892,
+   "elevation": 120,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MMB": {
+   "name": "Memambetsu, Japan",
+   "latitude": 43.91,
+   "longitude": 144.19,
+   "elevation": 42,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "MZL": {
+   "name": "Manzhouli, China (no longer IMO)",
+   "latitude": 49.6,
+   "longitude": 117.4,
+   "elevation": 682,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "NAQ": {
+   "name": "Narsarsuaq, Greenland",
+   "latitude": 61.167,
+   "longitude": 314.567,
+   "elevation": 4,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "NCK": {
+   "name": "Nagycenk, Hungary",
+   "latitude": 47.63,
+   "longitude": 16.72,
+   "elevation": 153,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "NEW": {
+   "name": "Newport, USA",
+   "latitude": 48.27,
+   "longitude": 242.88,
+   "elevation": 770,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "NGK": {
+   "name": "Niemegk, Germany",
+   "latitude": 52.07,
+   "longitude": 12.68,
+   "elevation": 78,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "NUR": {
+   "name": "Nurmijarvi, Finland",
+   "latitude": 60.51,
+   "longitude": 24.66,
+   "elevation": 105,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "NVS": {
+   "name": "Novosibirsk, Russia",
+   "latitude": 54.85,
+   "longitude": 83.23,
+   "elevation": 130,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "ORC": {
+   "name": "Base Orcadas, Laurie Island",
+   "latitude": -60.737,
+   "longitude": 315.263,
+   "elevation": 3,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "OTT": {
+   "name": "Ottawa, Canada",
+   "latitude": 45.403,
+   "longitude": 284.448,
+   "elevation": 75,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PAF": {
+   "name": "Port-aux-Francais, Kerguelen Island",
+   "latitude": -49.35,
+   "longitude": 70.26,
+   "elevation": 35,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PAG": {
+   "name": "Panagjurishte, Bulgaria",
+   "latitude": 42.515,
+   "longitude": 24.177,
+   "elevation": 556,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PBQ": {
+   "name": "Poste-de-la-Baleine, Canada (closed)",
+   "latitude": 55.277,
+   "longitude": 282.255,
+   "elevation": 40,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PEG": {
+   "name": "Pedeli, Greece",
+   "latitude": 38.1,
+   "longitude": 23.9,
+   "elevation": 380,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PET": {
+   "name": "Paratunka, Russia",
+   "latitude": 52.971,
+   "longitude": 158.248,
+   "elevation": 50,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PHU": {
+   "name": "Phuthuy, Vietnam",
+   "latitude": 21.03,
+   "longitude": 105.96,
+   "elevation": 5,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PIL": {
+   "name": "Pilar, Argentina",
+   "latitude": -31.667,
+   "longitude": 296.119,
+   "elevation": 336,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PPT": {
+   "name": "Pamatai, Tahiti, France",
+   "latitude": -17.567,
+   "longitude": 210.426,
+   "elevation": 357,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "PST": {
+   "name": "Port Stanley, Falklands Islands",
+   "latitude": -51.7,
+   "longitude": 302.11,
+   "elevation": 135,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "QSB": {
+   "name": "Qsaybeh, Lebanon (no longer IMO)",
+   "latitude": 33.871,
+   "longitude": 35.644,
+   "elevation": 525,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "RES": {
+   "name": "Resolute Bay, Canada",
+   "latitude": 74.69,
+   "longitude": 265.105,
+   "elevation": 30,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "REU": {
+   "name": "La Reunion Island, France",
+   "latitude": -21.206,
+   "longitude": 55.576,
+   "elevation": 1580,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin"
+   ]
+  },
+  "SBA": {
+   "name": "Scott Base, Antarctica",
+   "latitude": -77.829,
+   "longitude": 166.671,
+   "elevation": 130,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SBL": {
+   "name": "Sable Island, Canada",
+   "latitude": 43.932,
+   "longitude": 299.99,
+   "elevation": 5,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SFS": {
+   "name": "San Fernando, Spain",
+   "latitude": 36.667,
+   "longitude": 354.055,
+   "elevation": 111,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SHE": {
+   "name": "Saint Helena, Saint Helena",
+   "latitude": -15.961,
+   "longitude": 354.253,
+   "elevation": 586,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SHU": {
+   "name": "Shumagin, USA",
+   "latitude": 55.35,
+   "longitude": 199.54,
+   "elevation": 80,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SIT": {
+   "name": "Sitka, USA",
+   "latitude": 57.06,
+   "longitude": 224.67,
+   "elevation": 24,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SJG": {
+   "name": "San Juan, USA",
+   "latitude": 18.11,
+   "longitude": 293.85,
+   "elevation": 424,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SOD": {
+   "name": "Sodankyla, Finland",
+   "latitude": 67.37,
+   "longitude": 26.63,
+   "elevation": 178,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SPG": {
+   "name": "Saint Petersburg, Russia",
+   "latitude": 60.542,
+   "longitude": 29.716,
+   "elevation": 46,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SPT": {
+   "name": "San Pablo-Toledo, Spain",
+   "latitude": 39.55,
+   "longitude": 355.65,
+   "elevation": 922,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "STJ": {
+   "name": "St John's, Canada",
+   "latitude": 47.595,
+   "longitude": 307.323,
+   "elevation": 100,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "STT": {
+   "name": "Sao Teotonio, Portugal",
+   "latitude": 37.547,
+   "longitude": 351.272,
+   "elevation": 115,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "SUA": {
+   "name": "Surlari, Romania",
+   "latitude": 44.68,
+   "longitude": 26.25,
+   "elevation": 84,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "TAM": {
+   "name": "Tamanrasset, Algeria",
+   "latitude": 22.79,
+   "longitude": 5.53,
+   "elevation": 1373,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "TAN": {
+   "name": "Antananarivo, Madagascar (closed)",
+   "latitude": -18.917,
+   "longitude": 47.552,
+   "elevation": 1375,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "TDC": {
+   "name": "Tristan da Cunha, Tristan da Cunha",
+   "latitude": -37.067,
+   "longitude": 347.684,
+   "elevation": 41,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "THL": {
+   "name": "Qaanaaq (Thule), Greenland",
+   "latitude": 77.47,
+   "longitude": 290.773,
+   "elevation": 57,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "THY": {
+   "name": "Tihany, Hungary",
+   "latitude": 46.9,
+   "longitude": 17.89,
+   "elevation": 187,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "TIK": {
+   "name": "Tiksi, Russia (closed)",
+   "latitude": 71.58,
+   "longitude": 129.0,
+   "elevation": 40,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "TSU": {
+   "name": "Tsumeb, South Africa",
+   "latitude": -19.202,
+   "longitude": 17.584,
+   "elevation": 1273,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "TTB": {
+   "name": "Tatuoca, Brazil",
+   "latitude": -1.205,
+   "longitude": 311.487,
+   "elevation": 10,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "TUC": {
+   "name": "Tucson, USA",
+   "latitude": 32.17,
+   "longitude": 249.27,
+   "elevation": 946,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "UPS": {
+   "name": "Uppsala, Sweden",
+   "latitude": 59.903,
+   "longitude": 17.353,
+   "elevation": 50,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "VAL": {
+   "name": "Valentia, Eire",
+   "latitude": 51.933,
+   "longitude": 349.75,
+   "elevation": 14,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "VIC": {
+   "name": "Victoria, Canada",
+   "latitude": 48.52,
+   "longitude": 236.58,
+   "elevation": 197,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "VNA": {
+   "name": "Neumayer Station, Antarctica",
+   "latitude": -70.683,
+   "longitude": 351.718,
+   "elevation": 46,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "VOS": {
+   "name": "Vostok, Antarctica",
+   "latitude": -78.464,
+   "longitude": 106.835,
+   "elevation": 3488,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "VSS": {
+   "name": "Vassouras, Brazil",
+   "latitude": -22.4,
+   "longitude": 316.35,
+   "elevation": 457,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "WIC": {
+   "name": "Conrad, Austria",
+   "latitude": 47.931,
+   "longitude": 15.866,
+   "elevation": 1088,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "WMQ": {
+   "name": "Urumqi, China (no longer IMO)",
+   "latitude": 43.81,
+   "longitude": 87.71,
+   "elevation": 908,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "WNG": {
+   "name": "Wingst, Germany",
+   "latitude": 53.725,
+   "longitude": 9.053,
+   "elevation": 66,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "YAK": {
+   "name": "Yakutsk, Russia",
+   "latitude": 61.96,
+   "longitude": 129.66,
+   "elevation": 100,
+   "data_embargo_hours": 0,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "YKC": {
+   "name": "Yellowknife, Canada",
+   "latitude": 62.48,
+   "longitude": 245.518,
+   "elevation": 198,
+   "data_embargo_hours": 24,
+   "sources": [
+    "edinburgh_gin",
+    "kyoto_hapi"
+   ]
+  },
+  "AAA": {
+   "name": "Alma Ata Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ANC": {
+   "name": "Ancon Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ARC": {
+   "name": "Arctowski Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ASH": {
+   "name": "Ashkhabad Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "BGY": {
+   "name": "Bar Gyora Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "BJN": {
+   "name": "Bjornoya Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CBI": {
+   "name": "Chichijima Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CCS": {
+   "name": "Cape Chelyuskin Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CWE": {
+   "name": "Cape Wellen Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "DIK": {
+   "name": "Dixon Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "DOB": {
+   "name": "Dombas Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "DVS": {
+   "name": "Davis Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ELT": {
+   "name": "Eilat Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ESA": {
+   "name": "Esashi Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "FSP": {
+   "name": "Fort Simpson Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "HTY": {
+   "name": "Hatizyo Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "KNZ": {
+   "name": "Kanozan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LIV": {
+   "name": "Livingston Island Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LMM": {
+   "name": "Maputo Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LRV": {
+   "name": "Leirvogur Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MIR": {
+   "name": "Mirny Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MIZ": {
+   "name": "Mizusawa Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NWP": {
+   "name": "North West Pacific Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PIU": {
+   "name": "Piura Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SYO": {
+   "name": "Syowa Station Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TEO": {
+   "name": "Teoloyucan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TFS": {
+   "name": "Tbilisi Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TND": {
+   "name": "Tondano Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TRO": {
+   "name": "Tromso Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TRW": {
+   "name": "Trelew Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "WPB": {
+   "name": "West PHL Basin Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "YCB": {
+   "name": "Yinchuan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ABN": {
+   "name": "Abinger Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "AGN": {
+   "name": "Agincourt Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ALM": {
+   "name": "Almeria Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "AML": {
+   "name": "Amberley Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "AMT": {
+   "name": "Amatsia Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "AMU": {
+   "name": "Anchorage Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ANN": {
+   "name": "Annamalainagar Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ARE": {
+   "name": "Arequipa Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ARK": {
+   "name": "Arkhangelsk Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ASO": {
+   "name": "Aso Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "BAG": {
+   "name": "Baguio Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "BDE": {
+   "name": "Big Delta Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "BJI": {
+   "name": "Beijing Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "BLT": {
+   "name": "Beloit Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "BRT": {
+   "name": "Burlington Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "BYR": {
+   "name": "Byrd Station Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CAO": {
+   "name": "Castellaccio Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CAX": {
+   "name": "Carrollton Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CDP": {
+   "name": "Chengdu Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CLH": {
+   "name": "Cheltenham Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "COI": {
+   "name": "Coimbra Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CPA": {
+   "name": "Cha-Pa Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CTO": {
+   "name": "Cape Town Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "CTX": {
+   "name": "Charcot Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "DAL": {
+   "name": "Dallas Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "DAV": {
+   "name": "Davao Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "DBN": {
+   "name": "De Bilt Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "EGS": {
+   "name": "Eights Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "EIC": {
+   "name": "Easter Island Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ETT": {
+   "name": "Ettaiyapuram Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "FAN": {
+   "name": "Fanning Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "FRA": {
+   "name": "Fort Rae Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "FTN": {
+   "name": "Freetown Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "FUQ": {
+   "name": "Fuquene Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "GLM": {
+   "name": "Golmud Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "GRM": {
+   "name": "Grahamstown Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "GRW": {
+   "name": "Greenwich Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "GWC": {
+   "name": "Great Whale River Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "HBA": {
+   "name": "Halley Bay Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "HIS": {
+   "name": "Heiss Island Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "HKI": {
+   "name": "Helsinki Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "HLW": {
+   "name": "Helwan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "HNA": {
+   "name": "Hollandia Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "HVN": {
+   "name": "Havana Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "IBD": {
+   "name": "Ibadan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "JRV": {
+   "name": "Jarvis Island Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "KGD": {
+   "name": "Karaganda Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "KOD": {
+   "name": "Kodaikanal Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "KOR": {
+   "name": "Koror Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "KRC": {
+   "name": "Karachi Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "KSH": {
+   "name": "Kashi Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "KZN": {
+   "name": "Kazan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LAA": {
+   "name": "Little America Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LDV": {
+   "name": "Leadville Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LGR": {
+   "name": "Logrono Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LNN": {
+   "name": "Leningrad Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LPB": {
+   "name": "La Paz Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LQA": {
+   "name": "La Quiaca Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LUA": {
+   "name": "Luanda Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "LWI": {
+   "name": "Lwiro Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MCP": {
+   "name": "Monte Capellino Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MFP": {
+   "name": "Moca Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MMK": {
+   "name": "Loparskaya Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MNK": {
+   "name": "Minsk Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MOL": {
+   "name": "Molodezhnaya Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MOS": {
+   "name": "Moscow Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MRN": {
+   "name": "Marion Island Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MUB": {
+   "name": "Murchison Bay Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MUT": {
+   "name": "Muntinlupa Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NAI": {
+   "name": "Nairobi Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NGP": {
+   "name": "Nagpur Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NKK": {
+   "name": "Novokazalinsk Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NMP": {
+   "name": "Nampula Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NRD": {
+   "name": "Nord Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NVL": {
+   "name": "Novolazarevskaya Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NWS": {
+   "name": "Norway Station Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "OAS": {
+   "name": "Oasis Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ODE": {
+   "name": "Odessa Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PAB": {
+   "name": "Paramaribo Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PCU": {
+   "name": "Price Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PIO": {
+   "name": "Pionerskaya Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PMG": {
+   "name": "Port Moresby Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PND": {
+   "name": "Pondicherry Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "POD": {
+   "name": "Podkamennaya Tung. Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PRU": {
+   "name": "Pruhonice Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PSM": {
+   "name": "Saint Maur Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PTU": {
+   "name": "Plateau Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "QGZ": {
+   "name": "Qiongzhong Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "QIX": {
+   "name": "Qianling Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "QUE": {
+   "name": "Quetta Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "QZH": {
+   "name": "Quanzhou Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "RBD": {
+   "name": "Roi Baudouin Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ROB": {
+   "name": "Roburent Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "RSV": {
+   "name": "Rude Skov Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SAB": {
+   "name": "Sabhawala Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SCO": {
+   "name": "Scoresbysund Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SGE": {
+   "name": "South Georgia Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SHL": {
+   "name": "Shillong Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SIL": {
+   "name": "Silchar Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SKT": {
+   "name": "Sukkertoppen Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SMG": {
+   "name": "Sao Miguel Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SNA": {
+   "name": "Sanae Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SPA": {
+   "name": "South Pole Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SSH": {
+   "name": "She-Shan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SSO": {
+   "name": "Simosato Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "STO": {
+   "name": "Stonyhurst Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SVD": {
+   "name": "Ekaterinburg Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SWI": {
+   "name": "Swider Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SZT": {
+   "name": "Las Mesas Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TAL": {
+   "name": "Talara Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TEH": {
+   "name": "Tehran Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "THJ": {
+   "name": "Tonghai Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TIR": {
+   "name": "Tirunelveli Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TKH": {
+   "name": "Tikhaya Bay Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TKT": {
+   "name": "Tashkent Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TMK": {
+   "name": "Tomsk Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TNG": {
+   "name": "Tangerang Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TOK": {
+   "name": "Tokyo Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TOL": {
+   "name": "Toledo Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TOO": {
+   "name": "Toolangi Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TRD": {
+   "name": "Trivandrum Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "TUN": {
+   "name": "Tuntungan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "UBA": {
+   "name": "Ulan Bator Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "UJJ": {
+   "name": "Ujjain Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "VLA": {
+   "name": "Vladivostok Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "VLJ": {
+   "name": "Val Joyeux Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "VQS": {
+   "name": "Vieques Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "VSK": {
+   "name": "Visakhapatnam Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "WAT": {
+   "name": "Watheroo Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "WHN": {
+   "name": "Wuhan Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "WHS": {
+   "name": "White Shell Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "WIK": {
+   "name": "Wien-Kobenzl Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "WIL": {
+   "name": "Wilkes Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "WIT": {
+   "name": "Witteveen Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "YSS": {
+   "name": "Yuzhno Sakhalinsk Observatory",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "AGW": {
+   "name": "Agawa Station (Real-time, 1-second)",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "MYA": {
+   "name": "Mineyama Station (Real-time, 1-second)",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "NKS": {
+   "name": "Nakanoshima Station (Real-time, 1-second)",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "ONN": {
+   "name": "Onna Station (Real-time, 1-second)",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "PHI": {
+   "name": "Phimai Station (Real-time, 1-second)",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  },
+  "SGA": {
+   "name": "Shigaraki Station (Real-time, 1-second)",
+   "latitude": null,
+   "longitude": null,
+   "elevation": null,
+   "data_embargo_hours": null,
+   "sources": [
+    "kyoto_hapi"
+   ]
+  }
+ }
+}

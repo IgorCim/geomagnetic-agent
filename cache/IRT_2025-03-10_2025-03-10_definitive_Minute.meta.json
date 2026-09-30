@@ -1,0 +1,22 @@
+{
+ "station": "IRT",
+ "start_date": "2025-03-10",
+ "end_date": "2025-03-10",
+ "data_type": "definitive",
+ "samples_per_day": "Minute",
+ "rows": 1440,
+ "saved_at": "2026-09-30T10:49:08+00:00",
+ "source": [
+  {
+   "chunk": "2025-03-10..2025-03-10",
+   "backend": "edinburgh_gin",
+   "state": "reported",
+   "ok": true,
+   "format": "covJson",
+   "note": "ok"
+  }
+ ],
+ "publication_states": [
+  "reported"
+ ]
+}
