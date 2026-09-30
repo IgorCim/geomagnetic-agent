@@ -302,6 +302,107 @@ def test_parse_tool_calls_still_returns_a_tuple():
     assert isinstance(calls, list) and isinstance(leftover, str)
 
 
+# --- Qwen hallucinating the OpenAI response envelope (Colab [DEBUG] finding) ---
+
+HALLUCINATION = "{'content': '\u0422\u0435\u043a\u0441\u0442 \u043e\u0442\u0432\u0435\u0442\u0430', 'tool_calls': None}"
+
+
+def test_system_prompt_forbids_the_api_envelope():
+    sp = ac.SYSTEM_PROMPT
+    assert "API-\u0441\u0435\u0440\u0432\u0435\u0440" in sp          # "API-\u0441\u0435\u0440\u0432\u0435\u0440"
+    assert "'content'" in sp
+    assert "tool_calls" in sp
+    # A concrete example beats an instruction for a 7B model.
+    # The concrete example, minus the tag itself: this JSON body is
+    # unique to the worked example in rule 10.
+    assert '{"name": "fetch_observatory_data", "arguments": {' in sp
+    assert "tool_call>" in sp
+
+
+def test_system_prompt_example_has_no_invisible_chars():
+    """A zero-width space in the example would be copied by the model verbatim."""
+    for ch in ("\u200b", "\u200c", "\u200d", "\ufeff"):
+        assert ch not in ac.SYSTEM_PROMPT
+
+
+def test_temperature_is_low_and_actually_passed():
+    assert ac.TEMPERATURE <= 0.1
+    captured = {}
+
+    class FakeLlama:
+        def create_chat_completion(self, **kwargs):
+            captured.update(kwargs)
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    ac.LlamaBrain(FakeLlama()).chat([{"role": "user", "content": "q"}], ac.TOOL_SCHEMAS)
+    assert captured["temperature"] == ac.TEMPERATURE <= 0.1
+    assert captured["max_tokens"] > 0
+
+
+def test_envelope_hallucination_returns_no_calls_and_keeps_content():
+    calls, leftover = ac.parse_tool_calls(HALLUCINATION)
+    assert calls == []
+    assert leftover == "\u0422\u0435\u043a\u0441\u0442 \u043e\u0442\u0432\u0435\u0442\u0430"
+
+
+@pytest.mark.parametrize(
+    "reply,expected_left",
+    [
+        ("{'content': 'A', 'tool_calls': None}", "A"),
+        ('{"content": "B", "tool_calls": null}', "B"),
+        ("Prose: {'content': 'C', 'tool_calls': None}", "C"),
+        ("```python\n{'content': 'D', 'tool_calls': None}\n```", "D"),
+        ("{'content': '', 'tool_calls': None}", ""),
+    ],
+)
+def test_envelope_variants(reply, expected_left):
+    calls, leftover = ac.parse_tool_calls(reply)
+    assert calls == []
+    assert leftover == expected_left
+
+
+def test_envelope_carrying_a_real_call_is_honoured():
+    reply = (
+        "{'content': '', 'tool_calls': [{'id': 'c0', 'type': 'function', "
+        "'function': {'name': 'fetch_observatory_data', "
+        "'arguments': {'station_code': 'IRT'}}}]}"
+    )
+    calls, _ = ac.parse_tool_calls(reply)
+    assert [c["name"] for c in calls] == ["fetch_observatory_data"]
+    assert calls[0]["arguments"] == {"station_code": "IRT"}
+
+
+def test_envelope_path_does_not_swallow_normal_prose():
+    calls, leftover = ac.parse_tool_calls("\u0413\u043e\u0442\u043e\u0432\u043e, \u0434\u0430\u043d\u043d\u044b\u0435 \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u044b.")
+    assert calls == []
+    assert "\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u044b" in leftover
+
+
+def test_agent_corrects_a_hallucinated_envelope_instead_of_claiming_success():
+    """Round 1 hallucinates, round 2 emits a real tag: the loop must recover and
+    must NOT report the hallucinated text as the answer."""
+    O, C = "<\u200btool_call>", "</\u200btool_call>"
+    brain = ac.ScriptedBrain(
+        [
+            HALLUCINATION,
+            O + '{"name": "get_statistics", "arguments": {"df": "raw"}}' + C,
+            "\u0413\u043e\u0442\u043e\u0432\u043e.",
+        ]
+    )
+    out = ac.run_agent("q", brain=brain, verbose=False)
+    assert out["ok"] is True
+    assert out["tool_calls"][0]["tool"] == "get_statistics"
+    assert "tool_calls" not in out["text"]
+
+
+def test_agent_gives_up_honestly_after_two_envelope_retries():
+    """It must not invent a success, and must not loop forever either."""
+    brain = ac.ScriptedBrain([HALLUCINATION] * 6)
+    out = ac.run_agent("q", brain=brain, verbose=False)
+    assert out["ok"] is True
+    assert out["rounds"] <= 4
+
+
 def test_handles_bare_json_without_tags():
     calls, _ = ac.parse_tool_calls({
         "content": '{"name": "get_statistics", "arguments": {"df": "raw"}}'

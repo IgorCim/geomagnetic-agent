@@ -37,6 +37,7 @@ Run it
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -117,7 +118,20 @@ SYSTEM_PROMPT = (
     "6. Если инструмент вернул {\"ok\": false} — сообщи пользователю причину из поля "
     "message и предложи, что делать. Не подставляй свои цифры вместо ошибки.\n"
     "7. В финальном ответе перечисли построенные графики и их файлы.\n"
-    "8. Ты можешь вызвать несколько инструментов подряд, прежде чем ответить."
+    "8. Ты можешь вызвать несколько инструментов подряд, прежде чем ответить.\n"
+    "9. ВАЖНО: Ты НЕ являешься API-сервером. НИКОГДА не отвечай JSON-объектом, "
+    "Python-словарём или строкой вида {'content': ..., 'tool_calls': ...}. "
+    "Ответ такого вида считается ошибкой, данные не появятся.\n"
+    "10. ФОРМАТ ОТВЕТА СТРОГО ТАК, ДВА ВАРИАНТА И НИКАКИХ ДРУГИХ:\n"
+    "    (а) чтобы вызвать инструмент — выведи ТОЛЬКО блок тегов, без "
+    "слов вокруг, без пояснений, без markdown:\n"
+    '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
+    '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
+    "    (б) когда все данные получены и инструменты больше не нужны — обычный "
+    "текст на русском, БЕЗ тегов, БЕЗ фигурных скобок, БЕЗ кавычек вокруг "
+    "имён инструментов.\n"
+    "    Если сомневаешься между (а) и (б) — бери (а): лишний вызов "
+    "инструмента дешевле, чем выдуманный ответ."
 )
 
 
@@ -856,6 +870,54 @@ def _calls_from_json(body: str) -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
+def _api_envelope(text: str) -> tuple[str, Any] | None:
+    """Detect the OpenAI response envelope Qwen sometimes hallucinates.
+
+    Instead of emitting a tool call, the model writes a literal
+    ``{'content': '...', 'tool_calls': None}`` -- it is role-playing the API
+    server. Returns ``(content, raw_tool_calls)`` when such a dict is present,
+    where ``raw_tool_calls`` is ``None`` for a refusal to call any tool, and
+    ``None`` (the outer value) when the text is not an envelope at all.
+    """
+    if "tool_calls" not in text:
+        return None
+    for span in _iter_json_spans(text):
+        parsed: Any = None
+        # Two syntaxes, two parsers. The model writes Python reprs with single
+        # quotes and `None`; it also writes JSON with `null`. `literal_eval`
+        # chokes on `null`, `json.loads` chokes on `None` and on bare single
+        # quotes, so both are tried on both spellings.
+        as_json = _single_quotes_to_double(_straighten_quotes(span))
+        for candidate in (span, as_json):
+            for loader in (ast.literal_eval, _try_loads):
+                try:
+                    parsed = loader(candidate)
+                except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                    continue
+                if parsed is not None:
+                    break
+            if parsed is not None:
+                break
+        if not isinstance(parsed, dict) or "tool_calls" not in parsed:
+            continue
+        content = parsed.get("content")
+        text_part = content if isinstance(content, str) else ""
+        return text_part, parsed.get("tool_calls")
+    return None
+
+
+# Sent back to the model when it answers with an API envelope instead of a
+# tool call. Names the exact mistake and shows the exact expected shape.
+_FORMAT_CORRECTION = (
+    "Твой предыдущий ответ был неверным: это был JSON/Python-словарь вида "
+    "{'content': ..., 'tool_calls': ...}. Ты не API-сервер, так отвечать нельзя.\n"
+    "Чтобы получить данные, выведи РОВНО один блок тегов и ничего больше:\n"
+    '<tool_call>{"name": "fetch_observatory_data", "arguments": '
+    '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
+    "Не добавляй пояснений до или после блока тегов."
+)
+
+
 def _why_unparsed(body: str) -> str:
     """A short, human-readable reason a body yielded no call."""
     stripped = body.strip()
@@ -957,6 +1019,21 @@ def parse_tool_calls(
                     "reason": _why_unparsed(body),
                 }
             )
+
+    if not calls:
+        # The model answered with an API envelope instead of a tool call. Any
+        # real calls inside it are still honoured; the prose is handed back as
+        # the leftover so the loop can read it, and a refusal (``tool_calls:
+        # None``) surfaces as an empty call list rather than as a fake success.
+        envelope = _api_envelope(text)
+        if envelope is not None:
+            content_text, raw_calls = envelope
+            recovered: list[tuple[str, dict[str, Any]]] = []
+            if raw_calls is not None:
+                recovered = _normalize_call(raw_calls)
+            for name, arguments in recovered[:_MAX_CALLS_PER_BODY]:
+                calls.append({"name": name, "arguments": arguments, "malformed": False})
+            return calls, content_text
 
     return calls, remainder
 
@@ -1230,6 +1307,7 @@ def run_agent(
 
     spent = 0
     stop_reason = "no_tool_calls"
+    format_retries = 0
 
     for round_no in range(1, max_rounds + 1):
         try:
@@ -1241,6 +1319,27 @@ def run_agent(
         calls, leftover = parse_tool_calls(reply)
 
         if not calls:
+            # The model role-played the API server and returned
+            # {'content': ..., 'tool_calls': None}. Accepting that as the final
+            # answer would be exactly the "hallucinated success" we are trying
+            # to eliminate, so correct it and let it retry -- a couple of times,
+            # then give up honestly rather than inventing an answer.
+            envelope = _api_envelope(content)
+            if (
+                envelope is not None
+                and envelope[1] is None
+                and format_retries < 2
+                and round_no < max_rounds
+            ):
+                format_retries += 1
+                if verbose:
+                    print(
+                        f"[agent] round {round_no}: model returned an API envelope, "
+                        f"correcting (attempt {format_retries}/2)"
+                    )
+                messages.append({"role": "user", "content": _FORMAT_CORRECTION})
+                continue
+
             text = leftover.strip() or content.strip()
             if verbose:
                 print(f"[agent] round {round_no}: final answer ({len(text)} chars)")
