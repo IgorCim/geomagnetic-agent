@@ -621,10 +621,61 @@ def _coerce_arguments(raw: Any) -> dict[str, Any]:
     return {"_value": raw}
 
 
-def parse_tool_calls(reply: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+def _reply_text(reply: Any) -> str:
+    """Normalise whatever the backend handed back into plain text.
+
+    llama-cpp-python is inconsistent about the shape of a chat message: some
+    code paths return an OpenAI-style ``{"content": ...}`` dict, others return
+    the bare ``str``. Anything else is stringified rather than trusted.
+    """
+    if isinstance(reply, str):
+        return reply
+    if isinstance(reply, dict):
+        content = reply.get("content")
+        return content if isinstance(content, str) else ("" if content is None else str(content))
+    return "" if reply is None else str(reply)
+
+
+def _iter_json_objects(text: str):
+    """Yield each balanced ``{...}`` span in *text*, outermost first.
+
+    A regex such as ``\\{.*?\\}`` cannot be used here: ``arguments`` routinely
+    nests objects and arrays, and a non-greedy match stops at the *first*
+    closing brace and hands back unparseable JSON. This scanner tracks depth
+    while skipping braces that sit inside JSON strings, and honours backslash
+    escapes, so a literal ``"}"`` inside a value cannot unbalance it.
+    """
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start != -1:
+                yield text[start : index + 1]
+                start = -1
+
+
+def parse_tool_calls(reply: Any) -> tuple[list[dict[str, Any]], str]:
     """Split a model reply into tool calls and the leftover prose.
 
-    Accepts three shapes, in order of preference:
+    Accepts ``str`` or an OpenAI-style ``dict`` (any backend shape; text is
+    normalised via :func:`_reply_text`), then in order of preference:
 
     1. a structured ``tool_calls`` list (set by llama-cpp-python only for a few
        chat handlers, so it cannot be relied on);
@@ -633,11 +684,14 @@ def parse_tool_calls(reply: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     3. a bare JSON object ``{"name": ..., "arguments": ...}``, which small
        models produce when they forget the tags.
 
+    Never raises: unparseable payloads are skipped or reported as a
+    ``malformed`` call, and plain prose yields an empty list.
+
     Returns ``(calls, leftover_text)`` where each call is
     ``{"name": str, "arguments": dict, "malformed": bool}``.
     """
-    content = reply.get("content") or ""
-    structured = reply.get("tool_calls")
+    content = _reply_text(reply)
+    structured = reply.get("tool_calls") if isinstance(reply, dict) else None
 
     calls: list[dict[str, Any]] = []
     for tc in structured or []:
@@ -670,10 +724,14 @@ def parse_tool_calls(reply: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
                 remainder = _FENCE_RE.sub("", remainder)
 
     if not found and '"name"' in text and '"arguments"' in text:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end > start:
-            found.append(text[start : end + 1])
+        for span in _iter_json_objects(text):
+            probe = _coerce_arguments(span)
+            if probe.get("name"):
+                found.append(span)
+                # Drop the consumed span, as the fenced branch does, so a
+                # forgotten tag cannot leak tool JSON into the final answer.
+                remainder = remainder.replace(span, "", 1)
+                break
 
     for body in found:
         candidate = _coerce_arguments(body)

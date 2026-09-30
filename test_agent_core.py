@@ -29,6 +29,10 @@ def _text_call(name: str, arguments: str = "{}") -> str:
     return f'<tool_call>{{"name": "{name}", "arguments": {arguments}}}</tool_call>'
 
 
+T_OPEN = "<tool_call>"
+T_CLOSE = "</tool_call>"
+
+
 # --------------------------------------------------------------------------- #
 # tool schemas
 # --------------------------------------------------------------------------- #
@@ -156,6 +160,71 @@ def test_handles_fenced_json():
         "content": '```json\n{"name": "detect_anomalies", "arguments": {"df": "raw"}}\n```'
     })
     assert calls[0]["name"] == "detect_anomalies"
+
+
+# --- reply-shape normalisation (regression: AttributeError on str input) ---
+
+def test_accepts_raw_str_reply():
+    """llama-cpp-python sometimes returns a bare str, not a dict."""
+    body = T_OPEN + '{"name":"get_statistics","arguments":{"df":"raw"}}' + T_CLOSE
+    calls, leftover = ac.parse_tool_calls(body)
+    assert calls[0]["name"] == "get_statistics"
+    assert isinstance(leftover, str)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [T_OPEN + '{"name":"f","arguments":{}}' + T_CLOSE,
+     {"content": T_OPEN + '{"name":"f","arguments":{}}' + T_CLOSE},
+     {"content": None},
+     {},
+     None,
+     5,
+     [1, 2]],
+)
+def test_never_raises_on_any_reply_shape(reply):
+    calls, leftover = ac.parse_tool_calls(reply)
+    assert isinstance(calls, list)
+    assert isinstance(leftover, str)
+
+
+def test_returns_tuple_not_bare_list():
+    """L971 does `calls, leftover = parse_tool_calls(...)`; a bare list would
+    unpack two call dicts into (calls, leftover) with no error."""
+    calls, leftover = ac.parse_tool_calls(T_OPEN + '{"name":"f","arguments":{}}' + T_CLOSE)
+    assert isinstance(calls, list) and isinstance(leftover, str)
+    assert all(isinstance(c, dict) for c in calls)
+
+
+@pytest.mark.parametrize("payload", ["5", "[]", '"hi"', "null", "[1,2]", "{", "}", "", "  "])
+def test_non_dict_json_inside_tags_is_skipped(payload):
+    """`"name" in json.loads("5")` raises TypeError, which `except
+    json.JSONDecodeError` would not catch."""
+    calls, _ = ac.parse_tool_calls(T_OPEN + payload + T_CLOSE)
+    assert all(c["name"] != "" or c["malformed"] for c in calls)
+
+
+def test_bare_json_fallback_survives_nested_arguments():
+    """A non-greedy \\{.*?\\} regex stops at the first `}` and returns
+    unparseable JSON when `arguments` nests objects."""
+    content = (
+        "Вот план: "
+        '{"name":"plot_components","arguments":'
+        '{"df":"derived","components":["H","D"],"style":{"mode":"line"}}}'
+        " готово"
+    )
+    calls, leftover = ac.parse_tool_calls(content)
+    assert calls[0]["name"] == "plot_components"
+    assert calls[0]["arguments"]["style"] == {"mode": "line"}
+    assert "Вот план" in leftover and "готово" in leftover
+    assert '"name"' not in leftover
+
+
+def test_brace_inside_string_value_does_not_unbalance():
+    calls, _ = ac.parse_tool_calls(
+        T_OPEN + '{"name":"f","arguments":{"title":"a } b {"}}' + T_CLOSE
+    )
+    assert calls[0]["arguments"]["title"] == "a } b {"
 
 
 def test_handles_bare_json_without_tags():
