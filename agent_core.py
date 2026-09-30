@@ -51,6 +51,11 @@ import geomag_analyzer as analyzer
 import geomag_plotter as plotter
 import intermagnet_loader as loader
 
+#: Bumped whenever the tool-call parser changes shape. ``colab_run.ipynb``
+#: prints this next to ``git rev-parse HEAD``; a notebook that shows an older
+#: value is running a cached copy of this module, not this file.
+PARSER_VERSION = "bulletproof-3"
+
 __all__ = [
     "SYSTEM_PROMPT",
     "TOOL_SCHEMAS",
@@ -866,6 +871,18 @@ def _why_unparsed(body: str) -> str:
 def parse_tool_calls(
     reply: Any, debug: bool | None = None
 ) -> tuple[list[dict[str, Any]], str]:
+    # 1. Unconditional trace of the raw model output, first thing, before any
+    #    normalisation. If this line is missing from a Colab log, the runtime
+    #    is executing a cached copy of this module and NOT this file.
+    #    Silence it with GEOMAG_DEBUG_PARSER=0 once the agent is stable.
+    if os.environ.get("GEOMAG_DEBUG_PARSER", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    ):
+        print(f"\n[DEBUG] RAW LLM OUTPUT FOR PARSING:\n{repr(str(reply)[:1000])}\n")
+
     """Split a model reply into tool calls and the leftover prose.
 
     Accepts ``str`` or an OpenAI-style ``dict`` (any backend shape; text is
@@ -882,7 +899,7 @@ def parse_tool_calls(
     commas, single or curly quotes, stray brackets, a ``function`` envelope and
     a top-level array are all tolerated, because a 7B model emits all of them.
     A body that truly cannot be read becomes one ``malformed`` call carrying a
-    ``reason``, and ``GEOMAG_DEBUG_PARSER=1`` echoes the raw text for that case.
+    ``reason``.
 
     Never raises: unparseable payloads are reported, not propagated.
 
@@ -940,16 +957,6 @@ def parse_tool_calls(
                     "reason": _why_unparsed(body),
                 }
             )
-
-    if debug is None:
-        debug = os.environ.get("GEOMAG_DEBUG_PARSER", "").strip().lower() not in (
-            "",
-            "0",
-            "false",
-            "no",
-        )
-    if debug and (any(c["malformed"] for c in calls) or os.environ.get("GEOMAG_DEBUG_PARSER")):
-        print(f"\n[DEBUG] RAW LLM OUTPUT FOR PARSING:\n{repr(text[:500])}\n")
 
     return calls, remainder
 

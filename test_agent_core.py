@@ -278,11 +278,21 @@ def test_malformed_error_payload_carries_the_reason():
     assert step["error"] == "malformed_tool_call"
 
 
-def test_debug_print_is_quiet_on_success_but_fires_on_failure(capsys):
-    ac.parse_tool_calls(T_OPEN + '{"name":"f","arguments":{}}' + T_CLOSE, debug=True)
+def test_debug_print_always_fires_and_is_silencable(capsys, monkeypatch):
+    """Colab relies on this line to prove the runtime has current code."""
+    monkeypatch.delenv("GEOMAG_DEBUG_PARSER", raising=False)
+    ac.parse_tool_calls(T_OPEN + '{"name":"f","arguments":{}}' + T_CLOSE)
+    assert "[DEBUG] RAW LLM OUTPUT FOR PARSING" in capsys.readouterr().out
+
+    monkeypatch.setenv("GEOMAG_DEBUG_PARSER", "0")
+    ac.parse_tool_calls(T_OPEN + "junk" + T_CLOSE)
     assert "[DEBUG]" not in capsys.readouterr().out
-    ac.parse_tool_calls(T_OPEN + "junk" + T_CLOSE, debug=True)
-    assert "[DEBUG]" in capsys.readouterr().out
+
+
+def test_parser_version_stamp_is_exposed():
+    """colab_run.ipynb compares this against a hard-coded string to detect a
+    stale cached module."""
+    assert isinstance(ac.PARSER_VERSION, str) and ac.PARSER_VERSION
 
 
 def test_parse_tool_calls_still_returns_a_tuple():
