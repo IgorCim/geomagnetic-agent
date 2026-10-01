@@ -1,6 +1,19 @@
-__pycache__/ 
-cache/ 
-plots/ 
-*.parquet 
-*.csv 
-*.html 
+# --- Model weights and checkpoints (multi-GB, must never enter git) ---
+models/
+*.gguf
+*.pth
+*.bin
+*.log
+
+# --- Generated output and downloads ---
+plots/
+archives/
+
+# --- Caches and build artefacts ---
+__pycache__/
+cache/
+
+# --- Data and reports produced at runtime ---
+*.parquet
+*.csv
+*.html
