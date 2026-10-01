@@ -606,7 +606,10 @@ def test_unknown_tool_is_reported_and_the_model_recovers(tmp_path, monkeypatch):
     assert first["tool"] == "brew_coffee"
     assert first["ok"] is False and first["error"] == "unknown_tool"
     assert "available" not in first or True
-    assert result["text"] == "Такого инструмента нет."
+    # The model's answer is kept, and the unrecovered failure is appended so the
+    # user sees the cause instead of only the model's vague summary.
+    assert result["text"].startswith("Такого инструмента нет.")
+    assert "unknown_tool" in result["text"]
 
 
 def test_unknown_frame_handle_is_reported(tmp_path, monkeypatch):
@@ -626,7 +629,8 @@ def test_malformed_tool_call_does_not_crash():
     ]))
     result = ac.run_agent("?", brain=brain, verbose=False)
     assert result["tool_calls"][0]["error"] == "malformed_tool_call"
-    assert result["text"] == "не понял"
+    assert result["text"].startswith("не понял")
+    assert "malformed_tool_call" in result["text"]
 
 
 def test_tool_exception_is_caught(monkeypatch):
@@ -679,7 +683,10 @@ def test_budget_error_is_offered_to_the_model():
     script.append({"content": "хватит"})
     brain = ac.ScriptedBrain(ac._unwrap(script))
     result = ac.run_agent("считай", brain=brain, max_tool_calls=1, max_rounds=4, verbose=False)
-    assert result["text"] == "хватит"
+    # budget exhaustion is loop control flow, not a failure the user must read;
+    # the real unknown_frame failure from the executed call is still surfaced.
+    assert result["text"].startswith("хватит")
+    assert "unknown_frame" in result["text"]
 
 
 def test_round_limit_terminates():
@@ -852,6 +859,140 @@ def test_run_agent_auto_loads_when_the_model_is_already_on_disk(tmp_path, monkey
 
 
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# regression: two days must be able to live at the same time
+# --------------------------------------------------------------------------- #
+def test_frame_store_keeps_both_days_and_alias_follows_the_latest():
+    store = ac.FrameStore()
+    day10 = pd.DataFrame({"timestamp": pd.date_range("2024-09-10", periods=2, freq="h"),
+                          "H": [1.0, 2.0]})
+    day11 = pd.DataFrame({"timestamp": pd.date_range("2024-09-11", periods=2, freq="h"),
+                          "H": [3.0, 4.0]})
+
+    store.put("raw:IRT:2024-09-10", day10)
+    store.put("raw:IRT:2024-09-11", day11)
+
+    assert "raw:irt:2024-09-10" in store.names()
+    assert "raw:irt:2024-09-11" in store.names()
+    # the earlier day must still be reachable and still be the earlier data
+    assert store.get("raw:irt:2024-09-10") is day10
+    assert store.get("raw:irt:2024-09-11") is day11
+    # the legacy short name still works, pointing at the most recent fetch
+    assert store.get("raw") is day11
+
+
+def test_derive_name_keeps_the_day_suffix():
+    store = ac.FrameStore()
+    assert store.derive_name("raw:irt:2024-09-10", "derived") == "derived:irt:2024-09-10"
+    assert store.derive_name("raw", "derived") == "derived"
+
+
+def test_two_fetches_then_comparison_gives_two_distinct_traces(tmp_path, monkeypatch):
+    """The exact failure from the field: two days, one comparison chart.
+
+    Guards the root cause -- the second fetch used to overwrite the first, so the
+    comparison silently collapsed onto a single day.
+    """
+    import intermagnet_loader as loader
+
+    def fake_fetch(station_code=None, start_date=None, end_date=None, **kw):
+        day = pd.to_datetime(start_date)
+        # offset by day so the two series are genuinely different
+        offset = float(day.day)
+        frame = pd.DataFrame(
+            {
+                "timestamp": pd.date_range(day, periods=24, freq="h"),
+                "X": [float(i) + offset for i in range(24)],
+                "Y": [float(i) * 2 for i in range(24)],
+                "Z": [float(i) * 3 + offset for i in range(24)],
+            }
+        )
+        frame.attrs["publication_state"] = "definitive"
+        return frame
+
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    monkeypatch.setattr(loader, "fetch_observatory_data", fake_fetch)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+
+    store = ac.FrameStore()
+    handles = []
+    for day in ("2024-09-10", "2024-09-11"):
+        payload, _ = ac._handle_fetch(
+            {"station_code": "IRT", "start_date": day, "end_date": day}, store
+        )
+        assert not ac.is_error(payload)
+        handles.append(payload["frame_handle"])
+
+    assert len(set(handles)) == 2, f"both days must get their own slot, got {handles}"
+
+    derived = []
+    for handle in handles:
+        payload, _ = ac._handle_derive({"df": handle, "components": ["H"]}, store)
+        assert not ac.is_error(payload)
+        derived.append(payload["frame_handle"])
+    assert len(set(derived)) == 2
+
+    captured = {}
+    original = plotter._write
+
+    def spy(fig, path, include_plotlyjs):
+        captured["fig"] = fig
+        return original(fig, path, include_plotlyjs)
+
+    plotter._write = spy
+    try:
+        payload, _ = ac._handle_plot_comparison(
+            {"df1": derived[0], "df2": derived[1], "component": "H"}, store
+        )
+    finally:
+        plotter._write = original
+
+    assert not ac.is_error(payload), payload
+    assert Path(payload["path"]).is_file()
+    traces = captured["fig"].data
+    assert len(traces) == 2, "the comparison chart must carry one trace per day"
+    assert traces[0].name != traces[1].name
+    # the two traces must actually carry different values
+    assert list(traces[0].y) != list(traces[1].y)
+
+
+def test_plot_comparison_refusal_keeps_its_code_and_hint():
+    """The same_dataframe guard must reach the model as itself, not as ValueError."""
+    store = ac.FrameStore()
+    frame = pd.DataFrame({"timestamp": pd.date_range("2024-09-10", periods=3, freq="h"),
+                          "H": [1.0, 2.0, 3.0]})
+    store.put("raw:irt:2024-09-10", frame)
+
+    payload, note = ac._handle_plot_comparison(
+        {"df1": "raw:irt:2024-09-10", "df2": "raw", "component": "H"}, store
+    )
+
+    assert ac.is_error(payload)
+    assert payload["error"] == "same_dataframe", "the guard must not be masked"
+    assert "two different days" in payload["message"]
+    assert "raw:irt:2024-09-10" in payload["hint"]
+    assert note
+    # both handles resolve to one frame, so this is the same-dataframe case
+    assert store.get("raw") is frame
+
+
+def test_unrecovered_tool_failure_reaches_the_final_text():
+    """A vague 'it failed' must not be the whole story the user sees."""
+    store_entries = [{"ok": False, "tool": "plot_comparison", "error": "same_dataframe",
+                      "message": "Both handles point at the same data",
+                      "hint": "Pass two distinct slots."}]
+    text = ac._with_tool_failures("Не удалось построить сравнение.", store_entries)
+    assert "Не удалось построить сравнение." in text
+    assert "same_dataframe" in text
+    assert "Both handles point at the same data" in text
+    assert "Pass two distinct slots." in text
+
+
+def test_clean_run_gets_no_failure_footer():
+    text = ac._with_tool_failures("Всё готово.", [{"ok": True, "tool": "get_statistics"}])
+    assert text == "Всё готово."
+
+
 # optional: the authoritative Qwen template fetched from HuggingFace
 # --------------------------------------------------------------------------- #
 @pytest.mark.network

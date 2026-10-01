@@ -196,8 +196,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "fetch_observatory_data",
             "description": (
                 "Download geomagnetic data for one INTERMAGNET observatory. "
-                "Call this first, before any analysis. Returns the row count and "
-                "the available columns. Values are in nT, timestamps are UTC."
+                "Call this first, before any analysis. Returns the row count, the "
+                "available columns, and a frame_handle such as 'raw:irt:2024-09-10'. "
+                "Call it once per day you need and keep those distinct handles: the "
+                "short name 'raw' only ever points at the most recent fetch. "
+                "Values are in nT, timestamps are UTC."
             ),
             "parameters": {
                 "type": "object",
@@ -325,8 +328,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df1": {**_FRAME_ARG, "description": "Descriptor of the first day."},
-                    "df2": {**_FRAME_ARG, "description": "Descriptor of the second day."},
+                    "df1": {
+                        **_FRAME_ARG,
+                        "description": (
+                            "First day. Use the full slot name returned in frame_handle, "
+                            "e.g. 'raw:irt:2024-09-10'."
+                        ),
+                    },
+                    "df2": {
+                        **_FRAME_ARG,
+                        "description": (
+                            "Second day, and it must be a different slot from df1, "
+                            "e.g. 'raw:irt:2024-09-11'."
+                        ),
+                    },
                     "component": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
                     "title": {"type": "string", "description": "Chart title."},
                     "filename": {"type": "string", "description": "Output file name, .html."},
@@ -1042,25 +1057,74 @@ def parse_tool_calls(
 # frame handles
 # --------------------------------------------------------------------------- #
 class FrameStore:
-    """Holds real DataFrames so they never have to travel through JSON."""
+    """Holds real DataFrames so they never have to travel through JSON.
+
+    Each stored frame gets a permanent, descriptive *slot* such as
+    ``raw:irt:2024-09-10``, so fetching a second day no longer overwrites the
+    first. The short legacy names ``raw``/``derived``/``anomalies`` stay usable
+    as *family aliases* and always resolve to the most recently stored member of
+    that family, which keeps every single-day flow working unchanged.
+    """
 
     def __init__(self) -> None:
         self._frames: dict[str, pd.DataFrame] = {}
+        # family -> slots in write order; the last one is what the alias points at
+        self._families: dict[str, list[str]] = {}
 
-    def put(self, name: str, df: pd.DataFrame) -> None:
-        self._frames[name] = df
+    @staticmethod
+    def _normalise(handle: str) -> str:
+        return handle.strip().lower()
+
+    def put(self, name: str, df: pd.DataFrame) -> str:
+        """Store ``df`` under the slot ``name`` and return the canonical slot."""
+        slot = self._normalise(name)
+        self._frames[slot] = df
+        family = slot.split(":", 1)[0]
+        slots = self._families.setdefault(family, [])
+        if slot in slots:
+            slots.remove(slot)
+        slots.append(slot)
+        return slot
+
+    def derive_name(self, source: Any, family: str) -> str:
+        """Derive a slot name for a new family, keeping the source's suffix.
+
+        ``raw:irt:2024-09-10`` -> ``derived:irt:2024-09-10``, so each day keeps
+        its own derived/anomalies frame instead of fighting over one slot.
+        """
+        slot = self._normalise(str(source)) if isinstance(source, str) else ""
+        suffix = slot.split(":", 1)[1] if ":" in slot else ""
+        return f"{family}:{suffix}" if suffix else family
 
     def get(self, handle: Any) -> pd.DataFrame | None:
         if isinstance(handle, pd.DataFrame):
             return handle
-        if isinstance(handle, str):
-            frame = self._frames.get(handle.strip().lower())
+        if not isinstance(handle, str):
+            return None
+        key = self._normalise(handle)
+        frame = self._frames.get(key)
+        if frame is not None:
+            return frame
+        # bare family name -> the most recent member of that family
+        for slot in reversed(self._families.get(key, [])):
+            frame = self._frames.get(slot)
             if frame is not None:
                 return frame
         return None
 
     def names(self) -> list[str]:
+        """Every live slot name -- this is what the model is told it can use."""
         return sorted(self._frames)
+
+    def aliases(self) -> dict[str, str]:
+        """Short name -> the slot it currently points at, for the model's benefit."""
+        out: dict[str, str] = {}
+        for family, slots in self._families.items():
+            for slot in reversed(slots):
+                if self._frames.get(slot) is not None:
+                    out[family] = slot
+                    break
+        return out
 
     def resolve(self, handle: Any) -> tuple[pd.DataFrame | None, dict[str, Any] | None]:
         frame = self.get(handle)
@@ -1069,7 +1133,13 @@ class FrameStore:
                 "unknown_frame",
                 f"No data under handle {handle!r}.",
                 available=self.names() or ["(none yet - call fetch_observatory_data first)"],
-                hint='Use "raw" after fetch_observatory_data, "derived" after calculate_derived_components.',
+                aliases=self.aliases(),
+                hint=(
+                    "Pass a handle exactly as it was returned in 'frame_handle'. "
+                    "A bare family name ('raw', 'derived', 'anomalies') only ever points at the "
+                    "most recent member of that family, so to compare two days pass the two full "
+                    "slot names, e.g. 'raw:irt:2024-09-10' and 'raw:irt:2024-09-11'."
+                ),
             )
         return frame, None
 
@@ -1105,6 +1175,7 @@ def _summarise_frame(df: pd.DataFrame, store: FrameStore | None = None, name: st
     if store is not None and name:
         summary["frame_handle"] = name
         summary["available_handles"] = store.names()
+        summary["handle_aliases"] = store.aliases()
     return summary
 
 
@@ -1120,39 +1191,56 @@ Handler = Callable[[dict[str, Any], FrameStore], tuple[Any, str]]
 
 
 def _first_present(df: pd.DataFrame, store: FrameStore, requested: str) -> str:
-    """Pick the richest handle that actually has the requested column."""
+    """Pick the richest handle that actually has the requested column.
+
+    Returns a concrete slot name, never a bare family alias: an alias now points
+    at the most recent day, so returning "derived" here would silently hand the
+    caller the wrong day once two days are loaded.
+    """
     if df is not None and requested in df.columns:
-        return "anomalies" if store.get("anomalies") is df else "derived"
-    for handle in ("derived", "raw"):
-        candidate = store.get(handle)
-        if candidate is not None and requested in candidate.columns:
-            return handle
+        for slot in store.names():
+            if store.get(slot) is df:
+                return slot
+    for family in ("derived", "raw"):
+        for slot in reversed(store._families.get(family, [])):
+            candidate = store.get(slot)
+            if candidate is not None and requested in candidate.columns:
+                return slot
     return "raw"
 
 
 def _handle_fetch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    station = (args.get("station_code") or "").upper()
+    start = args.get("start_date") or ""
+    end = args.get("end_date") or start
+
+    slot = f"raw:{station}:{start}" if station and start else "raw"
+
     if OFFLINE:
         frame = _offline_frame()
+        store.put(slot, frame)
+        # Also keep legacy alias pointing at latest
         store.put("raw", frame)
-        summary = _summarise_frame(frame, store, "raw")
+        summary = _summarise_frame(frame, store, slot)
         summary["offline"] = True
-        return summary, f"Offline mode: synthesised {len(frame)} rows as handle 'raw'."
+        return summary, f"Offline mode: synthesised {len(frame)} rows as handle {slot!r}."
 
     result = loader.fetch_observatory_data(
-        station_code=args.get("station_code"),
-        start_date=args.get("start_date"),
-        end_date=args.get("end_date"),
+        station_code=station or args.get("station_code"),
+        start_date=start,
+        end_date=end,
         data_type=args.get("data_type") or "definitive",
         samples_per_day=args.get("samples_per_day") or "Minute",
     )
     if loader.is_error(result):
         return result, f"fetch failed: {result.get('error')}"
-    store.put("raw", result)
-    summary = _summarise_frame(result, store, "raw")
-    summary["station"] = args.get("station_code")
+    store.put(slot, result)
+    store.put("raw", result)  # legacy alias to latest
+    summary = _summarise_frame(result, store, slot)
+    summary["station"] = station or args.get("station_code")
     summary["publication_state"] = (result.attrs or {}).get("publication_state")
     summary["source"] = (result.attrs or {}).get("source")
-    return summary, f"Fetched {len(result)} rows for {args.get('station_code')} -> handle 'raw'."
+    return summary, f"Fetched {len(result)} rows for {station or args.get('station_code')} -> handle {slot!r}."
 
 
 def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -1165,10 +1253,12 @@ def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     if analyzer.is_error(result):
         return result, f"calculate_derived_components failed: {result.get('error')}"
 
-    store.put("derived", result)
-    summary = _summarise_frame(result, store, "derived")
+    source_slot = args.get("df") or "raw"
+    slot = store.derive_name(source_slot, "derived")
+    store.put(slot, result)
+    summary = _summarise_frame(result, store, slot)
     summary["computed"] = [c for c in ("H", "D", "I") if c in result.columns]
-    return summary, f"Computed {', '.join(summary['computed'])} -> handle 'derived'."
+    return summary, f"Computed {', '.join(summary['computed'])} -> handle {slot!r}."
 
 
 def _handle_stats(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -1182,7 +1272,10 @@ def _handle_stats(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     )
     if analyzer.is_error(result):
         return result, f"get_statistics failed: {result.get('error')}"
-    return result, f"Statistics for {', '.join(result)}."
+    summary = dict(result)
+    summary["available_handles"] = store.names()
+    summary["handle_aliases"] = store.aliases()
+    return summary, f"Statistics for {', '.join(result)}."
 
 
 def _handle_anomalies(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -1198,11 +1291,13 @@ def _handle_anomalies(args: dict[str, Any], store: FrameStore) -> tuple[Any, str
     )
     if analyzer.is_error(result):
         return result, f"detect_anomalies failed: {result.get('error')}"
-    store.put("anomalies", result)
-    summary = _summarise_frame(result, store, "anomalies")
+    source_slot = args.get("df") or "raw"
+    slot = store.derive_name(source_slot, "anomalies")
+    store.put(slot, result)
+    summary = _summarise_frame(result, store, slot)
     summary["component"] = component
     summary["n_flagged"] = int(len(result))
-    return summary, f"Flagged {len(result)} samples of {component} -> handle 'anomalies'."
+    return summary, f"Flagged {len(result)} samples of {component} -> handle {slot!r}."
 
 
 def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -1235,8 +1330,14 @@ def _handle_plot_comparison(args: dict[str, Any], store: FrameStore) -> tuple[An
         return _error(
             "same_dataframe",
             "Both handles point at the same data; a comparison needs two different days.",
-            hint="Call fetch_observatory_data twice for two different dates and keep both handles.",
-        )
+            requested={"df1": args.get("df1"), "df2": args.get("df2")},
+            available=store.names(),
+            hint=(
+                "Fetch each day separately and pass the two distinct slot names, "
+                "e.g. 'raw:irt:2024-09-10' and 'raw:irt:2024-09-11'. A bare 'raw' only ever "
+                "points at the most recent fetch, so it can never represent both days."
+            ),
+        ), "plot_comparison refused: both handles resolved to the same data."
     result = plotter.plot_comparison(
         first,
         second,
@@ -1345,7 +1446,9 @@ def run_agent(
                 print(f"[agent] round {round_no}: final answer ({len(text)} chars)")
             return {
                 "ok": True,
-                "text": text or "Не удалось получить текстовый ответ от модели.",
+                "text": _with_tool_failures(
+                    text or "Не удалось получить текстовый ответ от модели.", log
+                ),
                 "plots": plots,
                 "tool_calls": log,
                 "rounds": round_no,
@@ -1475,13 +1578,55 @@ def run_agent(
 
     return {
         "ok": stop_reason != "no_tool_calls",
-        "text": (leftover or content or "").strip()
-        or "Модель не сформулировала ответ в пределах отведённого числа шагов.",
+        "text": _with_tool_failures(
+            (leftover or content or "").strip()
+            or "Модель не сформулировала ответ в пределах отведённого числа шагов.",
+            log,
+        ),
         "plots": plots,
         "tool_calls": log,
         "rounds": max_rounds,
         "stop_reason": "round_limit",
     }
+
+
+def _with_tool_failures(text: str, log: list[dict[str, Any]]) -> str:
+    """Append any unrecovered tool failure to the final answer.
+
+    The model routinely reports a failed tool call as a vague "the attempt
+    failed", which is exactly what hid this bug: the actionable `reason`/`hint`
+    never reached the user. Anything the model did not already mention gets
+    appended verbatim, so the contract is visible whatever the model says.
+    """
+    failures = [
+        e
+        for e in log
+        if not e.get("ok", True)
+        and e.get("error")
+        # "(refused)" entries are loop control flow, not a tool the model called.
+        and e.get("tool") != "(refused)"
+    ]
+    if not failures:
+        return text
+    lines: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in failures:
+        error = str(entry.get("error"))
+        reason = entry.get("message") or entry.get("reason") or ""
+        if error in text and (not reason or reason in text):
+            continue
+        key = (error, str(reason))
+        if key in seen:
+            continue
+        seen.add(key)
+        tool = entry.get("tool")
+        prefix = f"{tool}: " if tool and tool != "(refused)" else ""
+        lines.append(f"- {prefix}{error}: {reason}")
+        if entry.get("hint"):
+            lines.append(f"  подсказка: {entry['hint']}")
+    if not lines:
+        return text
+    return f"{text}\n\nНе удалось выполнить часть операций:\n" + "\n".join(lines)
 
 
 def _short(args: dict[str, Any], limit: int = 90) -> str:
