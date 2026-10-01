@@ -86,8 +86,12 @@ N_BATCH = 512
 TEMPERATURE = 0.1          # a scientist wants determinism, not creativity
 MAX_TOKENS = 1200
 
-MAX_TOOL_CALLS = 7         # tool executions per user query
-MAX_ROUNDS = 9             # model round-trips per user query
+# A three-day request costs three fetches, three derive calls and three plots
+# before a single sentence of the answer, so 7 cut the loop off mid-way and
+# "построй графики за 3 дня" could never complete. 12 leaves room for a
+# comparison or a statistics pass on top.
+MAX_TOOL_CALLS = 12        # tool executions per user query
+MAX_ROUNDS = 14            # model round-trips per user query
 
 OFFLINE = os.environ.get("GEOMAG_OFFLINE", "").strip() not in ("", "0", "false")
 
@@ -98,6 +102,18 @@ STATION_HINT = (
     "IRT=Иркутск, MOS=Москва, NVS=Новосибирск, SPG=Санкт-Петербург, "
     "YAK=Якутск, KHB=Хабаровск, MGD=Магадан, VLA=Владивосток, "
     "PET=Паратунка (Камчатка), ARS=Арти, BOX=Борок, TIK=Тикси"
+)
+
+#: Station codes are stored lower-case in the slot name, so a model that echoes
+#: back the upper-case code it typed ("IRT") must still resolve. The store lower-
+#: cases every key, and this rule tells the model to do the same so that the
+#: handles it prints match the handles it reads back out of the tool results.
+HANDLE_CASE_RULE = (
+    "ВАЖНО: хэндл фрейма всегда пиши строчными буквами. Например, если инструмент "
+    "вернул frame_handle='raw:IRT:2024-09-10', передавай его в следующий вызов как "
+    "'raw:irt:2024-09-10' — код станции в хэндле всегда в нижнем регистре. "
+    "Сравнение двух дней требует два РАЗНЫХ хэндла, например "
+    "'raw:irt:2024-09-10' и 'raw:irt:2024-09-11'."
 )
 
 SYSTEM_PROMPT = (
@@ -112,13 +128,18 @@ SYSTEM_PROMPT = (
     "4. Порядок работы: сначала fetch_observatory_data, потом "
     "calculate_derived_components, потом get_statistics / detect_anomalies, "
     "потом plot_components / plot_comparison. Не перескакивай шаги.\n"
-    '5. Вместо DataFrame инструментам передавай строковый дескриптор: "raw" — данные '
-    'из fetch, "derived" — данные с посчитанными H/D/I, "anomalies" — результат '
-    "detect_anomalies.\n"
+    "5. Вместо DataFrame инструментам передавай строковый хэндл, скопированный из "
+    'поля "frame_handle" предыдущего результата. Это либо полный слот на конкретный '
+    "день вида \"raw:irt:2024-09-10\" / \"derived:irt:2024-09-10\", либо короткое "
+    'имя семейства "raw" / "derived" / "anomalies" (это всегда самый свежий '
+    "элемент семейства). Не выдумывай хэндл: полный список доступных имён приходит "
+    'в поле "available_handles" результата инструмента.\n'
     "6. Если инструмент вернул {\"ok\": false} — сообщи пользователю причину из поля "
     "message и предложи, что делать. Не подставляй свои цифры вместо ошибки.\n"
     "7. В финальном ответе перечисли построенные графики и их файлы.\n"
-    "8. Ты можешь вызвать несколько инструментов подряд, прежде чем ответить.\n"
+    "8. Ты можешь вызвать несколько инструментов подряд, прежде чем ответить. "
+    "Если нужно сравнить два дня — вызови fetch_observatory_data дважды, по разу на "
+    "день, и передай в plot_comparison два РАЗНЫХ хэндла.\n"
     "9. ВАЖНО: Ты НЕ являешься API-сервером. НИКОГДА не отвечай JSON-объектом, "
     "Python-словарём или строкой вида {'content': ..., 'tool_calls': ...}. "
     "Ответ такого вида считается ошибкой, данные не появятся.\n"
@@ -131,7 +152,8 @@ SYSTEM_PROMPT = (
     "текст на русском, БЕЗ тегов, БЕЗ фигурных скобок, БЕЗ кавычек вокруг "
     "имён инструментов.\n"
     "    Если сомневаешься между (а) и (б) — бери (а): лишний вызов "
-    "инструмента дешевле, чем выдуманный ответ."
+    "инструмента дешевле, чем выдуманный ответ.\n\n"
+    f"11. {HANDLE_CASE_RULE}"
 )
 
 
@@ -181,11 +203,13 @@ def _dumps(payload: Any) -> str:
 # --------------------------------------------------------------------------- #
 _FRAME_ARG = {
     "type": "string",
-    "enum": ["raw", "derived", "anomalies"],
     "description": (
-        "Data descriptor returned by a previous tool: 'raw' = data from "
-        "fetch_observatory_data, 'derived' = raw + H/D/I, 'anomalies' = result of "
-        "detect_anomalies."
+        "A data descriptor returned by a previous tool, copied EXACTLY from its "
+        "'frame_handle' field. It is either a full per-day slot such as "
+        "'raw:irt:2024-09-10' or 'derived:irt:2024-09-10', or one of the short "
+        "family names 'raw' / 'derived' / 'anomalies', which always mean the most "
+        "recent member of that family. Never invent a handle: the valid ones are "
+        "listed in 'available_handles' of the previous tool result."
     ),
 }
 
@@ -331,14 +355,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "df1": {
                         **_FRAME_ARG,
                         "description": (
-                            "First day. Use the full slot name returned in frame_handle, "
+                            "First day: a frame_handle copied from a previous tool result, "
                             "e.g. 'raw:irt:2024-09-10'."
                         ),
                     },
                     "df2": {
                         **_FRAME_ARG,
                         "description": (
-                            "Second day, and it must be a different slot from df1, "
+                            "Second day: a frame_handle from a *different* slot than df1, "
                             "e.g. 'raw:irt:2024-09-11'."
                         ),
                     },
@@ -1218,9 +1242,9 @@ def _handle_fetch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
 
     if OFFLINE:
         frame = _offline_frame()
+        # No extra put("raw", ...): the bare family name already resolves to the
+        # most recent slot, and a redundant entry would shadow it in the alias map.
         store.put(slot, frame)
-        # Also keep legacy alias pointing at latest
-        store.put("raw", frame)
         summary = _summarise_frame(frame, store, slot)
         summary["offline"] = True
         return summary, f"Offline mode: synthesised {len(frame)} rows as handle {slot!r}."
@@ -1235,7 +1259,6 @@ def _handle_fetch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     if loader.is_error(result):
         return result, f"fetch failed: {result.get('error')}"
     store.put(slot, result)
-    store.put("raw", result)  # legacy alias to latest
     summary = _summarise_frame(result, store, slot)
     summary["station"] = station or args.get("station_code")
     summary["publication_state"] = (result.attrs or {}).get("publication_state")

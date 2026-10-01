@@ -40,6 +40,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -63,9 +64,16 @@ if str(_PROJECT_DIR) not in sys.path:
 
 import agent_core as core  # noqa: E402  (import after the sys.path fix)
 
+try:
+    import geomag_plotter as plotter
+except ImportError:  # pragma: no cover - plotter is a hard dep in practice
+    plotter = None
+
 run_agent = core.run_agent
 load_brain = core.load_brain
 is_error = core.is_error
+#: Where the plot tools write. Used to resolve bare filenames from the prose.
+PLOTS_DIR = Path(plotter.DEFAULT_OUTPUT_DIR) if plotter else Path("plots")
 
 GRADIO_VERSION = getattr(gr, "__version__", "unknown")
 
@@ -235,16 +243,118 @@ def _as_text(result: Any) -> str:
     return _message_text(result) or "(пустой ответ)"
 
 
+_HTML_SUFFIXES = (".html", ".htm")
+
+
 def _plot_paths(result: Any) -> list[str]:
-    """Best-effort list of figure paths from an agent result."""
+    """Best-effort list of figure paths from an agent result.
+
+    Also picks up filenames the agent *mentioned in its own text*: the agent is
+    told to list the charts it built, so when a path never made it into the
+    structured ``plots`` list, the prose is the remaining place to look.
+    """
     if not isinstance(result, dict):
         return []
     plots = result.get("plots") or result.get("plot") or []
+    found: list[str] = []
     if isinstance(plots, (str, bytes)):
-        return [_message_text(plots)] if plots else []
-    if isinstance(plots, (list, tuple)):
-        return [_message_text(item) for item in plots if _message_text(item)]
-    return []
+        candidate = _message_text(plots)
+        if candidate:
+            found.append(candidate)
+    elif isinstance(plots, (list, tuple)):
+        found.extend(_message_text(item) for item in plots if _message_text(item))
+    else:
+        found = []
+
+    for name in _plot_names_in_text(result.get("text")):
+        path = Path(name)
+        # A bare filename in the prose means "the one we just saved in plots/".
+        resolved = path if path.is_absolute() else (PLOTS_DIR / path.name)
+        if resolved.is_file():
+            found.append(str(resolved))
+
+    ordered: list[str] = []
+    for path in found:
+        if path not in ordered:
+            ordered.append(path)
+    return ordered
+
+
+def _plot_names_in_text(text: Any) -> list[str]:
+    """Find ``something.html`` mentions in the answer text."""
+    if not isinstance(text, str) or ".htm" not in text:
+        return []
+    return re.findall(r"[\w.\-/]*\.(?:html|htm)\b", text, flags=re.IGNORECASE)
+
+
+def _panel_entry(path: str, question: str, index: int) -> dict[str, Any] | None:
+    """One recoverable figure as a Gallery item, or ``None`` if unreadable."""
+    if not Path(path).is_file():
+        return None
+    figure = figure_from_plot_file(path)
+    if figure is None:
+        return None
+    caption = f"{index}. {Path(path).name}"
+    if question:
+        caption += f" — {question}"
+    return {
+        "label": caption,
+        "value": figure,
+        "path": str(path),
+        "name": Path(path).name,
+    }
+
+
+def _gallery(saved: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """All recoverable figures as Gallery items, newest first.
+
+    A single ``gr.Plot`` can only ever show one figure, so asking for three days
+    used to leave two of them invisible. The Gallery takes the whole list.
+    """
+    items: list[dict[str, Any]] = []
+    for index, entry in enumerate(saved, start=1):
+        item = _panel_entry(entry.get("path", ""), entry.get("question", ""), index)
+        if item is not None:
+            items.append(item)
+    return items
+
+
+def _figure_block(saved: list[dict[str, str]]) -> str:
+    """Inline HTML for the figures, so they also show where Gallery is limited.
+
+    Empty string when there is nothing to show, which is how Gradio knows to
+    leave the component alone.
+    """
+    blocks: list[str] = []
+    for index, entry in enumerate(saved, start=1):
+        path = entry.get("path", "")
+        if not path or not Path(path).is_file():
+            continue
+        if figure_from_plot_file(path) is None:
+            continue
+        escaped = (
+            path.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+        )
+        blocks.append(
+            f'<figure style="margin:0 0 12px 0">'
+            f'<iframe src="{escaped}" style="width:100%;height:420px;border:1px solid #d0d0d0;'
+            f'border-radius:6px"></iframe>'
+            f'<figcaption style="font-size:12px;opacity:0.75;padding-top:4px">'
+            f"{index}. {Path(path).name}</figcaption></figure>"
+        )
+    return "".join(blocks)
+
+
+def _fallback_note(saved: list[dict[str, str]]) -> str:
+    """Tell the user where an unreadable chart is, instead of dropping it silently."""
+    for entry in saved:
+        path = entry.get("path", "")
+        if not path or not Path(path).is_file():
+            continue
+        if figure_from_plot_file(path) is None:
+            print(f"[web] не удалось разобрать график: {path}")
+            return "\n\n" + PLOT_FALLBACK.format(name=Path(path).name)
+    return ""
 
 
 def _format_tool_log(tool_calls: Any) -> str:
@@ -419,7 +529,7 @@ def make_chat_handler(brain: Any):
         message: str,
         history: Any,
         plots_state: Any,
-    ) -> tuple[list[dict[str, str]], Any, str, list[dict[str, str]], list[str], str]:
+    ) -> tuple[Any, Any, Any, str, list[dict[str, str]], list[str], str]:
         messages = normalize_history(history)
         saved: list[dict[str, str]] = [
             entry for entry in (plots_state or []) if isinstance(entry, dict) and entry.get("path")
@@ -427,55 +537,48 @@ def make_chat_handler(brain: Any):
 
         question = _message_text(message)
         if not question:
-            return messages, None, "", saved, [], ""
+            return messages, [], "", "", saved, [], ""
 
         if VERBOSE:
             print(f"[web] запрос: {question[:120]}")
 
-        def answer_with(text: str, figure: Any = None, log: str = "") -> tuple:
+        def answer_with(text: str, log: str = "") -> tuple:
             text = text if isinstance(text, str) and text.strip() else "(пустой ответ)"
             messages.append({"role": "user", "content": question})
             messages.append({"role": "assistant", "content": text})
-            return messages, figure, log, saved, [entry["path"] for entry in saved], ""
+            return (
+                messages,
+                _gallery(saved),
+                _figure_block(saved),
+                log,
+                saved,
+                [entry["path"] for entry in saved],
+                "",
+            )
 
         try:
             result = run_agent(_context_from_history(messages) + question, brain=brain)
         except Exception as exc:  # one bad turn must not kill the server
             traceback.print_exc()
             detail = f"{type(exc).__name__}: {exc}"
-            return answer_with(f"Внутренняя ошибка агента: {detail}",
-                               None, f"**Ошибка:** {detail}")
+            return answer_with(f"Внутренняя ошибка агента: {detail}", f"**Ошибка:** {detail}")
 
         if isinstance(result, dict) and is_error(result):
             code = result.get("error", "unknown")
             detail = result.get("message", "агент вернул ошибку")
-            return answer_with(f"Ошибка `{code}`: {detail}", None, f"**{code}**: {detail}")
+            return answer_with(f"Ошибка `{code}`: {detail}", f"**{code}**: {detail}")
 
         text = _as_text(result)
         if isinstance(result, dict) and result.get("stop_reason") == "tool_budget_exhausted":
             text += "\n\n_(лимит вызовов инструментов исчерпан, ответ неполный)_"
 
-        # Record the figures, newest first, capped.
+        # Record every figure, newest first, capped. A three-day request produces
+        # three charts and all three have to stay visible.
         for path in reversed(_plot_paths(result)):
             saved.insert(0, {"question": question[:80], "path": path})
         saved = saved[:MAX_PLOTS_IN_PANEL]
 
-        # Draw the newest figure if one can be recovered, otherwise say where it
-        # is on disk and carry on with the text answer.
-        figure = None
-        note = ""
-        for entry in saved:
-            if not Path(entry["path"]).is_file():
-                continue
-            figure = figure_from_plot_file(entry["path"])
-            if figure is not None:
-                break
-            name = Path(entry["path"]).name
-            print(f"[web] не удалось разобрать график: {entry['path']}")
-            note = "\n\n" + PLOT_FALLBACK.format(name=name)
-            break
-
-        return answer_with(text + note, figure, _format_tool_log(
+        return answer_with(text + _fallback_note(saved), _format_tool_log(
             result.get("tool_calls") if isinstance(result, dict) else None))
 
     return chat_and_plot
@@ -513,8 +616,18 @@ def build_demo(brain: Any) -> gr.Blocks:
                 )
 
             with gr.Column(scale=2):
-                gr.Markdown("### График")
-                plot_view = gr.Plot(label="")
+                gr.Markdown("### Графики")
+                # A Gallery keeps every chart on screen; gr.Plot can only ever
+                # hold the last one, which hid all but one of a multi-day answer.
+                gallery_view = gr.Gallery(
+                    label="",
+                    columns=1,
+                    rows=MAX_PLOTS_IN_PANEL,
+                    height=460,
+                    object_fit="contain",
+                    show_label=True,
+                )
+                plot_view = gr.HTML(label="", value="")
                 gr.Markdown("### Файлы графиков")
                 files_view = gr.Files(label="", height=140)
                 gr.Markdown(
@@ -536,7 +649,9 @@ def build_demo(brain: Any) -> gr.Blocks:
                 return gr.skip()
             return chat_and_plot(text, history, state)
 
-        outputs = [chatbot, plot_view, tool_log, plots_state, files_view, textbox]
+        outputs = [
+            chatbot, gallery_view, plot_view, tool_log, plots_state, files_view, textbox
+        ]
         send.click(submit, inputs=[textbox, chatbot, plots_state], outputs=outputs)
         textbox.submit(submit, inputs=[textbox, chatbot, plots_state], outputs=outputs)
 
