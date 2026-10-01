@@ -87,11 +87,11 @@ TEMPERATURE = 0.1          # a scientist wants determinism, not creativity
 MAX_TOKENS = 1200
 
 # A three-day request costs three fetches, three derive calls and three plots
-# before a single sentence of the answer, so 7 cut the loop off mid-way and
-# "построй графики за 3 дня" could never complete. 12 leaves room for a
-# comparison or a statistics pass on top.
-MAX_TOOL_CALLS = 12        # tool executions per user query
-MAX_ROUNDS = 14            # model round-trips per user query
+# before a single sentence of the answer, and a two-day comparison that first
+# tries a bad handle costs a failed call plus a retry. 16 leaves room for both
+# without letting a runaway loop run away.
+MAX_TOOL_CALLS = 16        # tool executions per user query
+MAX_ROUNDS = 18            # model round-trips per user query
 
 OFFLINE = os.environ.get("GEOMAG_OFFLINE", "").strip() not in ("", "0", "false")
 
@@ -1151,21 +1151,45 @@ class FrameStore:
         return out
 
     def resolve(self, handle: Any) -> tuple[pd.DataFrame | None, dict[str, Any] | None]:
+        """Normalise first, then look up, then describe what *is* available.
+
+        Normalising here (rather than inside ``get`` alone) is what makes the
+        failure path trustworthy: ``available`` is built from real keys, and the
+        message quotes the same canonical string the store holds, so a model that
+        copies the hint lands on a valid handle on the very next attempt.
+        """
         frame = self.get(handle)
-        if frame is None:
-            return None, _error(
-                "unknown_frame",
-                f"No data under handle {handle!r}.",
-                available=self.names() or ["(none yet - call fetch_observatory_data first)"],
-                aliases=self.aliases(),
-                hint=(
-                    "Pass a handle exactly as it was returned in 'frame_handle'. "
-                    "A bare family name ('raw', 'derived', 'anomalies') only ever points at the "
-                    "most recent member of that family, so to compare two days pass the two full "
-                    "slot names, e.g. 'raw:irt:2024-09-10' and 'raw:irt:2024-09-11'."
-                ),
+        if frame is not None:
+            return frame, None
+        available = self.names()
+        canonical = (
+            self._normalise(handle) if isinstance(handle, str) else None
+        )
+        message = f"No data under handle {handle!r}."
+        if canonical and canonical not in available:
+            # Tell the model precisely how its spelling differs, which is the one
+            # detail that turns a silent mismatch into an obvious fix.
+            message += (
+                f" Did you mean one of: {', '.join(available)}?"
+                if available
+                else ""
             )
-        return frame, None
+        return None, _error(
+            "unknown_frame",
+            message,
+            available=available or ["(none yet - call fetch_observatory_data first)"],
+            aliases=self.aliases(),
+            requested=handle if isinstance(handle, str) else None,
+            hint=(
+                "Use one of the 'available' handles verbatim, copied from a previous "
+                "tool result's 'frame_handle'. They are all lower-case. A bare family "
+                "name ('raw', 'derived', 'anomalies') always means the most recent member "
+                "of that family, so to compare two days pass the two full slot names, "
+                "e.g. 'raw:irt:2024-09-10' and 'raw:irt:2024-09-11'."
+                if available
+                else "Call fetch_observatory_data first; it returns a frame_handle."
+            ),
+        )
 
 
 def _summarise_frame(df: pd.DataFrame, store: FrameStore | None = None, name: str = "") -> dict[str, Any]:
@@ -1238,7 +1262,12 @@ def _handle_fetch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     start = args.get("start_date") or ""
     end = args.get("end_date") or start
 
-    slot = f"raw:{station}:{start}" if station and start else "raw"
+    # Build the slot already normalised. Storing under the raw upper-case string
+    # made every handle the tools advertise differ from the keys listed in
+    # 'available_handles', so the model copied a name that was never in the list
+    # and only resolved because FrameStore.get() happened to lower-case it.
+    slot = f"raw:{station.lower()}:{start}" if station and start else "raw"
+    slot = FrameStore._normalise(slot)
 
     if OFFLINE:
         frame = _offline_frame()
@@ -1510,19 +1539,30 @@ def run_agent(
                     ),
                 }
             )
-            log.append(
-                {
-                    "round": round_no,
-                    "tool": "(refused)",
-                    "arguments": {},
-                    "ok": False,
-                    "error": "tool_budget_exhausted",
-                    "message": f"Budget of {max_tool_calls} tool calls reached; "
-                    "the model was told to answer instead.",
-                }
-            )
+            # The refused calls are recorded one-by-one, not collapsed into a
+            # single "(refused)" row: a refused plot_components means a chart the
+            # user asked for does not exist, and hiding which calls were dropped
+            # made the truncated run look complete.
+            for skipped in calls:
+                name = skipped.get("name") or "unknown"
+                log.append(
+                    {
+                        "round": round_no,
+                        "tool": name,
+                        "arguments": skipped.get("arguments", {}),
+                        "ok": False,
+                        "executed": False,
+                        "error": "tool_budget_exhausted",
+                        "message": f"Not executed: the budget of {max_tool_calls} tool "
+                        "calls was already spent.",
+                        "hint": "Ask for the remaining charts in a follow-up message.",
+                    }
+                )
             if verbose:
-                print(f"[agent] round {round_no}: budget exhausted, forcing an answer")
+                print(
+                    f"[agent] round {round_no}: budget exhausted, refused "
+                    f"{len(calls)} call(s), forcing an answer"
+                )
             continue
 
         spent += len(calls)
@@ -1579,12 +1619,21 @@ def run_agent(
                     note = f"{name} raised {type(exc).__name__}"
 
             entry["ok"] = not is_error(payload)
+            entry["executed"] = True
             # Surface the diagnostic fields, not just the code: without these a
             # malformed call in Colab reports "malformed_tool_call" and nothing
             # else, which is what sent the previous two fixes down blind paths.
             for key in ("message", "received", "reason", "hint"):
                 if isinstance(payload, dict) and payload.get(key) is not None:
                     entry[key] = payload[key]
+            # Record the handle the tool advertised. It is the only way an
+            # outside checker can confirm the name the model is told to copy is
+            # the name the store really holds.
+            if isinstance(payload, dict) and isinstance(
+                payload.get("frame_handle"), str
+            ):
+                entry["frame_handle"] = payload["frame_handle"]
+                entry["available"] = payload.get("available")
             if entry["ok"] and name in PLOT_TOOLS and isinstance(payload.get("path"), str):
                 plots.append(payload["path"])
                 entry["plot"] = payload["path"]
@@ -1613,6 +1662,39 @@ def run_agent(
     }
 
 
+def _with_plot_tally(text: str, log: list[dict[str, Any]]) -> str:
+    """State plainly how many charts exist, and list the files.
+
+    When the budget cuts a run short the model's own sentence is optimistic --
+    it says "the charts are ready" while two of them were never drawn -- and the
+    user is left hunting for a file that does not exist. The count is computed
+    from the executed plot calls, so it cannot disagree with ``result["plots"]``.
+    """
+    built = [e for e in log if e.get("ok") and e.get("plot")]
+    dropped = [
+        e for e in log
+        if not e.get("ok", True) and e.get("tool") in PLOT_TOOLS
+    ]
+    if not built and not dropped:
+        return text
+
+    names = [Path(str(e["plot"])).name for e in built]
+    line = f"Построено графиков: {len(built)}"
+    if dropped:
+        line += f" из {len(built) + len(dropped)} запрошенных"
+    line += "."
+    if names:
+        line += "\nФайлы: " + ", ".join(names)
+    if dropped:
+        line += (
+            f"\nНе построено: {len(dropped)} — лимит вызовов инструментов исчерпан. "
+            "Попросите оставшиеся графики отдельным сообщением."
+        )
+    if "Построено графиков" in text:
+        return text
+    return f"{text}\n\n{line}" if text.strip() else line
+
+
 def _with_tool_failures(text: str, log: list[dict[str, Any]]) -> str:
     """Append any unrecovered tool failure to the final answer.
 
@@ -1621,6 +1703,7 @@ def _with_tool_failures(text: str, log: list[dict[str, Any]]) -> str:
     never reached the user. Anything the model did not already mention gets
     appended verbatim, so the contract is visible whatever the model says.
     """
+    text = _with_plot_tally(text, log)
     failures = [
         e
         for e in log
@@ -1636,6 +1719,11 @@ def _with_tool_failures(text: str, log: list[dict[str, Any]]) -> str:
     for entry in failures:
         error = str(entry.get("error"))
         reason = entry.get("message") or entry.get("reason") or ""
+        if error == "tool_budget_exhausted":
+            # A refused call is bookkeeping, not a failure the user must read.
+            # _with_plot_tally already says how many charts exist and what is
+            # missing, and repeating every skipped call buries that.
+            continue
         if error in text and (not reason or reason in text):
             continue
         key = (error, str(reason))

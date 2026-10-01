@@ -81,8 +81,9 @@ GRADIO_VERSION = getattr(gr, "__version__", "unknown")
 # --------------------------------------------------------------------------- #
 # tuning
 # --------------------------------------------------------------------------- #
-#: How many saved figures to remember for the download list.
-MAX_PLOTS_IN_PANEL = 3
+#: How many saved figures to remember. A three-day request makes three charts
+#: plus one comparison, so 3 silently dropped a chart the user had asked for.
+MAX_PLOTS_IN_PANEL = 6
 
 #: ``run_agent`` is stateless -- every call is an independent query with a fresh
 #: message list. To make follow-ups like "and the same for 11 September" work, a
@@ -305,6 +306,24 @@ def _panel_entry(path: str, question: str, index: int) -> dict[str, Any] | None:
     }
 
 
+def _dedupe(saved: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Drop repeated paths, keeping the first (newest) occurrence.
+
+    The panel state is shared across turns, so a figure saved twice would be
+    drawn twice. Deduping here, at the render boundary, means no caller can
+    produce a duplicated entry.
+    """
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for entry in saved:
+        path = entry.get("path", "")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        out.append(entry)
+    return out
+
+
 def _gallery(saved: list[dict[str, str]]) -> list[dict[str, Any]]:
     """All recoverable figures as Gallery items, newest first.
 
@@ -312,7 +331,7 @@ def _gallery(saved: list[dict[str, str]]) -> list[dict[str, Any]]:
     used to leave two of them invisible. The Gallery takes the whole list.
     """
     items: list[dict[str, Any]] = []
-    for index, entry in enumerate(saved, start=1):
+    for index, entry in enumerate(_dedupe(saved), start=1):
         item = _panel_entry(entry.get("path", ""), entry.get("question", ""), index)
         if item is not None:
             items.append(item)
@@ -326,7 +345,7 @@ def _figure_block(saved: list[dict[str, str]]) -> str:
     leave the component alone.
     """
     blocks: list[str] = []
-    for index, entry in enumerate(saved, start=1):
+    for index, entry in enumerate(_dedupe(saved), start=1):
         path = entry.get("path", "")
         if not path or not Path(path).is_file():
             continue
@@ -572,9 +591,12 @@ def make_chat_handler(brain: Any):
         if isinstance(result, dict) and result.get("stop_reason") == "tool_budget_exhausted":
             text += "\n\n_(лимит вызовов инструментов исчерпан, ответ неполный)_"
 
-        # Record every figure, newest first, capped. A three-day request produces
-        # three charts and all three have to stay visible.
+        # Record every figure from this turn, newest first. ``_plot_paths`` reads
+        # the accumulated result, not the model's sentence, so a run cut short by
+        # the tool budget still shows the charts it did manage to save.
         for path in reversed(_plot_paths(result)):
+            if any(entry.get("path") == path for entry in saved):
+                continue
             saved.insert(0, {"question": question[:80], "path": path})
         saved = saved[:MAX_PLOTS_IN_PANEL]
 

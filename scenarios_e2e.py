@@ -24,6 +24,7 @@ Exit code is non-zero if any scenario fails, so this is usable in CI.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +43,13 @@ class Scenario:
     # arguments that must each reference a *different* frame handle
     distinct_args: list[str] = field(default_factory=list)
     explanation: str = ""
+    # Rewrite every frame handle the model emits to upper case. The store must
+    # treat "raw:IRT:2024-09-10" and "raw:irt:2024-09-10" as one handle, so this
+    # turns a casing assumption into something the real run has to satisfy.
+    uppercase_handles: bool = False
+    # The final answer must state how many charts exist, in the exact form
+    # "Построено графиков: N", so a truncated run cannot read as complete.
+    require_plot_tally: bool = False
 
 
 SCENARIOS: list[Scenario] = [
@@ -94,7 +102,58 @@ SCENARIOS: list[Scenario] = [
         text_contains=["2024-09-10", "2024-09-11"],
         explanation="two independent days, no chart needed -- numbers must be exact",
     ),
+    Scenario(
+        name="compare_uppercase",
+        query=(
+            "Сравни горизонтальную составляющую H обсерватории IRT за 10 и за "
+            "11 сентября 2024 года: построй на одном графике оба дня, чтобы было "
+            "видно, насколько сильно они отличаются."
+        ),
+        must_call=[
+            "fetch_observatory_data",
+            "fetch_observatory_data",
+            "plot_comparison",
+        ],
+        min_plots=1,
+        distinct_args=["df1", "df2"],
+        text_contains=["2024-09-10", "2024-09-11"],
+        uppercase_handles=True,
+        require_plot_tally=True,
+        explanation=(
+            "the reported failure: the model shouts every handle, e.g. "
+            "'RAW:IRT:2024-09-10'. Casing must not change which frame is used, and "
+            "every handle a tool advertises must be the key the store really holds"
+        ),
+    ),
+    Scenario(
+        name="three_days",
+        query=(
+            "Построй три отдельных графика горизонтальной составляющей H "
+            "обсерватории IRT: за 10, за 11 и за 12 сентября 2024 года, по одному "
+            "графику на каждый день."
+        ),
+        must_call=[
+            "fetch_observatory_data",
+            "fetch_observatory_data",
+            "fetch_observatory_data",
+            "plot_components",
+            "plot_components",
+            "plot_components",
+        ],
+        min_plots=3,
+        text_contains=["2024-09-10", "2024-09-11", "2024-09-12"],
+        uppercase_handles=True,
+        require_plot_tally=True,
+        explanation=(
+            "three charts cost nine calls; the tool budget used to cut the turn "
+            "short, and a run that saves two of three must say so rather than "
+            "claim all three are ready"
+        ),
+    ),
 ]
+
+#: Handle arguments that must resolve regardless of the casing used.
+_HANDLE_ARGS = ("df", "df1", "df2")
 
 
 # --------------------------------------------------------------------------- #
@@ -110,7 +169,9 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
     log = result["tool_calls"]
     calls = [e["tool"] for e in log]
 
-    # 1. the required calls happened, in order
+    # 1. the required calls happened, in order. A missing call does not stop the
+    # audit: the remaining checks still run, so one run reports every problem
+    # instead of only the first.
     cursor = 0
     for wanted in scenario.must_call:
         while cursor < len(calls) and calls[cursor] != wanted:
@@ -120,7 +181,7 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
                 f"expected tool {wanted!r} after position {cursor}, "
                 f"but the log was {calls}"
             )
-            return problems
+            break
         cursor += 1
 
     # 2. nothing failed
@@ -131,17 +192,38 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
                 f"{entry.get('message', '')}"
             )
 
-    # 3. two days really were fetched, as two different frames
-    fetches = _fetches(result)
-    if scenario.must_call.count("fetch_observatory_data") > 1:
-        if len(fetches) < 2:
-            problems.append(f"expected 2 fetches, got {len(fetches)}")
+    # 2b. a handle that was merely spelled differently must not count as a
+    # failure. A real miss has to be an unknown_frame with an empty resolution,
+    # which is what the store reports when nothing is stored under any casing.
+    for entry in log:
+        if entry.get("error") != "unknown_frame":
+            continue
+        for key in _HANDLE_ARGS:
+            handle = entry.get("arguments", {}).get(key)
+            if handle is None:
+                continue
+            if not str(handle).strip():
+                continue
+            problems.append(
+                f"{entry['tool']}({key}={handle!r}) could not resolve a frame"
+            )
+
+    # 3. every requested day was fetched, as a different window
+    expected_fetches = scenario.must_call.count("fetch_observatory_data")
+    if expected_fetches > 1:
+        fetches = _fetches(result)
+        if len(fetches) < expected_fetches:
+            problems.append(
+                f"expected {expected_fetches} fetches, got {len(fetches)}"
+            )
         dates = {
             (e["arguments"].get("start_date"), e["arguments"].get("end_date"))
             for e in fetches
         }
-        if len(dates) < 2:
-            problems.append(f"both fetches requested the same window: {dates}")
+        if len(dates) < expected_fetches:
+            problems.append(
+                f"expected {expected_fetches} distinct windows, got {dates}"
+            )
 
     # 4. the compared frames were named differently, not the same handle twice
     for entry in log:
@@ -154,6 +236,18 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
                 f"{handles}"
             )
 
+    # 4b. every handle a tool advertised must be a handle the model can reuse.
+    # A tool that returns 'raw:IRT:...' while the store holds 'raw:irt:...' makes
+    # the model copy a name that is absent from its own 'available' list.
+    for entry in log:
+        if not entry.get("ok"):
+            continue
+        produced = entry.get("frame_handle")
+        if isinstance(produced, str) and produced != produced.lower():
+            problems.append(
+                f"{entry['tool']} advertised a non-canonical handle: {produced!r}"
+            )
+
     # 5. artifacts exist
     if scenario.min_plots:
         plots = result.get("plots", [])
@@ -162,6 +256,23 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
         for path in plots:
             if not Path(path).is_file():
                 problems.append(f"plot artifact is missing: {path}")
+
+    # 5b. the answer states the chart count, so a short run is not read as complete
+    if scenario.require_plot_tally:
+        answer = result.get("text") or ""
+        if "Построено графиков" not in answer:
+            problems.append("the answer never states how many charts were built")
+        else:
+            built = len(result.get("plots") or [])
+            if f"Построено графиков: {built}" not in answer:
+                problems.append(
+                    f"the tally disagrees with the saved charts ({built})"
+                )
+            for path in result.get("plots") or []:
+                if Path(path).name not in answer:
+                    problems.append(
+                        f"the answer does not list the saved file {Path(path).name}"
+                    )
 
     # 6. the answer says what it must
     text = (result.get("text") or "").lower()
@@ -175,14 +286,48 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
 # --------------------------------------------------------------------------- #
 # runner
 # --------------------------------------------------------------------------- #
+_HANDLE_RE = re.compile(
+    r'("(?:df|df1|df2)"\s*:\s*")([^"]*)(")',
+    flags=re.IGNORECASE,
+)
+
+
+class _ShoutingBrain:
+    """Wrap a brain and upper-case every frame handle it is about to emit.
+
+    The casing is changed in the raw text the model produced, so the whole
+    pipeline -- the parser, the store and the tools -- sees exactly what a model
+    that shouts would send. Handles are not invented: only values of ``df``,
+    ``df1`` and ``df2`` are rewritten, never the tool name or a date.
+    """
+
+    def __init__(self, brain: Any) -> None:
+        self._brain = brain
+
+    def __call__(self, messages: Any) -> Any:
+        reply = self._brain(messages)
+        content = getattr(reply, "content", None)
+        if isinstance(content, str) and '"df' in content.lower():
+            reply.content = _HANDLE_RE.sub(
+                lambda m: m.group(1) + m.group(2).upper() + m.group(3), content
+            )
+        return reply
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._brain, name)
+
+
 def run_scenario(scenario: Scenario, brain: Any, verbose: bool) -> bool:
     print("=" * 78)
     print(f"SCENARIO {scenario.name}")
     print(f"  {scenario.explanation}")
     print(f"  query: {scenario.query}")
+    if scenario.uppercase_handles:
+        print("  NOTE: every df/df1/df2 handle is upper-cased on the way in")
     print("=" * 78)
 
-    result = ac.run_agent(scenario.query, brain=brain, verbose=verbose)
+    target = _ShoutingBrain(brain) if scenario.uppercase_handles else brain
+    result = ac.run_agent(scenario.query, brain=target, verbose=verbose)
 
     for index, entry in enumerate(result["tool_calls"], start=1):
         mark = "ok " if entry.get("ok") else "ERR"

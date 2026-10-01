@@ -313,3 +313,163 @@ def test_empty_message_does_not_break_the_handler():
 
 def test_schemas_are_still_valid_json():
     json.dumps(ac.TOOL_SCHEMAS)
+
+
+# --------------------------------------------------------------------------- #
+# task 3: partial success is stated, not glossed over
+# --------------------------------------------------------------------------- #
+def _budget_script(names: list[str], budget: int) -> list[dict]:
+    """Three days of work, then a filler call that the budget must refuse.
+
+    The filler matters: without it the turn ends cleanly and the tally has
+    nothing to say about a missing chart, which is the state the Kaggle report
+    described.
+    """
+    script = _plot_script(names)
+    script.insert(
+        -1,
+        {
+            "_text": '<tool_call>{"name": "get_statistics", "arguments": '
+            '{"df": "raw:irt:2024-09-10", "components": ["H"]}}</tool_call>'
+        },
+    )
+    return script
+
+
+def test_budget_is_sized_for_a_three_day_request():
+    """A three-day job costs 9 calls; the cap must not cut it short."""
+    assert ac.MAX_TOOL_CALLS >= 9 + 7, ac.MAX_TOOL_CALLS
+    assert ac.MAX_TOOL_CALLS == 16
+    assert ac.MAX_ROUNDS == 18
+
+
+def test_refused_calls_are_logged_individually(tmp_path, monkeypatch):
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    brain = ac.ScriptedBrain(
+        ac._unwrap(_budget_script(["d10.html", "d11.html", "d12.html"], budget=9))
+    )
+    result = ac.run_agent("три дня", brain=brain, max_tool_calls=9, verbose=False)
+
+    refused = [e for e in result["tool_calls"] if not e.get("executed", True)]
+    assert len(refused) == 1
+    assert refused[0]["tool"] == "get_statistics"
+    assert refused[0]["error"] == "tool_budget_exhausted"
+    assert refused[0]["executed"] is False
+    assert refused[0]["arguments"]["df"] == "raw:irt:2024-09-10"
+
+
+def test_all_three_charts_survive_a_refused_filler_call(tmp_path, monkeypatch):
+    """The Kaggle symptom: three files on disk, one turn cut short.
+
+    Every plot succeeded before the budget ran out, so all three must be in the
+    result, in the Gallery and in the file list.
+    """
+    names = ["day10.html", "day11.html", "day12.html"]
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    ga.PLOTS_DIR = tmp_path
+
+    brain = ac.ScriptedBrain(ac._unwrap(_budget_script(names, budget=9)))
+    handler = ga.make_chat_handler(brain)
+    _messages, gallery, html_block, _log, saved, files, _box = handler(
+        "построй графики за 3 дня", [], []
+    )
+
+    assert len(saved) == 3, saved
+    assert len(gallery) == 3, "every saved figure must reach the Gallery"
+    assert html_block.count("<iframe") == 3
+    assert len(files) == 3
+
+
+def test_plot_result_survives_a_later_refusal(tmp_path, monkeypatch):
+    names = ["day10.html", "day11.html", "day12.html"]
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(ac, "OFFLINE", True)
+
+    brain = ac.ScriptedBrain(ac._unwrap(_budget_script(names, budget=9)))
+    result = ac.run_agent("три дня", brain=brain, max_tool_calls=9, verbose=False)
+
+    assert result["stop_reason"] == "tool_budget_exhausted"
+    assert [Path(p).name for p in result["plots"]] == names
+    assert all((tmp_path / n).exists() for n in names)
+
+
+def test_partial_success_states_the_count_and_the_files(tmp_path, monkeypatch):
+    """The model's own sentence is optimistic; ours must not be.
+
+    The model claims "three charts ready" after only two were drawn, so the
+    tally has to be computed from the log rather than trusted from the text.
+    """
+    names = ["day10.html", "day11.html", "day12.html"]
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(ac, "OFFLINE", True)
+
+    # 8 calls: three fetches, three derives, two plots, then the third is refused
+    script = _plot_script(names)[:6] + _plot_script(names)[6:8]
+    script.append({
+        "_text": '<tool_call>{"name": "plot_components", "arguments": '
+        '{"df": "derived:irt:2024-09-12", "components": ["H"], '
+        '"filename": "day12.html"}}</tool_call>'
+    })
+    script.append({"content": "Три графика готовы."})
+
+    brain = ac.ScriptedBrain(ac._unwrap(script))
+    result = ac.run_agent("три дня", brain=brain, max_tool_calls=8, verbose=False)
+
+    assert result["stop_reason"] == "tool_budget_exhausted"
+    text = result["text"]
+    assert "Построено графиков: 2 из 3 запрошенных" in text, text
+    assert "day10.html" in text and "day11.html" in text
+    assert "day12.html" not in text.split("Файлы:")[1].split("\n")[0]
+    assert "Не построено" in text, text
+
+
+def test_complete_run_still_reports_what_it_saved(tmp_path, monkeypatch):
+    names = ["day10.html", "day11.html", "day12.html"]
+    for name in names:
+        _write_plot(tmp_path / name)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(ac, "OFFLINE", True)
+
+    brain = ac.ScriptedBrain(ac._unwrap(_plot_script(names)))
+    result = ac.run_agent("три дня", brain=brain, verbose=False)
+
+    assert result["stop_reason"] == "no_tool_calls"
+    assert "Построено графиков: 3." in result["text"], result["text"]
+    for name in names:
+        assert name in result["text"]
+    assert "Не построено" not in result["text"]
+
+
+def test_tally_is_absent_when_nothing_was_plotted(tmp_path, monkeypatch):
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    brain = ac.ScriptedBrain(ac._unwrap([{
+        "_text": '<tool_call>{"name": "get_statistics", "arguments": '
+        '{"df": "raw:irt:2024-09-10", "components": ["H"]}}</tool_call>'
+    }, {"content": "Нет данных."}]))
+    result = ac.run_agent("статистика без данных", brain=brain, verbose=False)
+    assert "Построено графиков" not in result["text"]
+    assert "Не построено" not in result["text"]
+
+
+def test_refused_calls_do_not_pollute_the_failure_footer(tmp_path, monkeypatch):
+    """A budget cut is reported once, in the tally, not as a list of failures."""
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    brain = ac.ScriptedBrain(
+        ac._unwrap(_budget_script(["a.html", "b.html", "c.html"], budget=9))
+    )
+    result = ac.run_agent("три дня", brain=brain, max_tool_calls=9, verbose=False)
+    assert "Не удалось выполнить часть операций" not in result["text"], result["text"]
+
+
+def test_panel_is_large_enough_for_a_three_day_request():
+    assert ga.MAX_PLOTS_IN_PANEL >= 4, ga.MAX_PLOTS_IN_PANEL
+
+
+def test_gallery_does_not_duplicate_a_repeated_path(tmp_path, monkeypatch):
+    path = _write_plot(tmp_path / "only.html")
+    saved = [{"question": "q", "path": path}, {"question": "q", "path": path}]
+    assert len(ga._gallery(saved)) == 1
+
