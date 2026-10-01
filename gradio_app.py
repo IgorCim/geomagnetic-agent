@@ -37,6 +37,7 @@ Design notes
 
 from __future__ import annotations
 
+import html
 import inspect
 import json
 import os
@@ -84,6 +85,22 @@ GRADIO_VERSION = getattr(gr, "__version__", "unknown")
 #: How many saved figures to remember. A three-day request makes three charts
 #: plus one comparison, so 3 silently dropped a chart the user had asked for.
 MAX_PLOTS_IN_PANEL = 6
+
+#: The chat handler returns a flat tuple: messages, one update per figure slot,
+#: then the tool log, the panel state, the file list and the cleared textbox.
+HANDLER_TAIL = 4
+
+
+def split_result(out: tuple) -> tuple[list, list, str, list, list, str]:
+    """Split a handler result into its named parts.
+
+    The figure slots sit between the transcript and the tail, and their count is
+    ``MAX_PLOTS_IN_PANEL``. Naming the layout once keeps callers -- the tests
+    especially -- from counting by hand and silently going stale.
+    """
+    slots = list(out[1 : 1 + MAX_PLOTS_IN_PANEL])
+    log, saved, files, box = out[1 + MAX_PLOTS_IN_PANEL : 1 + MAX_PLOTS_IN_PANEL + HANDLER_TAIL]
+    return list(out[0]), slots, log, list(saved), list(files), box
 
 #: ``run_agent`` is stateless -- every call is an independent query with a fresh
 #: message list. To make follow-ups like "and the same for 11 September" work, a
@@ -288,24 +305,6 @@ def _plot_names_in_text(text: Any) -> list[str]:
     return re.findall(r"[\w.\-/]*\.(?:html|htm)\b", text, flags=re.IGNORECASE)
 
 
-def _panel_entry(path: str, question: str, index: int) -> dict[str, Any] | None:
-    """One recoverable figure as a Gallery item, or ``None`` if unreadable."""
-    if not Path(path).is_file():
-        return None
-    figure = figure_from_plot_file(path)
-    if figure is None:
-        return None
-    caption = f"{index}. {Path(path).name}"
-    if question:
-        caption += f" — {question}"
-    return {
-        "label": caption,
-        "value": figure,
-        "path": str(path),
-        "name": Path(path).name,
-    }
-
-
 def _dedupe(saved: list[dict[str, str]]) -> list[dict[str, str]]:
     """Drop repeated paths, keeping the first (newest) occurrence.
 
@@ -324,44 +323,66 @@ def _dedupe(saved: list[dict[str, str]]) -> list[dict[str, str]]:
     return out
 
 
-def _gallery(saved: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """All recoverable figures as Gallery items, newest first.
+def _iframe(path: str) -> str:
+    """One saved Plotly document as a self-contained interactive iframe.
 
-    A single ``gr.Plot`` can only ever show one figure, so asking for three days
-    used to leave two of them invisible. The Gallery takes the whole list.
+    ``srcdoc`` carries the document inline rather than pointing at a filesystem
+    path. A path would have to be turned into a URL the browser can actually
+    fetch, which couples the render to Gradio's file-serving route; inlining
+    sidesteps that and keeps the chart working when the page is reloaded.
+
+    The document is escaped for an attribute context, and the browser decodes it
+    again on the way into the frame, so the chart receives its own HTML verbatim
+    and keeps the interactivity the plotter configured, ``scrollZoom`` included.
     """
-    items: list[dict[str, Any]] = []
-    for index, entry in enumerate(_dedupe(saved), start=1):
-        item = _panel_entry(entry.get("path", ""), entry.get("question", ""), index)
-        if item is not None:
-            items.append(item)
-    return items
+    target = Path(path)
+    try:
+        document = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if not document.strip():
+        return ""
+    return (
+        f'<iframe srcdoc="{html.escape(document, quote=True)}" '
+        f'style="width:100%;height:450px;border:1px solid #d0d0d0;'
+        f'border-radius:6px" loading="lazy"></iframe>'
+    )
 
 
-def _figure_block(saved: list[dict[str, str]]) -> str:
-    """Inline HTML for the figures, so they also show where Gallery is limited.
+def _slot_updates(saved: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """One ``gr.update`` per figure slot: a chart where there is one, hidden where not.
 
-    Empty string when there is nothing to show, which is how Gradio knows to
-    leave the component alone.
+    A Gallery cannot be used here. It accepts raster images only, and a Plotly
+    figure reaches its ``_save`` as a dict, which raises
+    ``ValueError: Cannot process type as image: <class 'dict'>``. Fixed
+    components cannot be created per turn, so the panel is a fixed row of
+    ``gr.HTML`` slots that are shown and hidden instead.
     """
-    blocks: list[str] = []
-    for index, entry in enumerate(_dedupe(saved), start=1):
+    updates: list[dict[str, Any]] = []
+    for entry in _dedupe(saved):
+        if len(updates) >= MAX_PLOTS_IN_PANEL:
+            # The panel is a fixed row of components. Emitting more updates than
+            # there are components is a runtime error in Gradio, so the overflow
+            # is dropped here rather than handed over.
+            print(
+                f"[web] графиков больше, чем мест в панели "
+                f"({MAX_PLOTS_IN_PANEL}); остальные доступны в списке файлов"
+            )
+            break
         path = entry.get("path", "")
-        if not path or not Path(path).is_file():
-            continue
         if figure_from_plot_file(path) is None:
+            # A non-empty file is not a drawable chart: a run killed mid-write
+            # leaves something that inlines fine and then renders blank. The
+            # same predicate drives _fallback_note, so "hidden" and "download it
+            # instead" always agree.
             continue
-        escaped = (
-            path.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
-        )
-        blocks.append(
-            f'<figure style="margin:0 0 12px 0">'
-            f'<iframe src="{escaped}" style="width:100%;height:420px;border:1px solid #d0d0d0;'
-            f'border-radius:6px"></iframe>'
-            f'<figcaption style="font-size:12px;opacity:0.75;padding-top:4px">'
-            f"{index}. {Path(path).name}</figcaption></figure>"
-        )
-    return "".join(blocks)
+        document = _iframe(path)
+        if not document:
+            continue
+        updates.append(gr.update(value=document, visible=True))
+    while len(updates) < MAX_PLOTS_IN_PANEL:
+        updates.append(gr.update(value="", visible=False))
+    return updates
 
 
 def _fallback_note(saved: list[dict[str, str]]) -> str:
@@ -548,7 +569,7 @@ def make_chat_handler(brain: Any):
         message: str,
         history: Any,
         plots_state: Any,
-    ) -> tuple[Any, Any, Any, str, list[dict[str, str]], list[str], str]:
+    ) -> tuple:
         messages = normalize_history(history)
         saved: list[dict[str, str]] = [
             entry for entry in (plots_state or []) if isinstance(entry, dict) and entry.get("path")
@@ -556,7 +577,14 @@ def make_chat_handler(brain: Any):
 
         question = _message_text(message)
         if not question:
-            return messages, [], "", "", saved, [], ""
+            return (
+                messages,
+                *_slot_updates(saved),
+                "",
+                saved,
+                [entry["path"] for entry in saved],
+                "",
+            )
 
         if VERBOSE:
             print(f"[web] запрос: {question[:120]}")
@@ -567,8 +595,7 @@ def make_chat_handler(brain: Any):
             messages.append({"role": "assistant", "content": text})
             return (
                 messages,
-                _gallery(saved),
-                _figure_block(saved),
+                *_slot_updates(saved),
                 log,
                 saved,
                 [entry["path"] for entry in saved],
@@ -576,6 +603,7 @@ def make_chat_handler(brain: Any):
             )
 
         try:
+
             result = run_agent(_context_from_history(messages) + question, brain=brain)
         except Exception as exc:  # one bad turn must not kill the server
             traceback.print_exc()
@@ -639,17 +667,17 @@ def build_demo(brain: Any) -> gr.Blocks:
 
             with gr.Column(scale=2):
                 gr.Markdown("### Графики")
-                # A Gallery keeps every chart on screen; gr.Plot can only ever
-                # hold the last one, which hid all but one of a multi-day answer.
-                gallery_view = gr.Gallery(
-                    label="",
-                    columns=1,
-                    rows=MAX_PLOTS_IN_PANEL,
-                    height=460,
-                    object_fit="contain",
-                    show_label=True,
-                )
-                plot_view = gr.HTML(label="", value="")
+                # A Gallery cannot hold these charts. It accepts raster images
+                # only, and a Plotly figure reaches Gallery._save as a dict:
+                #   ValueError: Cannot process type as image: <class 'dict'>
+                # Components also cannot be created per turn, so the panel is a
+                # fixed row of gr.HTML slots that each hold one srcdoc iframe.
+                # Inlining the document keeps the chart fully interactive:
+                # zoom, pan and hover all work inside the frame.
+                plot_slots = [
+                    gr.HTML(label="", value="", visible=False)
+                    for _ in range(MAX_PLOTS_IN_PANEL)
+                ]
                 gr.Markdown("### Файлы графиков")
                 files_view = gr.Files(label="", height=140)
                 gr.Markdown(
@@ -672,7 +700,12 @@ def build_demo(brain: Any) -> gr.Blocks:
             return chat_and_plot(text, history, state)
 
         outputs = [
-            chatbot, gallery_view, plot_view, tool_log, plots_state, files_view, textbox
+            chatbot,
+            *plot_slots,
+            tool_log,
+            plots_state,
+            files_view,
+            textbox,
         ]
         send.click(submit, inputs=[textbox, chatbot, plots_state], outputs=outputs)
         textbox.submit(submit, inputs=[textbox, chatbot, plots_state], outputs=outputs)

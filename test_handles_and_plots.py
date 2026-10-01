@@ -1,6 +1,6 @@
 """Case-insensitive frame handles + multi-plot UI.
 
-Two field bugs are pinned here:
+Three field bugs are pinned here:
 
 1. ``plot_comparison: unknown_frame: No data under handle 'raw:IRT:2024-09-10'``
    -- a model that echoes back the upper-case station code it typed must still
@@ -8,11 +8,15 @@ Two field bugs are pinned here:
    for every tool that takes a frame handle.
 2. Asking for three days showed only the last chart, because the UI had a single
    ``gr.Plot``. Every figure has to reach the user now.
+3. ``ValueError: Cannot process type as image: <class 'dict'>`` -- handing a
+   Plotly figure to ``gr.Gallery``. A Gallery only understands raster images, so
+   the interactive charts have to be rendered as iframes instead.
 """
 
 import json
 from pathlib import Path
 
+import gradio as gr
 import pandas as pd
 import pytest
 
@@ -205,7 +209,7 @@ def _plot_script(names: list[str]) -> list[dict]:
     return script
 
 
-def test_three_days_give_three_gallery_items(tmp_path, monkeypatch):
+def test_three_days_fill_three_iframe_slots(tmp_path, monkeypatch):
     names = ["day10.html", "day11.html", "day12.html"]
     for name in names:
         _write_plot(tmp_path / name)
@@ -215,20 +219,19 @@ def test_three_days_give_three_gallery_items(tmp_path, monkeypatch):
 
     brain = ac.ScriptedBrain(ac._unwrap(_plot_script(names)))
     handler = ga.make_chat_handler(brain)
-    _messages, gallery, html_block, _log, saved, files, _box = handler(
-        "построй графики за 3 дня", [], []
+    _messages, slots, _log, saved, files, _box = ga.split_result(
+        handler("построй графики за 3 дня", [], [])
     )
 
-    # offline mode hands out a synthetic frame, so every plot call must succeed
-    assert len(saved) == 3, saved
-    assert len(gallery) == 3, "every figure must reach the Gallery, not just the last"
+    visible = [s for s in slots if s.get("visible")]
+    assert len(visible) == 3, "every figure must reach the screen, not just the last"
+    assert len(saved) == 3
     assert len(files) == 3
-    labels = [item["label"] for item in gallery]
-    assert len(set(labels)) == 3, labels
-    assert html_block.count("<iframe") == 3
+    for slot in visible:
+        assert "<iframe" in slot["value"]
 
 
-def test_gallery_survives_an_unreadable_file(tmp_path, monkeypatch):
+def test_an_unreadable_file_does_not_break_the_panel(tmp_path, monkeypatch):
     _write_plot(tmp_path / "good.html")
 
     real_plot_components = plotter.plot_components
@@ -247,15 +250,15 @@ def test_gallery_survives_an_unreadable_file(tmp_path, monkeypatch):
 
     brain = ac.ScriptedBrain(ac._unwrap(_plot_script(["good.html", "bad.html"])))
     handler = ga.make_chat_handler(brain)
-    _messages, gallery, html_block, _log, saved, _files, _box = handler(
-        "построй два графика", [], []
+    _messages, slots, _log, saved, files, _box = ga.split_result(
+        handler("построй два графика", [], [])
     )
 
     # both files are kept and downloadable even though one cannot be drawn
     assert len(saved) == 2, saved
-    assert len(gallery) == 1, "only the readable figure can be drawn"
-    assert html_block.count("<iframe") == 1
-    assert len(_files) == 2
+    assert len([s for s in slots if s.get("visible")]) == 1
+    assert len(files) == 2, "the unreadable chart must still be downloadable"
+    assert any("bad.html" in p for p in files)
 
 
 def test_filenames_in_the_answer_are_picked_up(tmp_path, monkeypatch):
@@ -287,28 +290,172 @@ def test_plot_paths_does_not_invent_files(tmp_path, monkeypatch):
 def test_single_plot_still_renders(tmp_path, monkeypatch):
     path = _write_plot(tmp_path / "one.html")
     monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
-    saved = [{"question": "q", "path": path}]
-    assert len(ga._gallery(saved)) == 1
-    assert ga._figure_block(saved).count("<iframe") == 1
+    slots = ga._slot_updates([{"question": "q", "path": path}])
+    assert len(slots) == ga.MAX_PLOTS_IN_PANEL
+    visible = [s for s in slots if s.get("visible")]
+    assert len(visible) == 1
+    assert "<iframe" in visible[0]["value"]
 
 
-def test_gallery_is_empty_when_nothing_is_saved():
-    assert ga._gallery([]) == []
-    assert ga._figure_block([]) == ""
-
-
-def test_demo_wires_a_gallery_not_a_single_plot():
-    """The UI must actually contain a Gallery: a lone gr.Plot hides all but one."""
-    source = Path(ga.__file__).read_text(encoding="utf-8")
-    assert "gr.Gallery(" in source
-    assert "gallery_view" in source
-    assert "gallery_view, plot_view" in source
+def test_all_slots_are_hidden_when_nothing_is_saved():
+    slots = ga._slot_updates([])
+    assert len(slots) == ga.MAX_PLOTS_IN_PANEL
+    assert not [s for s in slots if s.get("visible")]
 
 
 def test_empty_message_does_not_break_the_handler():
     handler = ga.make_chat_handler(object())
-    messages, gallery, html_block, log, saved, files, box = handler("", [], [])
-    assert gallery == [] and html_block == "" and log == "" and files == [] and box == ""
+    _messages, slots, log, saved, files, box = ga.split_result(handler("", [], []))
+    assert not [s for s in slots if s.get("visible")]
+    assert log == "" and files == [] and box == ""
+
+
+# --------------------------------------------------------------------------- #
+# task 3: gr.Gallery cannot hold a Plotly chart
+# --------------------------------------------------------------------------- #
+def test_three_html_paths_survive_gradio_postprocessing(tmp_path, monkeypatch):
+    """The reported crash, reproduced through Gradio's own code.
+
+    ``ValueError: Cannot process type as image: <class 'dict'>`` came out of
+    ``Gallery._save``. Feeding a Gallery was never going to work: it accepts
+    raster images only, and a Plotly figure arrives as a dict. This asserts the
+    replacement actually passes through ``gr.HTML.postprocess`` for a real
+    three-day answer, so the ValueError cannot come back.
+    """
+    names = ["day10.html", "day11.html", "day12.html"]
+    for name in names:
+        _write_plot(tmp_path / name)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    ga.PLOTS_DIR = tmp_path
+
+    brain = ac.ScriptedBrain(ac._unwrap(_plot_script(names)))
+    handler = ga.make_chat_handler(brain)
+    _messages, slots, _log, saved, files, _box = ga.split_result(
+        handler("построй графики за 3 дня", [], [])
+    )
+
+    component = gr.HTML()
+    rendered = []
+    for slot in slots:
+        # this is the call that used to raise ValueError via Gallery._save
+        out = component.postprocess(slot)
+        rendered.append(out)
+
+    shown = [r for r in rendered if r.get("visible")]
+    assert len(shown) == 3, rendered
+    for r in shown:
+        assert r["value"].count("<iframe") == 1
+    assert len(files) == 3, "gr.Files must still hand over the real files"
+
+
+def test_no_gallery_component_is_created():
+    """The regression, guarded at the source: a Gallery cannot hold a chart."""
+    source = Path(ga.__file__).read_text(encoding="utf-8")
+    assert "gr.Gallery(" not in source
+    assert "Gallery(" not in source.replace("A Gallery", "").replace("a Gallery", "")
+
+
+def test_the_demo_wires_one_html_slot_per_figure():
+    """Slots have to be declared up front: Blocks cannot add them per turn."""
+    demo = ga.build_demo(object())
+    components = demo.get_config_file()["components"]
+    kinds = [c.get("type") for c in components]
+    assert "gallery" not in kinds, "no Gallery may be instantiated"
+    assert kinds.count("html") >= ga.MAX_PLOTS_IN_PANEL
+    assert kinds.count("file") == 1, "gr.Files must survive"
+    assert kinds.count("chatbot") == 1
+
+
+def test_the_declared_slots_are_hidden_at_start():
+    demo = ga.build_demo(object())
+    labels = [
+        c.get("props", {}).get("label")
+        for c in demo.get_config_file()["components"]
+        if c.get("type") == "html"
+    ]
+    assert "" in labels
+    hidden = [
+        c for c in demo.get_config_file()["components"]
+        if c.get("type") == "html" and c.get("props", {}).get("visible") is False
+    ]
+    assert len(hidden) == ga.MAX_PLOTS_IN_PANEL, hidden
+
+
+def test_handler_and_wiring_agree_on_the_output_count():
+    """A silent mismatch here shows up only as a runtime error in the browser."""
+    demo = ga.build_demo(object())
+    dependencies = demo.get_config_file()["dependencies"]
+    assert dependencies, "the demo must wire at least one event"
+    expected = 1 + ga.MAX_PLOTS_IN_PANEL + ga.HANDLER_TAIL
+    for dependency in dependencies:
+        outputs = dependency.get("outputs") or []
+        if len(outputs) == expected:
+            return
+    raise AssertionError(
+        f"no event outputs {expected} components "
+        f"(messages + {ga.MAX_PLOTS_IN_PANEL} slots + {ga.HANDLER_TAIL} tail)"
+    )
+
+
+def test_iframe_carries_the_document_inline(tmp_path, monkeypatch):
+    """srcdoc inlines the chart, so it needs no file route and keeps its modebar."""
+    path = _write_plot(tmp_path / "one.html")
+    document = Path(path).read_text(encoding="utf-8")
+    frame = ga._iframe(path)
+    assert frame.startswith("<iframe")
+    assert "srcdoc=" in frame
+
+    # the iframe itself must point nowhere: a filesystem path in src is not
+    # something a browser can fetch from an http origin. Only the attributes
+    # outside the escaped payload are inspected -- the Plotly document itself
+    # legitimately contains src= for its CDN script.
+    head, _, rest = frame.partition(' srcdoc="')
+    assert head == "<iframe", head
+    # html.escape(quote=True) leaves no literal quote inside the payload, so the
+    # first one closes the attribute
+    raw, _, tail = rest.partition('"')
+    assert "src" not in head and "src" not in tail, (head, tail)
+    assert "style=" in tail and "loading=" in tail, tail
+    assert tail.endswith("></iframe>")
+
+    # the payload must be escaped for an attribute context...
+    assert "&quot;" in raw or "&lt;" in raw or "&amp;" in raw
+    # ...and it must decode back to the original document, Plotly call and all
+    import html as html_mod
+
+    restored = html_mod.unescape(raw)
+    assert restored == document
+    assert "Plotly" in restored
+    # the chart stays interactive: our plotter config must survive the round trip
+    assert "scrollZoom" in restored, "zoom and pan would be lost"
+    assert "responsive" in restored
+    assert "Plotly.newPlot(" in restored
+
+
+def test_iframe_of_a_missing_or_empty_file_is_empty(tmp_path):
+    assert ga._iframe(str(tmp_path / "nope.html")) == ""
+    empty = tmp_path / "empty.html"
+    empty.write_text("   ", encoding="utf-8")
+    assert ga._iframe(str(empty)) == ""
+
+
+def test_seven_charts_use_every_slot(tmp_path, monkeypatch):
+    """The panel is a fixed row, so it has to say which charts did not fit."""
+    names = [f"day{i}.html" for i in range(10, 17)]
+    saved = [{"question": "q", "path": _write_plot(tmp_path / n)} for n in names]
+    slots = ga._slot_updates(saved)
+    assert len(slots) == ga.MAX_PLOTS_IN_PANEL
+    assert len([s for s in slots if s.get("visible")]) == ga.MAX_PLOTS_IN_PANEL
+
+
+def test_split_result_round_trips():
+    out = (["m"], *[{f"i{i}": i} for i in range(ga.MAX_PLOTS_IN_PANEL)],
+           "log", [{"path": "p"}], ["p"], "")
+    messages, slots, log, saved, files, box = ga.split_result(out)
+    assert messages == ["m"]
+    assert len(slots) == ga.MAX_PLOTS_IN_PANEL
+    assert log == "log" and saved == [{"path": "p"}] and files == ["p"] and box == ""
 
 
 def test_schemas_are_still_valid_json():
@@ -363,7 +510,7 @@ def test_all_three_charts_survive_a_refused_filler_call(tmp_path, monkeypatch):
     """The Kaggle symptom: three files on disk, one turn cut short.
 
     Every plot succeeded before the budget ran out, so all three must be in the
-    result, in the Gallery and in the file list.
+    result, on screen and in the file list.
     """
     names = ["day10.html", "day11.html", "day12.html"]
     monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
@@ -372,13 +519,14 @@ def test_all_three_charts_survive_a_refused_filler_call(tmp_path, monkeypatch):
 
     brain = ac.ScriptedBrain(ac._unwrap(_budget_script(names, budget=9)))
     handler = ga.make_chat_handler(brain)
-    _messages, gallery, html_block, _log, saved, files, _box = handler(
-        "построй графики за 3 дня", [], []
+    _messages, slots, _log, saved, files, _box = ga.split_result(
+        handler("построй графики за 3 дня", [], [])
     )
 
     assert len(saved) == 3, saved
-    assert len(gallery) == 3, "every saved figure must reach the Gallery"
-    assert html_block.count("<iframe") == 3
+    shown = [s for s in slots if s.get("visible")]
+    assert len(shown) == 3, "every saved figure must reach the screen"
+    assert all("<iframe" in s["value"] for s in shown)
     assert len(files) == 3
 
 
@@ -468,8 +616,11 @@ def test_panel_is_large_enough_for_a_three_day_request():
     assert ga.MAX_PLOTS_IN_PANEL >= 4, ga.MAX_PLOTS_IN_PANEL
 
 
-def test_gallery_does_not_duplicate_a_repeated_path(tmp_path, monkeypatch):
+def test_the_panel_does_not_duplicate_a_repeated_path(tmp_path, monkeypatch):
+    """Panel state is shared across turns, so the same file can arrive twice."""
     path = _write_plot(tmp_path / "only.html")
     saved = [{"question": "q", "path": path}, {"question": "q", "path": path}]
-    assert len(ga._gallery(saved)) == 1
+    slots = ga._slot_updates(saved)
+    shown = [s for s in slots if s.get("visible")]
+    assert len(shown) == 1
 
