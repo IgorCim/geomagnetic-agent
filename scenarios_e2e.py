@@ -50,6 +50,24 @@ class Scenario:
     # The final answer must state how many charts exist, in the exact form
     # "Построено графиков: N", so a truncated run cannot read as complete.
     require_plot_tally: bool = False
+    # The run may fumble a tool call on the way, as long as it recovers. The
+    # agent picking a wrong tool first is not the failure; ending up with no
+    # answer is. Kept separate from the default because a scenario that tolerates
+    # errors must still fail when the answer is wrong.
+    allow_recovered_errors: bool = False
+    # Strings that must NOT reach the user-facing answer. These are the internal
+    # error codes and the red footer heading; a run whose answer leaks them has
+    # failed the UX even when the number underneath is right.
+    forbid_in_answer: list[str] = field(default_factory=list)
+    # (min, max) bounds every "N нТ" number in the answer must fall inside. A
+    # regex over the digits would pass on 60631 appearing where 33.32 belongs;
+    # bounds say what magnitude the quantity must actually have.
+    expect_nt_between: list[tuple[float, float]] = field(default_factory=list)
+    # Regexes the answer must match. Needed where the natural phrasing has more
+    # than one accepted form -- a model may write "10 сентября 2024" or
+    # "2024-09-10", and pinning the ISO form alone would fail a correct answer
+    # for a formatting choice.
+    text_matches: list[str] = field(default_factory=list)
 
 
 SCENARIOS: list[Scenario] = [
@@ -150,6 +168,81 @@ SCENARIOS: list[Scenario] = [
             "claim all three are ready"
         ),
     ),
+    Scenario(
+        name="median_F",
+        query=(
+            "Посчитай медиану полной компоненты F обсерватории IRT за 10 сентября "
+            "2024 года. Сколько это нанотесла?"
+        ),
+        must_call=["fetch_observatory_data", "get_statistics"],
+        text_contains=["F"],
+        forbid_in_answer=[
+            "unknown_frame",
+            "unknown_component",
+            "Не удалось выполнить",
+        ],
+        allow_recovered_errors=True,
+        expect_nt_between=[(55000.0, 65000.0)],
+        explanation=(
+            "the reported failure: F is a native raw column, so get_statistics on "
+            "the raw handle answers directly. The model asked "
+            "calculate_derived_components for F -- an H/D/I-only tool -- and then "
+            "passed a derived handle that was never created. It recovered and the "
+            "number was right, but the answer carried two red errors"
+        ),
+    ),
+    Scenario(
+        name="range_F",
+        query=(
+            "Посчитай размах полной компоненты F обсерватории IRT за 10 сентября "
+            "2024 года — разницу между максимумом и минимумом. Сколько это "
+            "нанотесла?"
+        ),
+        must_call=["fetch_observatory_data", "calculate_derived_math"],
+        text_contains=["F"],
+        forbid_in_answer=[
+            "unknown_frame",
+            "unknown_component",
+            "Не удалось выполнить",
+        ],
+        allow_recovered_errors=True,
+        expect_nt_between=[(1.0, 500.0)],
+        explanation=(
+            "the reported failure: the range of F belongs to calculate_derived_math "
+            "with metric='delta', not to calculate_derived_components. Same "
+            "recovery, same red errors in the UI"
+        ),
+    ),
+    Scenario(
+        name="compare_range_F",
+        query=(
+            "Сравни размах полной компоненты F обсерватории IRT за 10 и за "
+            "11 сентября 2024 года: сколько нанотесла разница между этими двумя "
+            "размахами?"
+        ),
+        must_call=[
+            "fetch_observatory_data",
+            "fetch_observatory_data",
+            "calculate_derived_math",
+        ],
+        text_contains=["F"],
+        forbid_in_answer=[
+            "unknown_frame",
+            "unknown_component",
+            "Не удалось выполнить",
+        ],
+        allow_recovered_errors=True,
+        expect_nt_between=[(0.0, 500.0)],
+        text_matches=[
+            r"10\s*сентября|2024-09-10",
+            r"11\s*сентября|2024-09-11",
+        ],
+        explanation=(
+            "two days, each needing its own range, then a difference. The "
+            "second fetch must not overwrite the first, or the two ranges come "
+            "out identical"
+        ),
+    ),
 ]
 
 #: Handle arguments that must resolve regardless of the casing used.
@@ -186,16 +279,26 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
 
     # 2. nothing failed
     for entry in log:
-        if not entry.get("ok"):
+        if not entry.get("ok") and not scenario.allow_recovered_errors:
             problems.append(
                 f"tool {entry['tool']} failed: {entry.get('error')} -- "
                 f"{entry.get('message', '')}"
             )
 
+    # 2a. a scenario that tolerates detours still fails if nothing worked: the
+    # point is recovery, not silence. Checked explicitly so a run where every
+    # single call failed cannot pass by having no red errors to complain about.
+    if scenario.allow_recovered_errors and log and not any(e.get("ok") for e in log):
+        problems.append("every tool call failed, so the agent never recovered")
+
     # 2b. a handle that was merely spelled differently must not count as a
     # failure. A real miss has to be an unknown_frame with an empty resolution,
     # which is what the store reports when nothing is stored under any casing.
+    # A recovering scenario is judged on its answer instead: probing a handle
+    # that does not exist yet is precisely the detour being tolerated.
     for entry in log:
+        if scenario.allow_recovered_errors:
+            break
         if entry.get("error") != "unknown_frame":
             continue
         for key in _HANDLE_ARGS:
@@ -279,6 +382,36 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
     for needle in scenario.text_contains:
         if needle.lower() not in text:
             problems.append(f"final answer never mentions {needle!r}")
+
+    for pattern in scenario.text_matches:
+        if not re.search(pattern, result.get("text") or "", flags=re.IGNORECASE):
+            problems.append(f"final answer never matches {pattern!r}")
+
+    # 7. internal error codes must not leak into the user-facing answer. The
+    # number being right does not excuse the answer also being littered with
+    # "unknown_frame": a user who reads that cannot tell it was fine.
+    answer = result.get("text") or ""
+    for needle in scenario.forbid_in_answer:
+        if needle.lower() in answer.lower():
+            problems.append(
+                f"the answer leaks {needle!r} to the user: a correct number "
+                f"arrived wrapped in internal errors"
+            )
+
+    # 8. the quantities must have the right magnitude. A regex over digits
+    # passes when 60631 shows up in a sentence about a 33 nT range, so the
+    # number is parsed out and bounded instead.
+    numbers = [float(m) for m in re.findall(r"(\d+(?:[.,]\d+)?)\s*нТ", answer, re.I)]
+    for low, high in scenario.expect_nt_between:
+        if not numbers:
+            problems.append(
+                f"the answer states no quantity in nT, so {low}-{high} nT is "
+                f"unverified"
+            )
+        elif not any(low <= value <= high for value in numbers):
+            problems.append(
+                f"no nT value in the answer falls in {low}-{high}: {numbers}"
+            )
 
     return problems
 

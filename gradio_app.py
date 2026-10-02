@@ -73,6 +73,8 @@ except ImportError:  # pragma: no cover - plotter is a hard dep in practice
 run_agent = core.run_agent
 load_brain = core.load_brain
 is_error = core.is_error
+#: Shared with agent_core so the log's verdict and the answer's footer agree.
+run_recovered = core.run_recovered
 #: Where the plot tools write. Used to resolve bare filenames from the prose.
 PLOTS_DIR = Path(plotter.DEFAULT_OUTPUT_DIR) if plotter else Path("plots")
 
@@ -397,16 +399,35 @@ def _fallback_note(saved: list[dict[str, str]]) -> str:
     return ""
 
 
-def _format_tool_log(tool_calls: Any) -> str:
-    """Render the agent's tool calls as a readable markdown log."""
+def _format_tool_log(tool_calls: Any, text: str = "") -> str:
+    """Render the agent's tool calls as a readable markdown log.
+
+    The accordion is the debugging channel: the calls are all listed, always.
+    What changes with a recovered run is the verdict beside them. A bold red
+    "ошибка" next to a call the agent then routed around tells the user nothing
+    except that something broke, and it contradicts the clean answer above it --
+    so a recovered failure is marked as a detour rather than a fault.
+
+    ``run_recovered`` is imported rather than reimplemented: the decision has to
+    match the one that suppressed the failure footer, or the log and the answer
+    disagree about whether the run succeeded. It needs the answer text, which is
+    why ``text`` is a parameter -- the call log alone cannot tell whether the
+    agent got somewhere.
+    """
     if not isinstance(tool_calls, (list, tuple)) or not tool_calls:
         return ""
+    recovered = run_recovered(text, list(tool_calls))
     lines = ["### Журнал вызовов инструментов", ""]
     for step in tool_calls:
         if not isinstance(step, dict):
             continue
         name = step.get("tool") or "(без имени)"
-        mark = "OK" if step.get("ok") else "**ошибка**"
+        if step.get("ok"):
+            mark = "OK"
+        elif recovered:
+            mark = "обойдено"
+        else:
+            mark = "**ошибка**"
         lines.append(f"- раунд {step.get('round', '?')} · `{name}` — {mark}")
         arguments = step.get("arguments")
         if isinstance(arguments, dict) and arguments:
@@ -628,8 +649,13 @@ def make_chat_handler(brain: Any):
             saved.insert(0, {"question": question[:80], "path": path})
         saved = saved[:MAX_PLOTS_IN_PANEL]
 
-        return answer_with(text + _fallback_note(saved), _format_tool_log(
-            result.get("tool_calls") if isinstance(result, dict) else None))
+        return answer_with(
+            text + _fallback_note(saved),
+            _format_tool_log(
+                result.get("tool_calls") if isinstance(result, dict) else None,
+                text,
+            ),
+        )
 
     return chat_and_plot
 

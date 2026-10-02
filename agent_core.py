@@ -130,27 +130,37 @@ SYSTEM_PROMPT = (
     "4. Стандартный порядок для графика: сначала fetch_observatory_data, потом "
     "calculate_derived_components, потом get_statistics / detect_anomalies, "
     "потом plot_components / plot_comparison. Не перескакивай шаги.\n"
-    "4a. КОГДА НУЖНЫ ЧИСЛА, А НЕ КАРТИНКИ, используй математические инструменты:\n"
-    "    - calculate_derived_math: metric='delta' — размах (максимум минус "
-    "минимум) компоненты, metric='dH_dt' — скорость изменения в нТ/мин, "
-    "metric='anomaly' — отклонение от базисной линии.\n"
-    "    - calculate_baseline: тихая ночная базовая линия. Вызывай его ПЕРВЫМ при "
-    "metric='anomaly', затем передай полученное значение в baseline_value — "
-    "в два вызова, а не пытайся выдумать базис.\n"
-    "    - evaluate_custom_formula: свою формулу по колонкам X, Y, Z (и derived H, "
-    "D, I). Формула НИКОГДА не исполняется как код — она разбирается в "
-    "безопасный список операций, поэтому можно писать математику свободно, но не "
-    "имена файлов, не текст и не вызовы функций.\n"
-    "    Эти инструменты возвращают новый frame_handle — передавай его дальше, "
-    "результат можно построить графиком.\n"
+"4a. ВЫБОР ИНСТРУМЕНТА — строго по этой таблице:\n"
+    "    • X, Y, Z и F — это ГОТОВЫЕ колонки в сырых данных. Медиана, среднее, "
+    "минимум, максимум, размах, стандартное отклонение: вызывай get_statistics "
+    "сразу с хэндлом raw и components=['F']. НЕ вызывай перед этим "
+    "calculate_derived_components — она считает только H, D, I, и ответит "
+    "unknown_component.\n"
+    "    • H, D, I — их считает calculate_derived_components, и больше ничего.\n"
+    "    • Размах (max минус min), скорость изменения, отклонение от базы — "
+    "calculate_derived_math: metric='delta' / 'dH_dt' / 'anomaly', "
+    "component='F' или 'H'.\n"
+    "    • Своя формула — evaluate_custom_formula по колонкам X, Y, Z, F. "
+    "Формула НИКОГДА не исполняется как код, а разбирается в безопасный список "
+    "операций, поэтому пиши математику свободно, но не имена файлов, не текст "
+    "и не вызовы функций.\n"
+    "    • calculate_baseline — тихая ночная база. Нужен для metric='anomaly', "
+    "и тогда это два вызова: сначала baseline, потом его значение в "
+    "baseline_value.\n"
+    "    • ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data. Без созданного хэндла raw "
+    "инструменты математики ответят unknown_frame, а не посчитают. Хэндл "
+    "бери из frame_handle предыдущего результата, никогда не выдумывай.\n"
     "5. Вместо DataFrame инструментам передавай строковый хэндл, скопированный из "
     'поля "frame_handle" предыдущего результата. Это либо полный слот на конкретный '
     "день вида \"raw:irt:2024-09-10\" / \"derived:irt:2024-09-10\", либо короткое "
     'имя семейства "raw" / "derived" / "anomalies" (это всегда самый свежий '
     "элемент семейства). Не выдумывай хэндл: полный список доступных имён приходит "
     'в поле "available_handles" результата инструмента.\n'
-    "6. Если инструмент вернул {\"ok\": false} — сообщи пользователю причину из поля "
-    "message и предложи, что делать. Не подставляй свои цифры вместо ошибки.\n"
+    "6. Если инструмент вернул {\"ok\": false} и ты НЕ смог получить ответ — "
+    "сообщи пользователю причину из поля message и предложи, что делать. Но "
+    "если ошибка была промежуточной и ты нашёл другой путь и ответил — просто "
+    "ответь, не пересказывай в ответе коды ошибок. Не подставляй свои цифры "
+    "вместо ошибки.\n"
     "7. В финальном ответе перечисли построенные графики и их файлы.\n"
     "8. Ты можешь вызвать несколько инструментов подряд, прежде чем ответить. "
     "Если нужно сравнить два дня — вызови fetch_observatory_data дважды, по разу на "
@@ -2095,6 +2105,56 @@ def _with_plot_tally(text: str, log: list[dict[str, Any]]) -> str:
     return f"{text}\n\n{line}" if text.strip() else line
 
 
+def _failure_entries(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The failed calls a user could be shown.
+
+    ``(refused)`` entries are loop control flow, not a tool the model called,
+    so they are never user-facing failures.
+    """
+    return [
+        e
+        for e in log
+        if not e.get("ok", True)
+        and e.get("error")
+        and e.get("tool") != "(refused)"
+    ]
+
+
+#: A figure or a quantity the user can check. The agent is told to state both,
+#: and both are what distinguishes "answered the question" from "hit a wall".
+_ANSWERED_RE = re.compile(
+    r"\d[\d\s.,]*\s*(?:нТл|nT\b|нТ)"          # a number carrying a unit
+    r"|[\w.\-/]+\.html?"                          # a saved chart, by filename
+    r"|построил|построен|график",
+    flags=re.IGNORECASE,
+)
+
+
+def run_recovered(text: str, log: list[dict[str, Any]]) -> bool:
+    """True when the agent failed a call but still answered the question.
+
+    The failure footer exists because a model reports a failed tool as a vague
+    "the attempt failed", which hid a real bug once: the actionable reason never
+    reached the user. That reasoning still holds when the run ended in nothing.
+
+    It stops holding when the agent recovered. A wrong first tool call is an
+    internal detail of how the answer was found; printing it under a red
+    "Не удалось выполнить часть операций" heading made a correct answer look
+    like a broken system, and a user who reads that cannot tell which of the two
+    it was.
+
+    Recovery requires all three, so silence is never bought by hiding a real
+    failure: there was a failure, at least one call actually succeeded, and the
+    answer carries a checkable result -- a quantity with a unit, or a chart.
+    """
+    failures = _failure_entries(log)
+    if not failures:
+        return False
+    if not any(e.get("ok") for e in log):
+        return False  # nothing worked: the footer is the only signal there is
+    return bool(_ANSWERED_RE.search(text or ""))
+
+
 def _with_tool_failures(text: str, log: list[dict[str, Any]]) -> str:
     """Append any unrecovered tool failure to the final answer.
 
@@ -2102,17 +2162,25 @@ def _with_tool_failures(text: str, log: list[dict[str, Any]]) -> str:
     failed", which is exactly what hid this bug: the actionable `reason`/`hint`
     never reached the user. Anything the model did not already mention gets
     appended verbatim, so the contract is visible whatever the model says.
+
+    When the agent recovered -- see :func:`run_recovered` -- the footer is
+    suppressed. It is still written to the console, so debugging loses nothing;
+    only the user-facing surface gets quiet.
     """
     text = _with_plot_tally(text, log)
-    failures = [
-        e
-        for e in log
-        if not e.get("ok", True)
-        and e.get("error")
-        # "(refused)" entries are loop control flow, not a tool the model called.
-        and e.get("tool") != "(refused)"
-    ]
+    failures = _failure_entries(log)
     if not failures:
+        return text
+    if run_recovered(text, log):
+        print(
+            "[agent] промежуточные ошибки скрыты из ответа (агент "
+            f"восстановился): {sorted({str(e.get('error')) for e in failures})}"
+        )
+        for entry in failures:
+            print(
+                f"[agent]   {entry.get('tool')}: {entry.get('error')} -- "
+                f"{entry.get('message') or entry.get('reason') or ''}"
+            )
         return text
     lines: list[str] = []
     seen: set[tuple[str, str]] = set()
