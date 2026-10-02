@@ -112,6 +112,33 @@ def test_system_prompt_forbids_inventing_numbers():
     assert "raw" in ac.SYSTEM_PROMPT and "derived" in ac.SYSTEM_PROMPT
 
 
+def test_system_prompt_advertises_every_registered_tool():
+    """A tool the prompt never mentions is a tool the model will not reach for.
+
+    The Phase 1 math tools were registered and fully tested, yet the prompt's
+    workflow rule named only the Phase 0 pipeline and told the model not to
+    skip steps. The schemas are sent to the LLM regardless, but an instruction
+    that enumerates a five-step flow is a strong prior: the model ran that flow
+    and never discovered the new tools. Prompt coverage is pinned here so the
+    two lists cannot drift apart again.
+    """
+    for tool in sorted(ac.TOOLS_BY_NAME):
+        assert tool in ac.SYSTEM_PROMPT, f"{tool} is registered but unadvertised"
+
+
+def test_system_prompt_explains_the_two_step_anomaly_workflow():
+    """metric='anomaly' is unusable alone; the prompt must say so."""
+    assert "baseline_value" in ac.SYSTEM_PROMPT
+    assert "calculate_baseline" in ac.SYSTEM_PROMPT
+
+
+def test_system_prompt_marks_the_formula_dsl_as_safe():
+    """The model must believe it may write formulas, and know their limits."""
+    lowered = ac.SYSTEM_PROMPT.lower()
+    assert "не исполняется как код" in lowered
+    assert "evaluate_custom_formula" in ac.SYSTEM_PROMPT
+
+
 # --------------------------------------------------------------------------- #
 # parse_tool_calls
 # --------------------------------------------------------------------------- #
