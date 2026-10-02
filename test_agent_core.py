@@ -49,8 +49,15 @@ def test_schemas_are_openai_shaped():
         json.dumps(schema)
 
 
-def test_exactly_the_six_required_tools():
-    assert ac.TOOLS_BY_NAME == {
+def test_the_six_phase_zero_tools_are_still_present():
+    """The Phase 1 tool set is a superset: nothing Phase 0 defined may vanish.
+
+    Phase 1 adds three tools rather than replacing any, so this asserts the six
+    original names are all still registered. It was previously an exact-set
+    equality, which correctly failed the moment calculate_baseline was added --
+    the guard was checking "no more than six", not "these six still exist".
+    """
+    phase_zero = {
         "fetch_observatory_data",
         "calculate_derived_components",
         "get_statistics",
@@ -58,7 +65,19 @@ def test_exactly_the_six_required_tools():
         "plot_components",
         "plot_comparison",
     }
+    assert phase_zero <= ac.TOOLS_BY_NAME, (
+        f"Phase 0 tools went missing: {sorted(phase_zero - ac.TOOLS_BY_NAME)}"
+    )
     assert ac.TOOLS_BY_NAME == set(ac.HANDLERS), "every schema needs a handler"
+
+
+def test_phase_one_math_tools_are_registered():
+    """The Phase 1 additions, pinned so a rename cannot pass unnoticed."""
+    assert {
+        "calculate_derived_math",
+        "calculate_baseline",
+        "evaluate_custom_formula",
+    } <= ac.TOOLS_BY_NAME
 
 
 def test_data_type_enum_matches_the_loader():

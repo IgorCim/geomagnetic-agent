@@ -46,9 +46,11 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import numpy as np
 import pandas as pd
 
 import geomag_analyzer as analyzer
+import geomag_math as geomath
 import geomag_plotter as plotter
 import intermagnet_loader as loader
 
@@ -314,6 +316,122 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["df"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_derived_math",
+            "description": (
+                "Measure how a component behaved over time, as a scalar you may quote: "
+                "the peak-to-peak variation ('range', 'how much did H swing'), the "
+                "rate of change in nT per minute, or the distance from a baseline. "
+                "Use metric='delta' for a storm's total excursion, 'dH_dt' for how "
+                "fast the field was changing, and 'anomaly' to subtract a quiet "
+                "reference obtained from calculate_baseline. Returns a new "
+                "frame_handle holding the per-sample series, plus the scalar."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "df": _FRAME_ARG,
+                    "metric": {
+                        "type": "string",
+                        "enum": ["delta", "anomaly", "dH_dt"],
+                        "description": (
+                            "'delta' = max - min over the window; 'dH_dt' = rate of "
+                            "change in nT/min; 'anomaly' = value minus baseline_value."
+                        ),
+                    },
+                    "component": {
+                        "type": "string",
+                        "enum": ["X", "Y", "Z", "F", "H", "D", "I"],
+                        "description": "Component to measure. H is the usual choice.",
+                    },
+                    "window": {
+                        "type": "integer",
+                        "description": (
+                            "Optional block size in samples for metric='delta'. Omit it "
+                            "to get one variation for the whole day; set it to get the "
+                            "largest excursion within any block."
+                        ),
+                    },
+                    "baseline_value": {
+                        "type": "number",
+                        "description": (
+                            "Required for metric='anomaly'. The quiet reference to "
+                            "subtract, e.g. the 'baseline' from calculate_baseline."
+                        ),
+                    },
+                },
+                "required": ["df", "metric"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_baseline",
+            "description": (
+                "Establish the quiet reference level for a component, so that departures "
+                "from it can be reported as anomalies. mode='night' averages the quietest "
+                "window of the day (00:00-04:00 UTC by default), when the ring current is "
+                "minimal. Returns the baseline value; pass it to calculate_derived_math "
+                "with metric='anomaly'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "df": _FRAME_ARG,
+                    "component": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["night", "full"],
+                        "description": (
+                            "'night' = mean over the quiet night window (default). "
+                            "'full' = mean over every sample, which includes the storm "
+                            "and so is a poor quiet reference."
+                        ),
+                    },
+                    "night_hours": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Night window as [start_hour, end_hour] UTC, default [0, 4].",
+                    },
+                },
+                "required": ["df"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "evaluate_custom_formula",
+            "description": (
+                "Compute a custom arithmetic expression over the columns of a frame and "
+                "get the result as a new plottable series. Use it for a quantity the "
+                "built-in tools do not cover, e.g. 'sqrt(X**2 + Y**2) + Z/10' or "
+                "'degrees(atan2(Z, sqrt(X**2 + Y**2)))' for inclination in degrees. "
+                f"Allowed columns: {', '.join(geomath.available_columns())} plus the frame's own "
+                f"numeric columns. Allowed operators: + - * / % **. Allowed functions: "
+                f"{', '.join(sorted(geomath.DSL_FUNCTIONS))}, plus the constants pi and e. "
+                "Anything else is refused: the formula is parsed, never executed, so no "
+                "Python code can run."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "df": _FRAME_ARG,
+                    "formula": {
+                        "type": "string",
+                        "description": (
+                            "The expression, e.g. 'sqrt(X**2 + Y**2) + Z/10'. Column names "
+                            "must be upper case."
+                        ),
+                    },
+                },
+                "required": ["df", "formula"],
             },
         },
     },
@@ -1249,10 +1367,21 @@ def _first_present(df: pd.DataFrame, store: FrameStore, requested: str) -> str:
         for slot in store.names():
             if store.get(slot) is df:
                 return slot
+    # Compare case-insensitively: geomag_plotter upper-cases the requested
+    # component names before matching columns, so 'formula' and 'FORMULA' resolve
+    # the same way there. Matching exactly one way here made the two disagree, and
+    # a handle was silently downgraded to 'raw' for a column it did contain.
+    wanted = requested.strip().upper()
+    if df is not None and any(str(c).upper() == wanted for c in df.columns):
+        for slot in store.names():
+            if store.get(slot) is df:
+                return slot
     for family in ("derived", "raw"):
         for slot in reversed(store._families.get(family, [])):
             candidate = store.get(slot)
-            if candidate is not None and requested in candidate.columns:
+            if candidate is not None and any(
+                str(c).upper() == wanted for c in candidate.columns
+            ):
                 return slot
     return "raw"
 
@@ -1352,6 +1481,261 @@ def _handle_anomalies(args: dict[str, Any], store: FrameStore) -> tuple[Any, str
     return summary, f"Flagged {len(result)} samples of {component} -> handle {slot!r}."
 
 
+def _handle_derived_math(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Measure a component's behaviour: variation, rate of change, or anomaly.
+
+    Every branch writes a real column into a fresh slot, so the result is
+    plottable and can itself be the input to the next tool. The scalar is
+    returned alongside the handle because the number is what the model is
+    actually asked for -- a handle alone would force an extra round trip.
+    """
+    frame, err = store.resolve(args.get("df"))
+    if err:
+        return err, f"calculate_derived_math failed: {err['error']}"
+
+    metric = str(args.get("metric") or "delta").strip().lower()
+    component = str(args.get("component") or "H").strip().upper()
+
+    if metric == "delta":
+        window = args.get("window")
+        result = geomath.calculate_delta(
+            frame,
+            component,
+            **({"window": int(window)} if window is not None else {}),
+        )
+        if geomath.is_error(result):
+            return result, f"calculate_derived_math failed: {result.get('error')}"
+        # windowed results are a per-block table; the whole-frame case is a float
+        if isinstance(result, pd.DataFrame):
+            finite = result["delta"].dropna()
+            slot = store.derive_name(args.get("df") or "raw", "math")
+            store.put(slot, result)
+            summary = _summarise_frame(result, store, slot)
+            summary.update(
+                {
+                    "metric": metric,
+                    "component": component,
+                    "window": int(args["window"]),
+                    "n_blocks": int(len(result)),
+                    "max_delta": _jsonable(finite.max()) if not finite.empty else None,
+                    "mean_delta": _jsonable(finite.mean()) if not finite.empty else None,
+                }
+            )
+            return summary, (
+                f"{component} variation over {summary['window']}-sample windows: "
+                f"max {summary['max_delta']}, mean {summary['mean_delta']} "
+                f"-> handle {slot!r}."
+            )
+        slot = store.derive_name(args.get("df") or "raw", "math")
+        summary = _summarise_frame(frame, store, slot)
+        summary.update(
+            {
+                "metric": metric,
+                "component": component,
+                "delta": _jsonable(result),
+                "unit": geomath.component_units(component),
+                "available_handles": store.names(),
+                "handle_aliases": store.aliases(),
+            }
+        )
+        return summary, (
+            f"{component} varied by {_jsonable(result)} "
+            f"{geomath.component_units(component)} over the whole period."
+        )
+
+    if metric == "anomaly":
+        baseline = args.get("baseline_value")
+        if baseline is None:
+            return _error(
+                "missing_baseline",
+                "metric='anomaly' needs baseline_value. Call calculate_baseline first.",
+                hint="Take the quiet reference with calculate_baseline(mode='night'), "
+                "then pass its 'baseline' here.",
+            ), "calculate_derived_math needs a baseline for metric='anomaly'."
+        series = geomath.calculate_anomaly(frame, component, float(baseline))
+        if geomath.is_error(series):
+            return series, f"calculate_derived_math failed: {series.get('error')}"
+        slot = store.derive_name(args.get("df") or "raw", "anomaly")
+        frame_out = frame.copy()
+        # Upper case to match the X/Y/Z/H/D/I convention: geomag_plotter
+        # upper-cases the requested component names before matching columns, so a
+        # lowercase 'anomaly' column would be unreachable from plot_components.
+        frame_out["ANOMALY"] = series
+        store.put(slot, frame_out)
+        summary = _summarise_frame(frame_out, store, slot)
+        summary.update(
+            {
+                "metric": metric,
+                "component": component,
+                "baseline": _jsonable(baseline),
+                "unit": geomath.component_units(component),
+                "available_handles": store.names(),
+                "handle_aliases": store.aliases(),
+            }
+        )
+        return summary, (
+            f"{component} minus the baseline {_jsonable(baseline)} is stored in the "
+            f"'ANOMALY' column -> handle {slot!r}."
+        )
+
+    if metric == "dh_dt":
+        series = geomath.calculate_dH_dt(frame, component=component)
+        if geomath.is_error(series):
+            return series, f"calculate_derived_math failed: {series.get('error')}"
+        slot = store.derive_name(args.get("df") or "raw", "math")
+        frame_out = frame.copy()
+        frame_out["DH_DT"] = series
+        store.put(slot, frame_out)
+        finite = series.dropna()
+        peak = _jsonable(finite.abs().max()) if not finite.empty else None
+        summary = _summarise_frame(frame_out, store, slot)
+        summary.update(
+            {
+                "metric": metric,
+                "component": component,
+                "unit": "nT/min",
+                "peak_rate": peak,
+                "available_handles": store.names(),
+                "handle_aliases": store.aliases(),
+            }
+        )
+        return summary, (
+            f"Rate of change of {component} stored in the 'DH_DT' column; peak "
+            f"{peak} nT/min -> handle {slot!r}."
+        )
+
+    return _error(
+        "unknown_metric",
+        f"metric={metric!r} is not supported.",
+        available=["delta", "anomaly", "dH_dt"],
+        hint="Use 'delta' for a range, 'dH_dt' for a rate, 'anomaly' for a baseline difference.",
+    ), f"calculate_derived_math refused metric {metric!r}."
+
+
+def _handle_baseline(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Establish the quiet reference level for a component."""
+    frame, err = store.resolve(args.get("df"))
+    if err:
+        return err, f"calculate_baseline failed: {err['error']}"
+
+    component = str(args.get("component") or "H").strip().upper()
+    mode = str(args.get("mode") or "night").strip().lower()
+
+    if mode == "night":
+        hours = args.get("night_hours")
+        if hours is None:
+            result = geomath.get_nighttime_baseline(frame, component)
+        else:
+            if not isinstance(hours, (list, tuple)) or len(hours) != 2:
+                return _error(
+                    "invalid_input",
+                    f"night_hours={hours!r} must be a pair of hours.",
+                    hint="For example [22, 6] for a night window that wraps midnight.",
+                ), "calculate_baseline needs night_hours as a pair of hours."
+            result = geomath.get_nighttime_baseline(frame, component, tuple(hours))
+    elif mode == "full":
+        series = geomath.component_series(frame, component)
+        if geomath.is_error(series):
+            return series, f"calculate_baseline failed: {series.get('error')}"
+        finite = series[np.isfinite(series)]
+        if finite.empty:
+            return _error(
+                "no_finite_data",
+                f"{component} has no finite samples.",
+            ), f"calculate_baseline failed for {component}."
+        result = {
+            "ok": True,
+            "baseline": _jsonable(finite.mean()),
+            "n_samples": int(len(finite)),
+            "n_finite": int(finite.size),
+            "window": "full period",
+        }
+    else:
+        return _error(
+            "unknown_mode",
+            f"mode={mode!r} is not supported.",
+            available=["night", "full"],
+            hint="'night' is the quiet reference; 'full' includes the storm and is "
+            "usually a poor baseline.",
+        ), f"calculate_baseline refused mode {mode!r}."
+
+    if geomath.is_error(result):
+        return result, f"calculate_baseline failed: {result.get('error')}"
+
+    payload = dict(result)
+    payload["component"] = component
+    payload["mode"] = mode
+    payload["unit"] = geomath.component_units(component)
+    if mode == "night":
+        payload["available_handles"] = store.names()
+        payload["handle_aliases"] = store.aliases()
+    note = ""
+    if payload.get("baseline") is None:
+        note = " No finite sample fell inside the window, so there is no baseline."
+    return payload, (
+        f"Quiet {mode} baseline for {component} is {payload.get('baseline')} "
+        f"{payload.get('unit')}.{note}"
+    )
+
+
+def _handle_custom_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Evaluate a user-supplied formula and store the result as a new column.
+
+    The formula is parsed, never executed: see :mod:`geomag_math`. A refused
+    formula is reported back with the accepted grammar so the model can correct
+    it on the next round instead of guessing.
+    """
+    frame, err = store.resolve(args.get("df"))
+    if err:
+        return err, f"evaluate_custom_formula failed: {err['error']}"
+
+    formula = args.get("formula")
+    if not isinstance(formula, str) or not formula.strip():
+        return _error(
+            "missing_formula",
+            "The 'formula' argument is required and must be a non-empty string.",
+            hint="For example: 'sqrt(X**2 + Y**2) + Z/10'.",
+        ), "evaluate_custom_formula was called without a formula."
+
+    series = geomath.evaluate_formula(frame, formula)
+    if geomath.is_error(series):
+        payload = dict(series)
+        # Spell the grammar out on failure: the model has no other way to learn it.
+        payload["allowed_functions"] = sorted(geomath.DSL_FUNCTIONS)
+        payload["allowed_columns"] = geomath.available_columns(frame)
+        payload["allowed_operators"] = ["+", "-", "*", "/", "%", "**"]
+        return payload, (
+            f"evaluate_custom_formula refused the formula: {series.get('message')}"
+        )
+
+    slot = store.derive_name(args.get("df") or "raw", "formula")
+    frame_out = frame.copy()
+    # Upper case for the same reason as ANOMALY: the plotter upper-cases the
+    # requested names, so 'FORMULA' is reachable from plot_components while a
+    # lowercase 'formula' column would be rejected as an unknown component.
+    frame_out["FORMULA"] = series
+    store.put(slot, frame_out)
+
+    finite = series[np.isfinite(series)]
+    summary = _summarise_frame(frame_out, store, slot)
+    summary.update(
+        {
+            "formula": formula,
+            "column": "FORMULA",
+            "min": _jsonable(finite.min()) if not finite.empty else None,
+            "max": _jsonable(finite.max()) if not finite.empty else None,
+            "mean": _jsonable(finite.mean()) if not finite.empty else None,
+            "n_finite": int(finite.size),
+            "available_handles": store.names(),
+            "handle_aliases": store.aliases(),
+        }
+    )
+    return summary, (
+        f"Evaluated {formula!r} into the 'FORMULA' column -> handle {slot!r}. "
+        f"It is now plottable with plot_components(components=['FORMULA'])."
+    )
+
+
 def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     components = args.get("components") or ["H"]
     handle = _first_present(store.resolve(args.get("df"))[0], store, components[0])
@@ -1409,6 +1793,9 @@ HANDLERS: dict[str, Handler] = {
     "calculate_derived_components": _handle_derive,
     "get_statistics": _handle_stats,
     "detect_anomalies": _handle_anomalies,
+    "calculate_derived_math": _handle_derived_math,
+    "calculate_baseline": _handle_baseline,
+    "evaluate_custom_formula": _handle_custom_formula,
     "plot_components": _handle_plot_components,
     "plot_comparison": _handle_plot_comparison,
 }
