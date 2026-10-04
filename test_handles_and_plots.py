@@ -624,3 +624,93 @@ def test_the_panel_does_not_duplicate_a_repeated_path(tmp_path, monkeypatch):
     shown = [s for s in slots if s.get("visible")]
     assert len(shown) == 1
 
+
+
+# --------------------------------------------------------------------------- #
+# regression: the tally counts distinct charts, not tool calls
+# --------------------------------------------------------------------------- #
+def test_tally_counts_three_files_as_three_not_six():
+    """Six attempts over three charts is three charts.
+
+    The field case: each chart was attempted twice, the first attempt failing.
+    Counting attempts answered "Построено графиков: 3 из 6" for a run where
+    all three files existed -- which reads to a user as three failures.
+    """
+    log = []
+    for name in ("day10.html", "day11.html", "day12.html"):
+        log.append(
+            {
+                "round": 1,
+                "tool": "plot_components",
+                "ok": False,
+                "error": "unknown_frame",
+                "arguments": {"df": "derived:irt:x", "filename": name},
+            }
+        )
+        log.append(
+            {
+                "round": 2,
+                "tool": "plot_components",
+                "ok": True,
+                "arguments": {"df": "derived:irt:x", "filename": name},
+                "plot": f"C:/out/{name}",
+            }
+        )
+    text = ac._with_plot_tally("Готово.", log)
+    assert "Построено графиков: 3." in text, text
+    assert " из " not in text, text
+    assert "Не построено" not in text, text
+
+
+def test_tally_does_not_claim_a_chart_twice_for_repeated_successes():
+    """The same file written twice is one chart."""
+    log = [
+        {"round": 1, "tool": "plot_comparison", "ok": True,
+         "arguments": {"filename": "cmp.html"}, "plot": "C:/out/cmp.html"},
+        {"round": 2, "tool": "plot_comparison", "ok": True,
+         "arguments": {"filename": "cmp.html"}, "plot": "C:/out/cmp.html"},
+    ]
+    text = ac._with_plot_tally("Готово.", log)
+    assert "Построено графиков: 1." in text, text
+
+
+def test_tally_still_reports_a_real_shortfall():
+    """De-duplication must not hide a chart that genuinely never arrived."""
+    log = [
+        {"round": 1, "tool": "plot_components", "ok": True,
+         "arguments": {"filename": "a.html"}, "plot": "C:/a.html"},
+        {"round": 1, "tool": "plot_components", "ok": True,
+         "arguments": {"filename": "b.html"}, "plot": "C:/b.html"},
+        {"round": 1, "tool": "plot_components", "ok": False,
+         "error": "tool_budget_exhausted", "executed": False,
+         "arguments": {"filename": "c.html"}},
+    ]
+    text = ac._with_plot_tally("Готово.", log)
+    assert "Построено графиков: 2 из 3 запрошенных." in text, text
+    assert "c.html" in text.split("Не построено")[1]
+
+
+def test_tally_does_not_blame_the_budget_for_a_handler_refusal():
+    """A refused plot is not a budget cut, and the wording used to say it was."""
+    log = [
+        {"round": 1, "tool": "plot_comparison", "ok": True,
+         "arguments": {"filename": "a.html"}, "plot": "C:/a.html"},
+        {"round": 1, "tool": "plot_comparison", "ok": False,
+         "error": "same_dataframe", "arguments": {"filename": "b.html"}},
+    ]
+    text = ac._with_plot_tally("Готово.", log)
+    assert "лимит вызовов инструментов исчерпан" not in text, text
+    assert "вызов не удался" in text, text
+
+
+def test_tally_names_a_chart_that_was_never_attempted_by_name():
+    """A refused call has no plot path, so its intent comes from the arguments."""
+    log = [
+        {"round": 1, "tool": "plot_components", "ok": True,
+         "arguments": {"filename": "a.html"}, "plot": "C:/a.html"},
+        {"round": 1, "tool": "plot_components", "ok": False,
+         "error": "tool_budget_exhausted", "executed": False,
+         "arguments": {"filename": "never_made.html"}},
+    ]
+    text = ac._with_plot_tally("Готово.", log)
+    assert "never_made.html" in text, text

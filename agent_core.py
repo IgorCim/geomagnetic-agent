@@ -2211,6 +2211,36 @@ def run_agent(
     }
 
 
+def _unique(values: list[str]) -> list[str]:
+    """Order-preserving de-duplication, for counting distinct things."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+def _attempted_plot_name(entry: dict[str, Any]) -> str:
+    """The chart file one plot call was trying to produce.
+
+    A call that failed has no ``plot`` path, so the filename it asked for is read
+    out of its arguments. Counting attempts needs that name: three retries of one
+    chart are one requested chart, and treating them as three is how a run ends up
+    claiming "3 of 6" for three finished files.
+    """
+    path = entry.get("plot")
+    if isinstance(path, str) and path:
+        return Path(path).name
+    arguments = entry.get("arguments")
+    if isinstance(arguments, dict):
+        requested = arguments.get("filename")
+        if isinstance(requested, str) and requested.strip():
+            return Path(requested.strip()).name
+    return ""
+
+
 def _with_plot_tally(text: str, log: list[dict[str, Any]]) -> str:
     """State plainly how many charts exist, and list the files.
 
@@ -2218,26 +2248,45 @@ def _with_plot_tally(text: str, log: list[dict[str, Any]]) -> str:
     it says "the charts are ready" while two of them were never drawn -- and the
     user is left hunting for a file that does not exist. The count is computed
     from the executed plot calls, so it cannot disagree with ``result["plots"]``.
+
+    Both sides of "N из M" count *distinct charts*, not tool calls. A model that
+    tries the same chart several times, or gets one chart right on the third
+    attempt, asked for one file and got one file; counting the attempts turned a
+    finished three-chart run into "3 из 6", which reads as three failures.
     """
-    built = [e for e in log if e.get("ok") and e.get("plot")]
-    dropped = [
-        e for e in log
-        if not e.get("ok", True) and e.get("tool") in PLOT_TOOLS
-    ]
-    if not built and not dropped:
+    built = _unique(
+        [
+            Path(str(entry["plot"])).name
+            for entry in log
+            if entry.get("ok") and isinstance(entry.get("plot"), str) and entry["plot"]
+        ]
+    )
+    requested = _unique(
+        [_attempted_plot_name(entry) for entry in log if entry.get("tool") in PLOT_TOOLS]
+    )
+    if not built and not requested:
         return text
 
-    names = [Path(str(e["plot"])).name for e in built]
+    missing = [name for name in requested if name not in set(built)]
     line = f"Построено графиков: {len(built)}"
-    if dropped:
-        line += f" из {len(built) + len(dropped)} запрошенных"
+    if len(requested) > len(built):
+        line += f" из {len(requested)} запрошенных"
     line += "."
-    if names:
-        line += "\nФайлы: " + ", ".join(names)
-    if dropped:
+    if built:
+        line += "\nФайлы: " + ", ".join(built)
+    if missing:
+        # The old wording blamed the tool budget for every failure. A chart can
+        # also be missing because a handler refused it, and telling the user the
+        # budget ran out sends them to ask for charts twice.
+        cause = (
+            "лимит вызовов инструментов исчерпан"
+            if any(e.get("error") == "tool_budget_exhausted" for e in log)
+            else "вызов не удался"
+        )
         line += (
-            f"\nНе построено: {len(dropped)} — лимит вызовов инструментов исчерпан. "
-            "Попросите оставшиеся графики отдельным сообщением."
+            f"\nНе построено: {len(missing)} ({cause}): "
+            + ", ".join(missing)
+            + ". Попросите оставшиеся графики отдельным сообщением."
         )
     if "Построено графиков" in text:
         return text

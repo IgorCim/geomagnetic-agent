@@ -5,8 +5,10 @@ is trusted even though the real model needs a GPU we do not have locally.
 """
 
 import agent_core as ac
+import pandas as pd
 import pytest
 
+import geomag_plotter as gp
 import scenarios_e2e as e2e
 from pathlib import Path
 
@@ -30,9 +32,34 @@ def _by_name(scenario):
     return next(s for s in e2e.SCENARIOS if s.name == scenario)
 
 
+def _write_comparison(tmp_path, days, plot_name="cmp.html"):
+    """A real two-trace comparison chart, written the way the plotter writes it.
+
+    The comparison scenarios are now judged by the traces inside the file, so a
+    stub of ``<html></html>`` stopped being a usable stand-in -- it is precisely the
+    collapsed chart the checker exists to catch. Going through geomag_plotter keeps
+    the fixture honest: trace labels are derived from the frame's timestamps, so if
+    that format changes, this helper changes with it instead of asserting a fiction.
+    """
+    import pandas as pd
+
+    import geomag_plotter as gp
+
+    frames = []
+    for day in days:
+        stamps = pd.date_range(f"{day} 00:00:00", periods=4, freq="6h")
+        frames.append(
+            pd.DataFrame({"timestamp": stamps, "H": [1.0, 2.0, 3.0, 4.0], "D": [0.0] * 4})
+        )
+    return Path(
+        gp.plot_comparison(
+            *frames[:2], component="H", output_dir=tmp_path, filename=plot_name
+        )
+    )
+
+
 def test_good_compare_run_passes(tmp_path):
-    plot = tmp_path / "cmp.html"
-    plot.write_text("<html></html>", encoding="utf-8")
+    plot = _write_comparison(tmp_path, ("2024-09-10", "2024-09-11"))
     scenario = _by_name("compare")
     result = _result(
         [
@@ -171,11 +198,170 @@ def test_dry_run_lists_every_scenario():
 
 
 # --------------------------------------------------------------------------- #
+# the trace contract: the file, not the prose
+# --------------------------------------------------------------------------- #
+def test_one_traced_chart_built_from_two_days_fails(tmp_path):
+    """The answer names both days; the chart holds one curve. Must FAIL.
+
+    This is the case a prose check cannot see. The run reads perfectly -- both
+    dates, a conclusion, the right plot tally -- and the artifact is wrong.
+    """
+    result = _uppercase_run(tmp_path)  # writes a correct cmp.html first
+    # Only now break it: writing before the helper would let the helper overwrite
+    # the defect, and the test would pass by accident.
+    one = pd.DataFrame({
+        "timestamp": pd.date_range("2024-09-10 00:00:00", periods=4, freq="6h"),
+        "H": [1.0, 2.0, 3.0, 4.0],
+    })
+    plot = Path(gp.plot_comparison(one, one, component="H",
+                                   output_dir=tmp_path, filename="cmp.html"))
+    result["plots"] = [str(plot)]
+    problems = e2e.check(_by_name("compare_uppercase"), result)
+    assert any("2024-09-11" in p for p in problems), problems
+
+
+def test_chart_naming_only_one_of_the_two_days_fails(tmp_path):
+    """Two traces, both labelled the same day. The missing day has no curve."""
+    result = _uppercase_run(tmp_path)
+    day = pd.DataFrame({
+        "timestamp": pd.date_range("2024-09-11 00:00:00", periods=4, freq="6h"),
+        "H": [1.0, 2.0, 3.0, 4.0],
+    })
+    plot = Path(gp.plot_comparison(day, day, component="H",
+                                   output_dir=tmp_path, filename="cmp.html"))
+    result["plots"] = [str(plot)]
+    problems = e2e.check(_by_name("compare_uppercase"), result)
+    assert any("2024-09-10" in p for p in problems), problems
+
+
+def test_trace_names_are_read_out_of_the_real_plotly_payload(tmp_path):
+    days = ("2024-09-10", "2024-09-11")
+    plot = _write_comparison(tmp_path, days)
+    assert e2e.plot_trace_names(plot) == list(days)
+
+
+def test_a_file_that_is_not_a_chart_yields_no_traces(tmp_path):
+    empty = tmp_path / "empty.html"
+    empty.write_text("<html></html>", encoding="utf-8")
+    assert e2e.plot_trace_names(empty) == []
+    assert e2e.plot_trace_names(tmp_path / "missing.html") == []
+
+
+# --------------------------------------------------------------------------- #
+# recovery: tolerated only when it happened
+# --------------------------------------------------------------------------- #
+def _recovering_run(tmp_path, closing_tool="get_statistics"):
+    """A flagged scenario that stumbles on F and then gets the number anyway."""
+    plot = tmp_path / "median.html"
+    plot.write_text("<html></html>", encoding="utf-8")
+    return _result(
+        [
+            _fetch("2024-09-10"),
+            _failed("calculate_derived_components",
+                    {"df": "raw:irt:2024-09-10", "components": ["F"]},
+                    "unknown_component", "['F'] are not derivable"),
+            _ok(closing_tool, {"df": "raw:irt:2024-09-10", "components": ["F"]}),
+            _ok("plot_components", {"df": "raw:irt:2024-09-10", "components": ["F"]},
+                plot=str(plot)),
+        ],
+        text="Медиана F примерно 60631 нТ, это самый магнитный день.",
+        plots=[str(plot)],
+    )
+
+
+def test_a_recovered_error_still_passes_a_flagged_scenario(tmp_path):
+    assert e2e.check(_by_name("median_F"), _recovering_run(tmp_path)) == []
+
+
+def test_recovery_counts_when_a_different_tool_finishes_the_job(tmp_path):
+    """The stumble was closed by get_statistics, not by retrying the failed tool.
+
+    Matching on tool name alone would call this unrecovered and break the very
+    recovery the scenario was written to demonstrate.
+    """
+    assert e2e.unrecovered_failures(_recovering_run(tmp_path)["tool_calls"]) == []
+
+
+def test_an_error_nothing_follows_is_unrecovered(tmp_path):
+    log = _recovering_run(tmp_path)["tool_calls"]
+    # Cut the log right after the failure. A later success is what closes an
+    # error; remove the later successes and nothing is left to close it with.
+    cut = next(i for i, e in enumerate(log) if not e["ok"]) + 1
+    problems = e2e.check(_by_name("median_F"), _result(log[:cut]))
+    assert any("unrecovered tool failure" in p for p in problems), problems
+
+
+def test_a_later_success_does_not_excuse_a_failure_that_came_after_it(tmp_path):
+    """Order matters: a success that precedes the error closes nothing."""
+    log = [
+        _ok("get_statistics", {"df": "raw:irt:2024-09-11", "components": ["F"]}),
+        {"tool": "get_statistics", "arguments": {"df": "raw:irt:2024-09-11",
+                                                 "components": ["F"]},
+         "ok": False, "error": "unknown_component", "message": "F is not derivable"},
+    ]
+    assert len(e2e.unrecovered_failures(log)) == 1
+
+
+def test_retrying_the_same_handle_counts_as_recovery_despite_the_casing(tmp_path):
+    log = [
+        {"tool": "plot_comparison",
+         "arguments": {"df1": "DERIVED:IRT:2024-09-10", "df2": "DERIVED:IRT:2024-09-11"},
+         "ok": False, "error": "unknown_frame", "message": "no data"},
+        _ok("plot_comparison",
+            {"df1": "derived:irt:2024-09-10", "df2": "derived:irt:2024-09-11"}),
+    ]
+    assert e2e.unrecovered_failures(log) == []
+
+
+def test_a_derived_to_raw_correction_counts_as_the_same_intent():
+    """derived:X and raw:X on the same day are one intent, not two."""
+    log = [
+        {"tool": "plot_comparison",
+         "arguments": {"df1": "derived:irt:2024-09-10", "df2": "derived:irt:2024-09-11"},
+         "ok": False, "error": "unknown_frame", "message": "no data"},
+        _ok("plot_comparison",
+            {"df1": "raw:irt:2024-09-10", "df2": "raw:irt:2024-09-11"}),
+    ]
+    assert e2e.unrecovered_failures(log) == []
+
+
+def test_an_unrelated_later_success_closes_nothing():
+    log = [
+        {"tool": "plot_comparison",
+         "arguments": {"df1": "derived:irt:2024-09-10", "df2": "derived:irt:2024-09-11"},
+         "ok": False, "error": "unknown_frame", "message": "no data"},
+        _ok("get_statistics", {"df": "raw:irt:2024-12-01"}),
+    ]
+    assert len(e2e.unrecovered_failures(log)) == 1
+
+
+def test_a_run_where_everything_failed_cannot_pass(tmp_path):
+    log = [
+        {"tool": "fetch_observatory_data", "arguments": {"station_code": "IRT"},
+         "ok": False, "error": "network", "message": "timeout"},
+        {"tool": "get_statistics", "arguments": {"df": "raw:irt:2024-09-10"},
+         "ok": False, "error": "unknown_frame", "message": "no data"},
+    ]
+    problems = e2e.check(_by_name("median_F"), _result(log, text="Медиана F 31300 нТ."))
+    assert any("never recovered" in p for p in problems), problems
+
+
+def test_an_unflagged_scenario_still_forbids_any_error(tmp_path):
+    """Tolerance must not spread to the scenarios that never asked for it."""
+    assert _by_name("compare").allow_recovered_errors is False
+    result = _uppercase_run(tmp_path)
+    result["tool_calls"].insert(0, {
+        "tool": "plot_comparison", "arguments": {"df1": "a", "df2": "b"},
+        "ok": False, "error": "unknown_frame", "message": "no data"})
+    problems = e2e.check(_by_name("compare"), result)
+    assert any("failed: unknown_frame" in p for p in problems), problems
+
+
+# --------------------------------------------------------------------------- #
 # compare_uppercase: casing must not decide which frame is used
 # --------------------------------------------------------------------------- #
 def _uppercase_run(tmp_path, days=("2024-09-10", "2024-09-11"), plot_name="cmp.html"):
-    plot = tmp_path / plot_name
-    plot.write_text("<html></html>", encoding="utf-8")
+    plot = _write_comparison(tmp_path, days, plot_name)
     log = [_fetch(day, day) for day in days]
     for day in days:
         # the model shouts the handle it passes in, but a correct tool always

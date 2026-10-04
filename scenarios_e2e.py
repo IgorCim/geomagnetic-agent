@@ -24,6 +24,7 @@ Exit code is non-zero if any scenario fails, so this is usable in CI.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass, field
@@ -68,6 +69,12 @@ class Scenario:
     # "2024-09-10", and pinning the ISO form alone would fail a correct answer
     # for a formatting choice.
     text_matches: list[str] = field(default_factory=list)
+    # A comparison chart must really compare: exactly this many traces, each
+    # naming one of these. Checking the saved file rather than the answer is the
+    # whole point -- the model can state both dates in prose while the chart holds
+    # a single collapsed curve, and a prose check passes that run.
+    expect_traces: int = 0
+    expect_trace_dates: list[str] = field(default_factory=list)
 
 
 SCENARIOS: list[Scenario] = [
@@ -99,7 +106,8 @@ SCENARIOS: list[Scenario] = [
         ],
         min_plots=1,
         distinct_args=["df1", "df2"],
-        text_contains=["2024-09-10", "2024-09-11"],
+        expect_traces=2,
+        expect_trace_dates=["2024-09-10", "2024-09-11"],
         explanation=(
             "the field failure: the second fetch used to overwrite the first, so "
             "the comparison had nothing to compare"
@@ -134,9 +142,10 @@ SCENARIOS: list[Scenario] = [
         ],
         min_plots=1,
         distinct_args=["df1", "df2"],
-        text_contains=["2024-09-10", "2024-09-11"],
         uppercase_handles=True,
         require_plot_tally=True,
+        expect_traces=2,
+        expect_trace_dates=["2024-09-10", "2024-09-11"],
         explanation=(
             "the reported failure: the model shouts every handle, e.g. "
             "'RAW:IRT:2024-09-10'. Casing must not change which frame is used, and "
@@ -250,10 +259,145 @@ _HANDLE_ARGS = ("df", "df1", "df2")
 
 
 # --------------------------------------------------------------------------- #
+# artifacts
+# --------------------------------------------------------------------------- #
+#: A chart must be judged by the file it produced, not by the sentence the model
+#: wrote about it. An answer can name both dates while the chart shows one curve,
+#: and a checker that only reads prose passes exactly that run.
+_PLOTLY_MARKER = "Plotly.newPlot"
+
+
+def _scan_json_array(text: str, start: int) -> str:
+    """The JSON array beginning at ``text[start]``, quotes respected.
+
+    Written out rather than pulled from a regex because the payload is megabytes
+    of nested arrays and brackets, and a trace's own ``x`` values contain ``[``.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return ""
+
+
+def plot_trace_names(path: str | Path) -> list[str]:
+    """Names of the traces a saved chart actually contains.
+
+    An unreadable or trace-less file yields an empty list rather than raising:
+    the caller reports "the chart has no traces", which is the finding, instead
+    of a checker crash that looks like a different failure.
+    """
+    try:
+        html = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    marker = html.find(_PLOTLY_MARKER)
+    if marker == -1:
+        return []
+    bracket = html.find("[", marker)
+    if bracket == -1:
+        return []
+    payload = _scan_json_array(html, bracket)
+    if not payload:
+        return []
+    try:
+        traces = json.loads(payload)
+    except ValueError:
+        return []
+    if not isinstance(traces, list):
+        return []
+    return [str(t.get("name")) for t in traces if isinstance(t, dict)]
+
+
+# --------------------------------------------------------------------------- #
 # checking
 # --------------------------------------------------------------------------- #
 def _fetches(result: dict[str, Any]) -> list[dict[str, Any]]:
     return [e for e in result["tool_calls"] if e["tool"] == "fetch_observatory_data"]
+
+
+#: Argument names that identify *what work* a call was doing. Matched by value so
+#: a detour is recognised however the model recovered from it: the same tool
+#: called again, or a different tool that reaches the same subject.
+_SUBJECT_ARGS = (
+    "df", "df1", "df2", "components", "component",
+    "station_code", "start_date", "end_date", "metric", "filename",
+)
+
+
+def _subject_of(entry: dict[str, Any]) -> frozenset[str]:
+    """The subjects one call touched, reduced to what identifies the work.
+
+    Frame handles are reduced to their date. A model that first asks for
+    ``derived:irt:2024-09-10`` and then plots ``raw:irt:2024-09-10`` is doing one
+    thing, not two, and matching on the whole handle would call that unrecovered.
+    Values are lower-cased throughout, which is what lets a shouted retry count as
+    the retry of the quiet attempt that preceded it.
+    """
+    arguments = entry.get("arguments")
+    if not isinstance(arguments, dict):
+        return frozenset()
+    out: set[str] = set()
+    for key in _SUBJECT_ARGS:
+        value = arguments.get(key)
+        if value is None:
+            continue
+        items = value if isinstance(value, (list, tuple, set)) else [value]
+        for item in items:
+            text = str(item).strip().lower()
+            if not text:
+                continue
+            if key in ("df", "df1", "df2") and ":" in text:
+                text = text.rsplit(":", 1)[-1]
+            out.add(f"{key}={text}")
+    return frozenset(out)
+
+
+def unrecovered_failures(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Failures that no later success closed.
+
+    This is the scenario-suite mirror of ``agent_core.run_recovered``, and it is
+    deliberately stricter than "something eventually worked". A run that fails
+    three times and then plots one chart has not recovered three mistakes; it has
+    hidden them. A failure counts as closed only when a later call succeeded on
+    the same tool or on the same subject, so tolerance is a statement about
+    recovery rather than about silence -- and it cannot be satisfied by a run
+    that simply failed less.
+    """
+    out: list[dict[str, Any]] = []
+    for index, entry in enumerate(log):
+        if entry.get("ok", True) or not entry.get("error"):
+            continue
+        subject = _subject_of(entry)
+        tool = entry.get("tool")
+        closed = False
+        for later in log[index + 1 :]:
+            if not later.get("ok"):
+                continue
+            same_subject = bool(subject & _subject_of(later))
+            if same_subject or (later.get("tool") == tool and not subject):
+                closed = True
+                break
+        if not closed:
+            out.append(entry)
+    return out
 
 
 def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
@@ -277,39 +421,66 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
             break
         cursor += 1
 
-    # 2. nothing failed
-    for entry in log:
-        if not entry.get("ok") and not scenario.allow_recovered_errors:
-            problems.append(
-                f"tool {entry['tool']} failed: {entry.get('error')} -- "
-                f"{entry.get('message', '')}"
-            )
+    # 2. every error has to be accounted for. The bar differs by scenario, and
+    # the flagged bar is the higher one:
+    #
+    #   unflagged -- no error at all. The classic flows must stay clean.
+    #   flagged   -- an error is tolerated only if something later succeeded on the
+    #               same tool or the same subject, i.e. it was actually recovered.
+    #
+    # Before this, "flagged" meant "ignore the log", which is how a run that failed
+    # three times and then drew one chart got counted as a pass. Tying the flag to
+    # recovery is what lets the owner call the 3 recovery scenarios green without
+    # the suite losing its ability to fail.
+    if scenario.allow_recovered_errors:
+        # 2a. nothing worked at all. Checked before the per-entry pass so a run
+        # where every call failed reports one clear headline rather than a list of
+        # individual failures that all say the same thing.
+        if log and not any(e.get("ok") for e in log):
+            problems.append("every tool call failed, so the agent never recovered")
+        for entry in unrecovered_failures(log):
+            if entry.get("error") == "unknown_frame":
+                # Keep the specific wording. A handle that resolves to nothing is
+                # the actionable failure, and burying it in a generic "unrecovered"
+                # line hides the one fact worth reading.
+                problems.extend(
+                    f"{entry['tool']}({key}={handle!r}) could not resolve a frame"
+                    for key in _HANDLE_ARGS
+                    for handle in [entry.get("arguments", {}).get(key)]
+                    if handle is not None and str(handle).strip()
+                )
+            else:
+                problems.append(
+                    f"unrecovered tool failure: {entry['tool']} "
+                    f"{entry.get('error')} -- {entry.get('message', '')}"
+                )
+    else:
+        # 2b. unflagged: any failure is a problem, whatever happened later.
+        for entry in log:
+            if not entry.get("ok"):
+                problems.append(
+                    f"tool {entry['tool']} failed: {entry.get('error')} -- "
+                    f"{entry.get('message', '')}"
+                )
 
-    # 2a. a scenario that tolerates detours still fails if nothing worked: the
-    # point is recovery, not silence. Checked explicitly so a run where every
-    # single call failed cannot pass by having no red errors to complain about.
-    if scenario.allow_recovered_errors and log and not any(e.get("ok") for e in log):
-        problems.append("every tool call failed, so the agent never recovered")
-
-    # 2b. a handle that was merely spelled differently must not count as a
+    # 2c. a handle that was merely spelled differently must not count as a
     # failure. A real miss has to be an unknown_frame with an empty resolution,
     # which is what the store reports when nothing is stored under any casing.
     # A recovering scenario is judged on its answer instead: probing a handle
     # that does not exist yet is precisely the detour being tolerated.
-    for entry in log:
-        if scenario.allow_recovered_errors:
-            break
-        if entry.get("error") != "unknown_frame":
-            continue
-        for key in _HANDLE_ARGS:
-            handle = entry.get("arguments", {}).get(key)
-            if handle is None:
+    if not scenario.allow_recovered_errors:
+        for entry in log:
+            if entry.get("error") != "unknown_frame":
                 continue
-            if not str(handle).strip():
-                continue
-            problems.append(
-                f"{entry['tool']}({key}={handle!r}) could not resolve a frame"
-            )
+            for key in _HANDLE_ARGS:
+                handle = entry.get("arguments", {}).get(key)
+                if handle is None:
+                    continue
+                if not str(handle).strip():
+                    continue
+                problems.append(
+                    f"{entry['tool']}({key}={handle!r}) could not resolve a frame"
+                )
 
     # 3. every requested day was fetched, as a different window
     expected_fetches = scenario.must_call.count("fetch_observatory_data")
@@ -375,6 +546,27 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
                 if Path(path).name not in answer:
                     problems.append(
                         f"the answer does not list the saved file {Path(path).name}"
+                    )
+
+    # 5c. the saved chart must hold what it claims to. A comparison is verified by
+    # its traces: one per day, each named for the day it draws. An answer that
+    # mentions both dates passes a prose check while the file shows one curve,
+    # which is the failure this suite exists to catch.
+    if scenario.expect_traces:
+        for path in result.get("plots") or []:
+            names = plot_trace_names(path)
+            if not names:
+                problems.append(f"the chart holds no readable traces: {path}")
+                continue
+            if len(names) != scenario.expect_traces:
+                problems.append(
+                    f"expected {scenario.expect_traces} trace(s) in "
+                    f"{Path(path).name}, found {len(names)}: {names}"
+                )
+            for day in scenario.expect_trace_dates:
+                if not any(day in name for name in names):
+                    problems.append(
+                        f"no trace in {Path(path).name} is labelled {day}: {names}"
                     )
 
     # 6. the answer says what it must

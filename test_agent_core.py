@@ -1535,3 +1535,79 @@ def test_system_prompt_stays_within_its_budget():
     assert "4a." in sp, "the tool-selection table is the point of the prompt"
     assert "'nT'" in sp, "the checker and recovery filter both key on the unit"
     assert "ПЕРЕД ЛЮБЫМ из них" in sp, "fetch-first is not derivable from the code"
+
+
+# --------------------------------------------------------------------------- #
+# regression: the auto-derive fallback must ignore handle casing
+# --------------------------------------------------------------------------- #
+_SHOPTER_CASES = [
+    "derived:irt:2024-09-11",
+    "DERIVED:IRT:2024-09-11",
+    "Derived:Irt:2024-09-11",
+]
+
+
+@pytest.mark.parametrize("handle", _SHOPTER_CASES)
+def test_auto_derive_ignores_casing_in_the_handle(handle, tmp_path, monkeypatch):
+    """compare_uppercase feeds the agent shouted handles all day long.
+
+    The store normalises on put and on get, but the fallback builds its own raw
+    lookup from the handle string, so this path has to be pinned on its own: a
+    casing slip here turns into unknown_frame for exactly the scenario that
+    exists to prove casing is harmless.
+    """
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = ac.FrameStore()
+    store.put("raw:irt:2024-09-11", _derived_fixture("2024-09-11", 100.0))
+    payload, note = ac._handle_plot_components(
+        {"df": handle, "components": ["H"]}, store
+    )
+    assert not ac.is_error(payload), payload
+    assert f"auto-derived: {handle.lower()} (из raw)" in note, note
+    # the slot must be stored canonically, or every advertised handle is a miss
+    assert handle.lower() in store.names()
+
+
+def _derived_fixture(day, offset=0.0, n=12):
+    return pd.DataFrame(
+        {
+            "timestamp": pd.date_range(day, periods=n, freq="h"),
+            "X": [float(i) + offset for i in range(n)],
+            "Y": [float(i) * 2 for i in range(n)],
+            "Z": [float(i) * 3 + offset for i in range(n)],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "handle",
+    [
+        "anomalies:irt:2024-09-11",
+        "ANOMALIES:IRT:2024-09-11",
+    ],
+)
+def test_auto_derive_never_creates_an_anomalies_slot(handle):
+    """Anomalies need a baseline and a window, so casing does not change that."""
+    store = ac.FrameStore()
+    store.put("raw:irt:2024-09-11", _derived_fixture("2024-09-11", 100.0))
+    assert ac._auto_derive(store, handle, ["H"]) == (None, "")
+    assert not [n for n in store.names() if n.startswith("anomalies")]
+
+
+def test_plot_comparison_auto_derives_both_shouted_handles(tmp_path, monkeypatch):
+    """The reported scenario end to end: both handles shouted, one round."""
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = ac.FrameStore()
+    store.put("raw:irt:2024-09-10", _derived_fixture("2024-09-10", 0.0))
+    store.put("raw:irt:2024-09-11", _derived_fixture("2024-09-11", 100.0))
+    payload, note = ac._handle_plot_comparison(
+        {
+            "df1": "DERIVED:IRT:2024-09-10",
+            "df2": "DERIVED:IRT:2024-09-11",
+            "component": "H",
+        },
+        store,
+    )
+    assert not ac.is_error(payload), payload
+    assert note.count("auto-derived:") == 2, note
+    assert Path(payload["path"]).is_file()
