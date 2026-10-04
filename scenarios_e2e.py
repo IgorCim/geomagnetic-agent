@@ -401,7 +401,12 @@ def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
     # 8. the quantities must have the right magnitude. A regex over digits
     # passes when 60631 shows up in a sentence about a 33 nT range, so the
     # number is parsed out and bounded instead.
-    numbers = [float(m) for m in re.findall(r"(\d+(?:[.,]\d+)?)\s*нТ", answer, re.I)]
+    #
+    # find_nt_values is agent_core's, on purpose. The recovery filter decides
+    # whether a number was reported at all; if the two disagreed over what a
+    # unit looks like, a correct answer in Russian words would be hidden behind
+    # an error footer while the checker insisted it was missing a unit.
+    numbers = ac.find_nt_values(answer)
     for low, high in scenario.expect_nt_between:
         if not numbers:
             problems.append(

@@ -137,9 +137,10 @@ SYSTEM_PROMPT = (
     "calculate_derived_components — она считает только H, D, I, и ответит "
     "unknown_component.\n"
     "    • H, D, I — их считает calculate_derived_components, и больше ничего.\n"
-    "    • Размах (max минус min), скорость изменения, отклонение от базы — "
-    "calculate_derived_math: metric='delta' / 'dH_dt' / 'anomaly', "
-    "component='F' или 'H'.\n"
+    "    • Размах (max минус min) — это metric='delta'. Метрики 'range' НЕ "
+    "СУЩЕСТВУЕТ: calculate_derived_math знает ровно три — 'delta', 'dH_dt' "
+    "и 'anomaly'. Скорость изменения — 'dH_dt', отклонение от базы — "
+    "'anomaly'. component='F' или 'H'.\n"
     "    • Своя формула — evaluate_custom_formula по колонкам X, Y, Z, F. "
     "Формула НИКОГДА не исполняется как код, а разбирается в безопасный список "
     "операций, поэтому пиши математику свободно, но не имена файлов, не текст "
@@ -156,12 +157,22 @@ SYSTEM_PROMPT = (
     'имя семейства "raw" / "derived" / "anomalies" (это всегда самый свежий '
     "элемент семейства). Не выдумывай хэндл: полный список доступных имён приходит "
     'в поле "available_handles" результата инструмента.\n'
+    "5a. ПРАВИЛО СЛОТОВ: передавай в инструмент только тот хэндл, который сам "
+    "создал в этом диалоге. 'raw:...' появляется после fetch_observatory_data. "
+    "'derived:...' — только после calculate_derived_components или "
+    "calculate_derived_math. 'anomalies:...' — после detect_anomalies. Никогда "
+    "не передавай 'derived:...' или 'anomalies:...' в инструмент, который ты "
+    "ещё не вызывал: получишь unknown_frame и потратишь вызов впустую. "
+    "Порядок всегда такой: сначала 'raw:...', потом производные компоненты, "
+    "потом статистика, потом графики.\n"
     "6. Если инструмент вернул {\"ok\": false} и ты НЕ смог получить ответ — "
     "сообщи пользователю причину из поля message и предложи, что делать. Но "
     "если ошибка была промежуточной и ты нашёл другой путь и ответил — просто "
     "ответь, не пересказывай в ответе коды ошибок. Не подставляй свои цифры "
     "вместо ошибки.\n"
-    "7. В финальном ответе перечисли построенные графики и их файлы.\n"
+    "7. В финальном ответе перечисли построенные графики и их файлы. Единицы "
+    "измерения всегда пиши международным сокращением 'nT' — не «нанотесла» и "
+    "не «нТл»: от этого зависят проверка твоего ответа и фильтрация ошибок.\n"
     "8. Ты можешь вызвать несколько инструментов подряд, прежде чем ответить. "
     "Если нужно сравнить два дня — вызови fetch_observatory_data дважды, по разу на "
     "день, и передай в plot_comparison два РАЗНЫХ хэндла.\n"
@@ -173,6 +184,11 @@ SYSTEM_PROMPT = (
     "слов вокруг, без пояснений, без markdown:\n"
     '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
     '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
+    '        <tool_call>{"name": "calculate_derived_math", "arguments": '
+    '{"df": "raw:irt:2024-09-10", "metric": "delta", "component": "F"}}</tool_call>\n'
+    "    Ровно одна пара фигурных скобок { } вокруг всего объекта и { } вокруг "
+    "arguments. Никаких двойных скобок вида {\"name\": ...}} — это не "
+    "валидный JSON и такой вызов не выполнится.\n"
     "    (б) когда все данные получены и инструменты больше не нужны — обычный "
     "текст на русском, БЕЗ тегов, БЕЗ фигурных скобок, БЕЗ кавычек вокруг "
     "имён инструментов.\n"
@@ -2120,11 +2136,42 @@ def _failure_entries(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+#: Every spelling of "nanotesla" an answer may plausibly use. One definition,
+#: because two regexes disagreeing on this is how a correct answer gets treated
+#: as a failure: the recovery filter below decides whether a number was reported,
+#: and the E2E checker decides whether it can be verified. A model that writes
+#: "60631.39 нанотесла" has reported a number, and both must agree.
+_NANO_TESLA = r"(?:нТл|nT\b|нТ|нанотесл\w*)"
+
+_NT_VALUE_RE = re.compile(
+    rf"(\d+(?:[.,]\d+)?)\s*{_NANO_TESLA}",
+    flags=re.IGNORECASE,
+)
+
+
+def find_nt_values(text: Any) -> list[float]:
+    """Every nanotesla quantity stated in *text*, as floats.
+
+    A comma is a decimal separator in Russian, so "60631,39 нТ" has to read as
+    60631.39. Handing the captured string straight to ``float()`` raises on it,
+    which would turn a correct answer into a checker crash.
+    """
+    if not isinstance(text, str):
+        return []
+    values: list[float] = []
+    for raw in _NT_VALUE_RE.findall(text):
+        try:
+            values.append(float(raw.replace(",", ".")))
+        except ValueError:  # pragma: no cover - the regex only yields digits
+            continue
+    return values
+
+
 #: A figure or a quantity the user can check. The agent is told to state both,
 #: and both are what distinguishes "answered the question" from "hit a wall".
 _ANSWERED_RE = re.compile(
-    r"\d[\d\s.,]*\s*(?:нТл|nT\b|нТ)"          # a number carrying a unit
-    r"|[\w.\-/]+\.html?"                          # a saved chart, by filename
+    rf"\d[\d\s.,]*\s*{_NANO_TESLA}"       # a number carrying a unit, any spelling
+    r"|[\w.\-/]+\.html?"                    # a saved chart, by filename
     r"|построил|построен|график",
     flags=re.IGNORECASE,
 )

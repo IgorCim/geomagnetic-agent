@@ -4,6 +4,9 @@ These run the *verifier* against synthetic run_agent outputs, so the E2E suite
 is trusted even though the real model needs a GPU we do not have locally.
 """
 
+import agent_core as ac
+import pytest
+
 import scenarios_e2e as e2e
 from pathlib import Path
 
@@ -524,4 +527,75 @@ def test_median_F_rejects_the_range_number_of_the_other_scenario():
     )
     problems = e2e.check(_by_name("median_F"), result)
     assert any("55000.0-65000.0" in p for p in problems), problems
+
+
+# --------------------------------------------------------------------------- #
+# unit vocabulary: one definition, shared by the filter and the checker
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Медиана F — 60631.39 нТ.", [60631.39]),
+        ("Медиана F — 60631.39 nT.", [60631.39]),
+        ("Медиана F — 60631.39 нанотесла", [60631.39]),
+        ("Медиана F — 60631.39 нанотеслы", [60631.39]),
+        ("Медиана F — 60631.39 нанотеслу", [60631.39]),
+        ("Медиана F — 60631.39 нТл", [60631.39]),
+        # a comma is the decimal separator in Russian
+        ("Медиана F — 60631,39 нанотесла", [60631.39]),
+        ("Размах 33.32 нТ, медиана 60631.39 нТ", [33.32, 60631.39]),
+        ("Медиана F — нанотесла без числа", []),
+        ("ничего измеримого", []),
+    ],
+)
+def test_find_nt_values_reads_every_spelling(text, expected):
+    assert ac.find_nt_values(text) == expected
+
+
+def test_find_nt_values_ignores_non_strings():
+    assert ac.find_nt_values(None) == []
+    assert ac.find_nt_values(42) == []
+
+
+def test_a_russian_word_answer_still_counts_as_answered():
+    """The coupling that broke before: "нанотесла" is not "no number given".
+
+    run_recovered decides whether the error footer is suppressed. If it misses
+    the unit spelling the model actually used, a correct answer reappears with
+    the red errors the previous fix removed -- and nothing else fails.
+    """
+    log = [
+        _fetch("2024-09-10"),
+        _failed("calculate_derived_components", {"components": ["F"]},
+                "unknown_component", "['F'] are not derivable"),
+        _ok("get_statistics", {"df": "raw:irt:2024-09-10", "components": ["F"]}),
+    ]
+    for spelling in ("60631.39 нанотесла", "60631.39 нТ", "60631.39 nT"):
+        text = ac._with_tool_failures(f"Медиана F — {spelling}.", log)
+        assert "Не удалось выполнить" not in text, spelling
+        assert "unknown_component" not in text, spelling
+
+
+def test_the_checker_accepts_a_russian_word_unit():
+    result = _result(
+        [
+            _fetch("2024-09-10"),
+            _ok("get_statistics", {"df": "raw:irt:2024-09-10", "components": ["F"]}),
+        ],
+        text="Медиана F за 10 сентября 2024 года — 60631.39 нанотесла.",
+    )
+    assert e2e.check(_by_name("median_F"), result) == []
+
+
+def test_the_checker_still_rejects_a_missing_unit():
+    """Widening the vocabulary must not turn 'any number' into a pass."""
+    result = _result(
+        [
+            _fetch("2024-09-10"),
+            _ok("get_statistics", {"df": "raw:irt:2024-09-10", "components": ["F"]}),
+        ],
+        text="Медиана F за 10 сентября 2024 года — 60631.39.",
+    )
+    problems = e2e.check(_by_name("median_F"), result)
+    assert any("no quantity in nT" in p for p in problems), problems
 

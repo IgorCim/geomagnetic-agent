@@ -139,6 +139,70 @@ def test_system_prompt_marks_the_formula_dsl_as_safe():
     assert "evaluate_custom_formula" in ac.SYSTEM_PROMPT
 
 
+def test_system_prompt_forbids_using_a_slot_it_has_not_created():
+    """The reported failure: plot_comparison on derived:... before deriving.
+
+    The model spent a tool call on unknown_frame and burned budget correcting
+    it. The rule has to name the failure mode explicitly, because the general
+    "copy the handle from the previous result" instruction was already there and
+    the model overrode it with a plausible guess.
+    """
+    sp = ac.SYSTEM_PROMPT
+    assert "ПРАВИЛО СЛОТОВ" in sp
+    assert "только тот хэндл, который сам создал" in sp
+    # the specific trap, not just the general principle
+    assert "не вызывал" in sp
+    assert "unknown_frame" in sp
+
+
+def test_system_prompt_says_range_is_not_a_metric():
+    """The model hallucinated metric="range"; there is no such metric."""
+    sp = ac.SYSTEM_PROMPT
+    assert "Метрики 'range' НЕ СУЩЕСТВУЕТ" in sp
+    # and the three that do exist are still named
+    for metric in ("'delta'", "'dH_dt'", "'anomaly'"):
+        assert metric in sp
+
+
+def test_system_prompt_pins_the_unit_spelling():
+    """The checker and the recovery filter both key on the unit, so state it."""
+    assert "'nT'" in ac.SYSTEM_PROMPT
+
+
+def test_system_prompt_shows_a_second_worked_tool_call():
+    """One example taught the shape; a second teaches the handle argument.
+
+    The doubled-brace failure needs the contrast spelled out rather than only a
+    good example, because for a 7B model the bad form looks almost identical.
+    """
+    import json
+    import re
+
+    sp = ac.SYSTEM_PROMPT
+    bodies = re.findall(r'\{"name".*?\}\}', sp)
+    # at least two fully valid, independently parseable calls
+    valid = [b for b in bodies if _is_json(b)]
+    assert len(valid) >= 2, bodies
+    names = {json.loads(b)["name"] for b in valid}
+    assert "fetch_observatory_data" in names
+    assert "calculate_derived_math" in names
+    # the second example shows a derived-math call, which is the one the model
+    # was getting wrong
+    assert any(
+        json.loads(b).get("arguments", {}).get("metric") == "delta" for b in valid
+    )
+
+
+def _is_json(body: str) -> bool:
+    import json
+
+    try:
+        json.loads(body)
+    except ValueError:
+        return False
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # parse_tool_calls
 # --------------------------------------------------------------------------- #
