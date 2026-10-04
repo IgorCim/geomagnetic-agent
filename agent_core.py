@@ -44,7 +44,7 @@ import re
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 import numpy as np
 import pandas as pd
@@ -960,6 +960,45 @@ def _drop_trailing_commas(text: str) -> str:
     return "".join(out)
 
 
+def _unwrap_doubled_braces(text: str) -> Iterator[str]:
+    """Yield *text* with one redundant outer brace layer peeled off.
+
+    Asked for a tool call, a model sometimes wraps the object in a second pair
+    of braces: ``{{"name": ..., "arguments": {...}}}``. ``json.loads`` rejects
+    that outright, and the span scanner cannot rescue it either -- it balances
+    the braces it sees and yields the same doubled shape back, which is why
+    ``{{...}}}`` outside a tag produced no call at all rather than a bad one.
+
+    How many braces are spare varies: the wrapper sometimes closes (``{{...}}``)
+    and sometimes not (``{{...}}}``), so trailing candidates are generated too
+    and the first one that parses wins. Removing only from the ends is the point.
+    A blanket ``text.replace("{{", "{")`` would rewrite braces inside string
+    values, and this agent lets a model pass arbitrary text through verbatim.
+
+    Yields nothing unless the text actually opens with a doubled brace, so a
+    well-formed call never enters this path.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("{{"):
+        return
+    opens = 2
+    while opens < 4 and stripped[opens : opens + 1] == "{":
+        opens += 1
+    for drop_open in range(1, opens):
+        head = stripped[drop_open:]
+        for drop_close in (0, 1, 2):
+            body = head[: len(head) - drop_close] if drop_close else head
+            body = body.rstrip()
+            if body and body != stripped:
+                yield body
+
+
+def _load_bases(raw: str) -> Iterator[str]:
+    """The quote- and comma-repaired readings of *raw*, lazier than eager."""
+    for base in (_straighten_quotes(raw), raw):
+        yield _drop_trailing_commas(_single_quotes_to_double(base))
+
+
 def _try_loads(raw: str) -> Any:
     """``json.loads`` with a small ladder of repairs, or ``None`` on failure."""
     raw = raw.strip()
@@ -970,12 +1009,18 @@ def _try_loads(raw: str) -> Any:
             return json.loads(variant)
         except (json.JSONDecodeError, ValueError):
             pass
-    for base in (_straighten_quotes(raw), raw):
-        repaired = _drop_trailing_commas(_single_quotes_to_double(base))
+    bases = list(_load_bases(raw))
+    for repaired in bases:
         try:
             return json.loads(repaired)
         except (json.JSONDecodeError, ValueError):
             pass
+    for repaired in bases:
+        for unwrapped in _unwrap_doubled_braces(repaired):
+            try:
+                return json.loads(unwrapped)
+            except (json.JSONDecodeError, ValueError):
+                pass
     return None
 
 

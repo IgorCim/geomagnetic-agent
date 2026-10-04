@@ -363,6 +363,17 @@ def _names(reply):
         ("arguments as string", '{"name":"f","arguments":"{\\"a\\":1}"}', ["f"]),
         ("fence inside tag", '```json\n{"name":"f","arguments":{"a":1}}\n```', ["f"]),
         ("nested args", '{"name":"f","arguments":{"a":{"b":{"c":1}}}}', ["f"]),
+        # doubled braces: a second wrapper layer around the object
+        ("doubled braces closed", '{{"name":"f","arguments":{"a":1}}}', ["f"]),
+        ("doubled braces unclosed", '{{"name":"f","arguments":{"a":1}}', ["f"]),
+        ("doubled braces with space", '{{ "name":"f", "arguments":{"a":1} }}', ["f"]),
+        ("tripled braces", '{{{ "name":"f", "arguments":{"a":1} }}}', ["f"]),
+        # a doubled wrapper must not swallow a payload whose string holds braces
+        ("doubled braces, braces in a string",
+         '{{"name":"f","arguments":{"formula":"{{a}} + b"}}}', ["f"]),
+        # all three repairs composed
+        ("doubled braces plus single quotes plus trailing comma",
+         "{{'name':'f','arguments':{'a':1},}}", ["f"]),
     ],
 )
 def test_repairs_common_model_garbling(label, body, expected):
@@ -375,6 +386,125 @@ def test_unrecoverable_body_reports_a_reason():
     assert calls[0]["malformed"] is True
     assert calls[0]["name"] == ""
     assert "not valid JSON" in calls[0]["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# doubled braces: the two failure modes from the E2E run
+# --------------------------------------------------------------------------- #
+def test_doubled_braces_inside_a_tag_execute_rather_than_burn_a_round():
+    """Inside a tag this used to parse as a malformed call with an empty name.
+
+    The round was spent, the tool was never called, and the model was told its
+    JSON was broken when the only fault was one extra brace.
+    """
+    body = '{"name": "plot_components", "arguments": {"df": "raw"}}'
+    calls, rest = ac.parse_tool_calls(T_OPEN + "{{" + body + "}}" + T_CLOSE, debug=False)
+    assert rest == ""
+    assert len(calls) == 1
+    assert calls[0]["malformed"] is False
+    assert calls[0]["name"] == "plot_components"
+    assert calls[0]["arguments"] == {"df": "raw"}
+
+
+def test_doubled_braces_outside_a_tag_are_no_longer_a_silent_no_op():
+    """The worse of the two: no tag, no call, and nothing reported.
+
+    parse_tool_calls returned ([], raw) -- the span scanner balances the doubled
+    braces, yields the same broken shape back, and the agent loop retries with
+    no idea why. An empty call list is indistinguishable from "the model had
+    nothing to say", which is how a retry loop turns into a hang.
+    """
+    body = '{"name": "plot_components", "arguments": {"df": "raw"}}'
+    calls, _ = ac.parse_tool_calls("{{" + body + "}}}", debug=False)
+    assert [c["name"] for c in calls] == ["plot_components"]
+    assert calls[0]["malformed"] is False
+
+
+def test_a_doubled_brace_call_reaches_the_tool():
+    """End to end: the repair must produce a call that actually executes.
+
+    Before the fix this step came back as ``malformed_tool_call`` and no handler
+    ever ran. The store here is empty, so the handler still refuses the frame --
+    what matters is that the refusal is a data error from a real tool rather than
+    a parse error, which is the distinction the model has to act on.
+    """
+    brain = ac.ScriptedBrain([
+        T_OPEN + '{{"name": "get_statistics", "arguments": '
+        '{"df": "raw", "components": ["F"]}}}' + T_CLOSE,
+        "готово",
+    ])
+    out = ac.run_agent("q", brain=brain, verbose=False)
+    step = out["tool_calls"][0]
+    assert step["tool"] == "get_statistics"
+    assert step["arguments"] == {"df": "raw", "components": ["F"]}
+    assert step.get("error") != "malformed_tool_call"
+
+
+def test_well_formed_calls_are_untouched_by_the_repair():
+    """The repair must not change any reading that already parsed."""
+    valid = [
+        '{"name":"f","arguments":{"a":1}}',
+        '{"name":"f","arguments":{}}',
+        '[{"name":"a","arguments":{}},{"name":"b","arguments":{}}]',
+        '{\"function\":{\"name\":\"f\",\"arguments\":{\"a\":1}}}',
+    ]
+    for body in valid:
+        assert _names(T_OPEN + body + T_CLOSE) != [], body
+
+
+def test_braces_inside_strings_are_never_rewritten():
+    """Only the ends are sliced, so a payload may carry braces in its values.
+
+    A blanket replace of '{{' would corrupt these. This agent lets a model pass
+    text through verbatim, so a formula containing braces has to survive the
+    repair intact.
+    """
+    for value in ("{{a}} + b", "a{{", "x}}}}y", "{{{", "dict({1:2})"):
+        body = json.dumps(
+            {"name": "evaluate_custom_formula", "arguments": {"formula": value}}
+        )
+        calls, _ = ac.parse_tool_calls(T_OPEN + body + T_CLOSE, debug=False)
+        assert len(calls) == 1, value
+        assert calls[0]["malformed"] is False, value
+        assert calls[0]["arguments"]["formula"] == value, value
+
+
+def test_doubled_wrapper_keeps_braces_inside_strings():
+    """Both at once: the wrapper is peeled, the inner value is not."""
+    payload = json.dumps({"name": "f", "arguments": {"formula": "{{a}}"}})
+    calls, _ = ac.parse_tool_calls(T_OPEN + "{{" + payload + "}}}" + T_CLOSE, debug=False)
+    assert calls[0]["arguments"]["formula"] == "{{a}}"
+
+
+def test_genuine_garbage_is_still_refused():
+    """Widening the ladder must not make any old junk parse.
+
+    The repair engages only on a doubled opening brace, so balanced-looking but
+    meaningless input has to keep failing -- otherwise the parser would start
+    inventing calls out of prose.
+    """
+    for junk in ("not json at all", "{", "{{", "}}}", '{"name": }', "{}{}"):
+        assert ac._try_loads(junk) is None, junk
+
+
+def test_the_repair_only_engages_on_a_doubled_brace():
+    """A clean object never enters the ladder's new rung."""
+    assert list(ac._unwrap_doubled_braces('{"name":"f"}')) == []
+    assert list(ac._unwrap_doubled_braces("plain text")) == []
+    assert list(ac._unwrap_doubled_braces("")) == []
+
+
+def test_degenerate_doubled_braces_never_invent_a_call():
+    """The generator may offer readings that do not parse, or that parse to
+    something empty -- it must never manufacture a *named* tool call.
+
+    '{{}' peels to '{}', which is valid JSON. That is harmless because an empty
+    object names no tool, so the property worth pinning is not "nothing parses"
+    but "no call appears that was not in the text".
+    """
+    for degenerate in ("{{", "{{}", "{{{{", "{{{}}"):
+        calls, _ = ac.parse_tool_calls(T_OPEN + degenerate + T_CLOSE, debug=False)
+        assert [c["name"] for c in calls if not c["malformed"]] == [], degenerate
 
 
 def test_malformed_error_payload_carries_the_reason():
