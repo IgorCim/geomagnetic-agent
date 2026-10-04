@@ -433,6 +433,13 @@ def _format_tool_log(tool_calls: Any, text: str = "") -> str:
         if isinstance(arguments, dict) and arguments:
             rendered = ", ".join(f"`{k}={v}`" for k, v in arguments.items())
             lines.append(f"  - аргументы: {rendered}")
+        # What the handler actually did: the handle it derived, the file it
+        # saved. Without this an auto-derived slot is invisible, and the user
+        # cannot tell a chart of the frame they asked for from one built by a
+        # fallback.
+        note = step.get("note")
+        if isinstance(note, str) and note:
+            lines.append(f"  - {note}")
     return "\n".join(lines) if len(lines) > 2 else ""
 
 

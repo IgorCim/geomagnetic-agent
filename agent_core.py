@@ -157,14 +157,6 @@ SYSTEM_PROMPT = (
     'имя семейства "raw" / "derived" / "anomalies" (это всегда самый свежий '
     "элемент семейства). Не выдумывай хэндл: полный список доступных имён приходит "
     'в поле "available_handles" результата инструмента.\n'
-    "5a. ПРАВИЛО СЛОТОВ: передавай в инструмент только тот хэндл, который сам "
-    "создал в этом диалоге. 'raw:...' появляется после fetch_observatory_data. "
-    "'derived:...' — только после calculate_derived_components или "
-    "calculate_derived_math. 'anomalies:...' — после detect_anomalies. Никогда "
-    "не передавай 'derived:...' или 'anomalies:...' в инструмент, который ты "
-    "ещё не вызывал: получишь unknown_frame и потратишь вызов впустую. "
-    "Порядок всегда такой: сначала 'raw:...', потом производные компоненты, "
-    "потом статистика, потом графики.\n"
     "6. Если инструмент вернул {\"ok\": false} и ты НЕ смог получить ответ — "
     "сообщи пользователю причину из поля message и предложи, что делать. Но "
     "если ошибка была промежуточной и ты нашёл другой путь и ответил — просто "
@@ -184,11 +176,8 @@ SYSTEM_PROMPT = (
     "слов вокруг, без пояснений, без markdown:\n"
     '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
     '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
-    '        <tool_call>{"name": "calculate_derived_math", "arguments": '
-    '{"df": "raw:irt:2024-09-10", "metric": "delta", "component": "F"}}</tool_call>\n'
     "    Ровно одна пара фигурных скобок { } вокруг всего объекта и { } вокруг "
-    "arguments. Никаких двойных скобок вида {\"name\": ...}} — это не "
-    "валидный JSON и такой вызов не выполнится.\n"
+    "arguments.\n"
     "    (б) когда все данные получены и инструменты больше не нужны — обычный "
     "текст на русском, БЕЗ тегов, БЕЗ фигурных скобок, БЕЗ кавычек вокруг "
     "имён инструментов.\n"
@@ -1470,6 +1459,79 @@ def _first_present(df: pd.DataFrame, store: FrameStore, requested: str) -> str:
     return "raw"
 
 
+def _is_derived_handle(handle: Any) -> bool:
+    """Whether *handle* explicitly names the derived family, not a bare alias."""
+    return isinstance(handle, str) and handle.strip().lower().startswith("derived:")
+
+
+def _auto_derive(
+    store: FrameStore, handle: Any, components: Sequence[str]
+) -> tuple[str | None, str]:
+    """Materialise a missing ``derived:`` slot from its ``raw:`` sibling.
+
+    A model asked to plot a derived component straight after fetching usually
+    infers the slot name from the naming convention rather than reading it off a
+    tool result, so it asks for ``derived:irt:2024-09-11`` while only
+    ``raw:irt:2024-09-11`` is loaded. The convention is right and the slot simply
+    has not been created yet; reporting ``unknown_frame`` there spends a round
+    teaching the model something the code can just do.
+
+    Scoped deliberately. Only the ``derived`` family qualifies, because deriving
+    is a pure function of raw columns. Only a slot whose raw sibling is already
+    stored qualifies, so the fallback can never invent data the model never
+    fetched. ``anomalies`` is excluded: those depend on a baseline and a
+    detection window, so they stay an explicit call.
+
+    Derives only the components the caller actually asked for, and only those
+    that are derivable -- X, Y, Z and F are already on the raw frame, and
+    ``calculate_derived_components`` rejects a request it cannot satisfy.
+
+    Returns ``(slot, note)``; ``slot`` is None when nothing was derived, leaving
+    the caller to report the miss normally.
+    """
+    if not _is_derived_handle(handle):
+        return None, ""
+    key = handle.strip().lower()
+    raw = store.get("raw:" + key.split(":", 1)[1])
+    if raw is None:
+        return None, ""
+    wanted = [
+        name
+        for name in (str(c).strip().upper() for c in components)
+        if name in analyzer.DERIVED
+    ]
+    result = analyzer.calculate_derived_components(raw, components=wanted)
+    if analyzer.is_error(result):
+        # Fall through to the normal unknown_frame error rather than surfacing a
+        # compute failure the model cannot act on -- it usually means the raw
+        # frame lacks the Cartesian columns, and the handles are what it needs.
+        return None, ""
+    slot = store.put(key, result)
+    return slot, f"auto-derived: {slot} (из raw)"
+
+
+def _resolve_plottable(
+    store: FrameStore, handle: Any, components: Sequence[str], notes: list[str]
+) -> tuple[Any, dict[str, Any] | None]:
+    """Resolve a handle for plotting, deriving a missing derived slot from raw.
+
+    A derived handle that cannot be derived is returned as a miss rather than
+    falling back to a family scan. Substituting whichever other frame happened
+    to be loaded would plot the wrong day under the name the model asked for,
+    which is far harder to notice than an error.
+    """
+    frame, err = store.resolve(handle)
+    if frame is not None:
+        return frame, None
+    if not _is_derived_handle(handle):
+        return None, err
+    slot, note = _auto_derive(store, handle, components)
+    if slot is None:
+        return None, err
+    notes.append(note)
+    return store.resolve(slot)
+
+
 def _handle_fetch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     station = (args.get("station_code") or "").upper()
     start = args.get("start_date") or ""
@@ -1822,8 +1884,14 @@ def _handle_custom_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any
 
 def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     components = args.get("components") or ["H"]
-    handle = _first_present(store.resolve(args.get("df"))[0], store, components[0])
-    frame, err = store.resolve(handle)
+    notes: list[str] = []
+    frame, err = _resolve_plottable(store, args.get("df"), components, notes)
+    if frame is None and not _is_derived_handle(args.get("df")):
+        # No handle, or a bare family alias: search for the richest slot that
+        # actually carries the requested column. An explicit derived handle is
+        # excluded on purpose -- see _resolve_plottable.
+        handle = _first_present(frame, store, components[0])
+        frame, err = store.resolve(handle)
     if err:
         return err, f"plot_components failed: {err['error']}"
     result = plotter.plot_components(
@@ -1835,15 +1903,17 @@ def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[An
     if plotter.is_error(result):
         return result, f"plot_components failed: {result.get('error')}"
     return {"ok": True, "path": result, "components": components, "rows": int(len(frame))}, (
-        f"Saved chart to {result}"
+        "; ".join([*notes, f"Saved chart to {result}"])
     )
 
 
 def _handle_plot_comparison(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
-    first, err = store.resolve(args.get("df1"))
+    component = args.get("component") or "H"
+    notes: list[str] = []
+    first, err = _resolve_plottable(store, args.get("df1"), [component], notes)
     if err:
         return err, f"plot_comparison failed (df1): {err['error']}"
-    second, err = store.resolve(args.get("df2"))
+    second, err = _resolve_plottable(store, args.get("df2"), [component], notes)
     if err:
         return err, f"plot_comparison failed (df2): {err['error']}"
     if first is second:
@@ -1861,14 +1931,14 @@ def _handle_plot_comparison(args: dict[str, Any], store: FrameStore) -> tuple[An
     result = plotter.plot_comparison(
         first,
         second,
-        component=args.get("component") or "H",
+        component=component,
         title=args.get("title") or "Day comparison",
         filename=args.get("filename"),
     )
     if plotter.is_error(result):
         return result, f"plot_comparison failed: {result.get('error')}"
-    return {"ok": True, "path": result, "component": args.get("component") or "H"}, (
-        f"Saved comparison to {result}"
+    return {"ok": True, "path": result, "component": component}, "; ".join(
+        [*notes, f"Saved comparison to {result}"]
     )
 
 
@@ -2057,6 +2127,7 @@ def run_agent(
         for call in calls:
             name, args = call["name"], call["arguments"]
             entry: dict[str, Any] = {"round": round_no, "tool": name, "arguments": args}
+            note = ""
 
             if call.get("malformed") or not name:
                 # Checked before unknown_tool: a truncated or unparsable call has
@@ -2091,6 +2162,13 @@ def run_agent(
 
             entry["ok"] = not is_error(payload)
             entry["executed"] = True
+            # Handlers describe what they actually did in their note -- which
+            # handle they derived, what they saved. That note used to be returned
+            # and dropped on the floor, so work the agent did silently was
+            # invisible in the log; an auto-derived slot in particular is
+            # something the user needs to see to trust the chart.
+            if note:
+                entry["note"] = note
             # Surface the diagnostic fields, not just the code: without these a
             # malformed call in Colab reports "malformed_tool_call" and nothing
             # else, which is what sent the previous two fixes down blind paths.

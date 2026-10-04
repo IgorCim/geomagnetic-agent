@@ -139,19 +139,19 @@ def test_system_prompt_marks_the_formula_dsl_as_safe():
     assert "evaluate_custom_formula" in ac.SYSTEM_PROMPT
 
 
-def test_system_prompt_forbids_using_a_slot_it_has_not_created():
-    """The reported failure: plot_comparison on derived:... before deriving.
+def test_slot_ordering_is_left_to_the_code_not_the_prompt():
+    """Rule 5a is gone, because _auto_derive now covers the miss it warned about.
 
-    The model spent a tool call on unknown_frame and burned budget correcting
-    it. The rule has to name the failure mode explicitly, because the general
-    "copy the handle from the previous result" instruction was already there and
-    the model overrode it with a plausible guess.
+    The rule restated, in prompt budget, an ordering the code enforces -- and the
+    model overrode it anyway, which is what the field failure showed. The prompt
+    is pinned here so the rule cannot quietly grow back and eat the budget the
+    selection table needs; the behaviour itself is covered by the auto-derive
+    tests rather than by wording.
     """
     sp = ac.SYSTEM_PROMPT
-    assert "ПРАВИЛО СЛОТОВ" in sp
-    assert "только тот хэндл, который сам создал" in sp
-    # the specific trap, not just the general principle
-    assert "не вызывал" in sp
+    assert "ПРАВИЛО СЛОТОВ" not in sp
+    assert "только тот хэндл, который сам создал" not in sp
+    # the failure mode it described is still named where a model can act on it
     assert "unknown_frame" in sp
 
 
@@ -169,28 +169,28 @@ def test_system_prompt_pins_the_unit_spelling():
     assert "'nT'" in ac.SYSTEM_PROMPT
 
 
-def test_system_prompt_shows_a_second_worked_tool_call():
-    """One example taught the shape; a second teaches the handle argument.
+def test_system_prompt_shows_one_valid_worked_tool_call():
+    """One example, and it has to be valid JSON.
 
-    The doubled-brace failure needs the contrast spelled out rather than only a
-    good example, because for a 7B model the bad form looks almost identical.
+    The second worked example and the doubled-brace warning were cut: the parser
+    repairs that shape now (_unwrap_doubled_braces), so the prompt was teaching a
+    failure the code no longer has. The remaining example is still pinned as
+    parseable, because an example that does not parse is worse than none -- the
+    model copies it verbatim.
     """
     import json
     import re
 
     sp = ac.SYSTEM_PROMPT
     bodies = re.findall(r'\{"name".*?\}\}', sp)
-    # at least two fully valid, independently parseable calls
     valid = [b for b in bodies if _is_json(b)]
-    assert len(valid) >= 2, bodies
-    names = {json.loads(b)["name"] for b in valid}
-    assert "fetch_observatory_data" in names
-    assert "calculate_derived_math" in names
-    # the second example shows a derived-math call, which is the one the model
-    # was getting wrong
-    assert any(
-        json.loads(b).get("arguments", {}).get("metric") == "delta" for b in valid
-    )
+    assert len(valid) == 1, bodies
+    call = json.loads(valid[0])
+    assert call["name"] == "fetch_observatory_data"
+    assert call["arguments"]["station_code"] == "IRT"
+    # the parser now handles the doubled form, so the prompt must not spend
+    # characters on it
+    assert "двойных скобок" not in sp
 
 
 def _is_json(body: str) -> bool:
@@ -1276,3 +1276,262 @@ def test_real_qwen_template_renders_our_history_cleanly():
     # garbage. The template's own "<args-json-object>" placeholder appears
     # earlier in the prompt, so the last occurrence is the real one.
     assert isinstance(_json_value_after(rendered, '"arguments": ', last=True), dict)
+
+
+# --------------------------------------------------------------------------- #
+# regression: auto-derive fallback for a derived handle that does not exist yet
+# --------------------------------------------------------------------------- #
+def _fake_fetch_factory():
+    import intermagnet_loader as loader
+
+    def fake_fetch(station_code=None, start_date=None, end_date=None, **kw):
+        day = pd.to_datetime(start_date)
+        offset = float(day.day)
+        frame = pd.DataFrame(
+            {
+                "timestamp": pd.date_range(day, periods=24, freq="h"),
+                "X": [float(i) + offset for i in range(24)],
+                "Y": [float(i) * 2 for i in range(24)],
+                "Z": [float(i) * 3 + offset for i in range(24)],
+            }
+        )
+        frame.attrs["publication_state"] = "definitive"
+        return frame
+
+    return loader, fake_fetch
+
+
+def _call(name, **arguments):
+    return (
+        T_OPEN
+        + json.dumps({"name": name, "arguments": arguments}, ensure_ascii=False)
+        + T_CLOSE
+    )
+
+
+def test_fetch_fetch_comparison_packet_reaches_the_chart_in_one_round(tmp_path, monkeypatch):
+    """The field failure, in the shape the model actually emits it.
+
+    One reply carrying [fetch, fetch, plot_comparison]. The model asks for a
+    derived handle for a day it has not derived yet -- it is following the naming
+    convention, not making a mistake -- and that used to come back
+    unknown_frame. The round was spent recovering, the chart never appeared, and
+    the tally read "1 of 2".
+    """
+    loader, fake_fetch = _fake_fetch_factory()
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    monkeypatch.setattr(loader, "fetch_observatory_data", fake_fetch)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+
+    packet = "".join(
+        [
+            _call("fetch_observatory_data", station_code="IRT", start_date="2024-09-10", end_date="2024-09-10"),
+            _call("fetch_observatory_data", station_code="IRT", start_date="2024-09-11", end_date="2024-09-11"),
+            _call(
+                "plot_comparison",
+                df1="derived:irt:2024-09-10",
+                df2="derived:irt:2024-09-11",
+                component="H",
+            ),
+        ]
+    )
+    brain = ac.ScriptedBrain([packet, "Готово: сравнение за 2024-09-11 построено."])
+    out = ac.run_agent("сравни дни", brain=brain, verbose=False)
+
+    steps = out["tool_calls"]
+    assert [s["tool"] for s in steps] == [
+        "fetch_observatory_data",
+        "fetch_observatory_data",
+        "plot_comparison",
+    ], [s["tool"] for s in steps]
+    # one round only: the packet was executed as issued, not retried
+    assert {s["round"] for s in steps} == {1}, [s["round"] for s in steps]
+    failures = [(s["tool"], s.get("error")) for s in steps if not s["ok"]]
+    assert not failures, f"a clean packet must log no errors, got {failures}"
+    assert len(out["plots"]) == 1
+    assert Path(out["plots"][0]).is_file()
+
+
+def test_auto_derived_slot_is_recorded_in_the_tool_log(tmp_path, monkeypatch):
+    """The log has to show that a slot was derived, not fetched.
+
+    A chart built by the fallback has to be distinguishable from one built from a
+    frame the model asked for, or the user cannot tell what was plotted.
+    """
+    loader, fake_fetch = _fake_fetch_factory()
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    monkeypatch.setattr(loader, "fetch_observatory_data", fake_fetch)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+
+    packet = "".join(
+        [
+            _call("fetch_observatory_data", station_code="IRT", start_date="2024-09-10", end_date="2024-09-10"),
+            _call("fetch_observatory_data", station_code="IRT", start_date="2024-09-11", end_date="2024-09-11"),
+            _call(
+                "plot_comparison",
+                df1="derived:irt:2024-09-10",
+                df2="derived:irt:2024-09-11",
+                component="H",
+            ),
+        ]
+    )
+    brain = ac.ScriptedBrain([packet, "Готово."])
+    out = ac.run_agent("сравни дни", brain=brain, verbose=False)
+
+    comparison = out["tool_calls"][-1]
+    assert "auto-derived: derived:irt:2024-09-10 (из raw)" in comparison["note"]
+    assert "auto-derived: derived:irt:2024-09-11 (из raw)" in comparison["note"]
+    # the two days must still be genuinely different, not collapsed onto one
+    assert len(out["plots"]) == 1
+    assert Path(out["plots"][0]).is_file()
+
+
+@pytest.mark.parametrize(
+    "handle,components,expected_ok,expected_error",
+    [
+        # derived + raw present -> derive and carry on
+        ("derived:irt:2024-09-11", ["H"], True, None),
+        # derived but no raw sibling -> ordinary unknown_frame, no invention
+        ("derived:irt:2024-09-10", ["H"], False, "unknown_frame"),
+        # anomalies need a baseline and a window: never derived implicitly
+        ("anomalies:irt:2024-09-11", ["H"], False, "unknown_frame"),
+    ],
+)
+def test_auto_derive_boundaries(handle, components, expected_ok, expected_error):
+    store = ac.FrameStore()
+    store.put(
+        "raw:irt:2024-09-11",
+        pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2024-09-11", periods=6, freq="h"),
+                "X": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                "Y": [2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+                "Z": [3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            }
+        ),
+    )
+    notes: list = []
+    frame, err = ac._resolve_plottable(store, handle, components, notes)
+    if expected_ok:
+        assert err is None
+        assert frame is not None
+        assert notes, "a derived slot must be reported in the note"
+        assert store.get(handle) is not None
+    else:
+        assert frame is None
+        assert err is not None and err["error"] == expected_error, err
+        assert not notes, "nothing may be derived when the raw sibling is absent"
+        assert store.get(handle) is None, "a failed fallback must not create a slot"
+    # the raw frame is never replaced by the fallback
+    assert "derived" not in store.names() or expected_ok
+
+
+def test_plot_components_auto_derives_too(tmp_path, monkeypatch):
+    """The single-day plot is the same miss and gets the same repair."""
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = ac.FrameStore()
+    store.put(
+        "raw:irt:2024-09-11",
+        pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2024-09-11", periods=12, freq="h"),
+                "X": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                "Y": [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0],
+                "Z": [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+            }
+        ),
+    )
+    payload, note = ac._handle_plot_components(
+        {"df": "derived:irt:2024-09-11", "components": ["H"]}, store
+    )
+    assert not ac.is_error(payload), payload
+    assert Path(payload["path"]).is_file()
+    assert "auto-derived: derived:irt:2024-09-11 (из raw)" in note
+
+
+def test_missing_derived_handle_never_borrows_another_day(tmp_path, monkeypatch):
+    """No raw sibling means an error, not a substitution.
+
+    plot_components used to fall through to a family scan on a miss, which could
+    hand back whichever other day was loaded and plot it under the requested name.
+    """
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = ac.FrameStore()
+    store.put(
+        "raw:irt:2024-09-10",
+        pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2024-09-10", periods=6, freq="h"),
+                "X": [1.0, 2, 3, 4, 5, 6], "Y": [1.0, 2, 3, 4, 5, 6], "Z": [1.0, 2, 3, 4, 5, 6],
+            }
+        ),
+    )
+    payload, _ = ac._handle_plot_components(
+        {"df": "derived:irt:2024-09-11", "components": ["H"]}, store
+    )
+    assert ac.is_error(payload), "must not silently plot 2024-09-10 as 2024-09-11"
+    assert payload["error"] == "unknown_frame"
+    assert "derived:irt:2024-09-11" not in store.names()
+
+
+def test_auto_derived_comparison_still_plots_two_different_days(tmp_path, monkeypatch):
+    """Auto-deriving must not collapse the comparison onto one day.
+
+    Each fallback produces a fresh frame, so nothing structurally forces the two
+    days apart -- if both requests resolved to the same raw frame the chart would
+    still build, and would be silently meaningless.
+    """
+    loader, fake_fetch = _fake_fetch_factory()
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    monkeypatch.setattr(loader, "fetch_observatory_data", fake_fetch)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+
+    store = ac.FrameStore()
+    for day in ("2024-09-10", "2024-09-11"):
+        payload, _ = ac._handle_fetch(
+            {"station_code": "IRT", "start_date": day, "end_date": day}, store
+        )
+        assert not ac.is_error(payload)
+
+    captured = {}
+    original = plotter._write
+
+    def spy(fig, path, include_plotlyjs):
+        captured["fig"] = fig
+        return original(fig, path, include_plotlyjs)
+
+    plotter._write = spy
+    try:
+        payload, note = ac._handle_plot_comparison(
+            {
+                "df1": "derived:irt:2024-09-10",
+                "df2": "derived:irt:2024-09-11",
+                "component": "H",
+            },
+            store,
+        )
+    finally:
+        plotter._write = original
+
+    assert not ac.is_error(payload), payload
+    traces = captured["fig"].data
+    assert len(traces) == 2, "the comparison chart must carry one trace per day"
+    assert traces[0].name != traces[1].name
+    assert list(traces[0].y) != list(traces[1].y)
+    assert note.count("auto-derived:") == 2
+
+
+def test_system_prompt_stays_within_its_budget():
+    """The prompt was cut to buy room for the tool-selection table.
+
+    It is a prompt for a 7B model: every rule competes with the others for
+    attention, so growth has to be a deliberate act rather than an accumulation.
+    The rules now enforced in code -- slot ordering, doubled braces -- were the
+    ones removed, and this stops them creeping back one clause at a time.
+    """
+    sp = ac.SYSTEM_PROMPT
+    assert len(sp) <= 4414, f"prompt grew to {len(sp)} chars"
+    # what must survive a trim
+    assert "4a." in sp, "the tool-selection table is the point of the prompt"
+    assert "'nT'" in sp, "the checker and recovery filter both key on the unit"
+    assert "ПЕРЕД ЛЮБЫМ из них" in sp, "fetch-first is not derivable from the code"
