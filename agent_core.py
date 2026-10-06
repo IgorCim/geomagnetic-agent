@@ -43,6 +43,7 @@ import os
 import re
 import sys
 import traceback
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
@@ -53,6 +54,7 @@ import geomag_analyzer as analyzer
 import geomag_math as geomath
 import geomag_plotter as plotter
 import intermagnet_loader as loader
+import project_store as projects
 
 #: Bumped whenever the tool-call parser changes shape. ``colab_run.ipynb``
 #: prints this next to ``git rev-parse HEAD``; a notebook that shows an older
@@ -95,6 +97,12 @@ MAX_TOKENS = 1200
 MAX_TOOL_CALLS = 16        # tool executions per user query
 MAX_ROUNDS = 18            # model round-trips per user query
 
+#: Ceiling on downloads inside one ``fetch_many`` call, whatever it asks for.
+#: The agent's own budget bounds how many times it may *call* a tool, not how much
+#: work one call may do -- without this a single call could download a year of
+#: data for every known station and swamp both the network and the run.
+MAX_BATCH_DOWNLOADS = 8
+
 OFFLINE = os.environ.get("GEOMAG_OFFLINE", "").strip() not in ("", "0", "false")
 
 # Authoritative, read out of the live INTERMAGNET registry (Edinburgh GIN +
@@ -131,6 +139,7 @@ SYSTEM_PROMPT = (
     "calculate_derived_components, потом get_statistics / detect_anomalies, "
     "потом plot_components / plot_comparison. Не перескакивай шаги.\n"
 "4a. ВЫБОР ИНСТРУМЕНТА — строго по этой таблице:\n"
+    "    - list_projects() - ?????? ???? ????????.\n" +
     "    • X, Y, Z и F — это ГОТОВЫЕ колонки в сырых данных. Медиана, среднее, "
     "минимум, максимум, размах, стандартное отклонение: вызывай get_statistics "
     "сразу с хэндлом raw и components=['F']. НЕ вызывай перед этим "
@@ -151,6 +160,13 @@ SYSTEM_PROMPT = (
     "    • ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data. Без созданного хэндла raw "
     "инструменты математики ответят unknown_frame, а не посчитают. Хэндл "
     "бери из frame_handle предыдущего результата, никогда не выдумывай.\n"
+    "    • create_project — начни проект перед серией загрузок. Всё, что "    "скачано и построено, попадёт в projects/<проект>/<станция>/<дата>/.\n"
+    "    • fetch_many — несколько станций за один диапазон одним вызовом, "
+    "вместо повторных fetch_observatory_data. Бюджет загрузок общий на все "
+    "станции, поэтому часть станций может не загрузиться: смотри поля failed и "
+    "refused и скажи пользователю, что пришло, а что нет.\n"
+    "    • export_project — собирает проект в один ZIP (CSV, графики, "
+    "манифесты) и возвращает путь к файлу.\n"
     "5. Вместо DataFrame инструментам передавай строковый хэндл, скопированный из "
     'поля "frame_handle" предыдущего результата. Это либо полный слот на конкретный '
     "день вида \"raw:irt:2024-09-10\" / \"derived:irt:2024-09-10\", либо короткое "
@@ -277,6 +293,115 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["station_code", "start_date", "end_date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_project",
+            "description": (
+                "Start a named project. Every later artifact is filed under it as "
+                "<station>/<date>/ with a manifest recording the observatory, the "
+                "data version, the download time and the agent commit. Call this "
+                "before fetch_many or export_project. Calling it again with the same "
+                "name reuses the existing project rather than failing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "Short human-readable project name, e.g. 'Boreal storm "
+                            "2024'. Letters, digits, spaces, '-' and '_' only; the name "
+                            "is normalised into a folder name."
+                        ),
+                    }
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_many",
+            "description": (
+                "Download one date range for SEVERAL observatories in a single call. "
+                "Use this instead of repeating fetch_observatory_data when more than "
+                "one station is needed: the stations share one budget of downloads, "
+                "and each returns its own frame_handle such as 'raw:irt:2024-09-10'. "
+                "A station that cannot be downloaded is reported in 'failed' while the "
+                "others still succeed -- partial results are normal, so report what "
+                "arrived and what did not. When a project is open, each day's data is "
+                "also written into it as CSV."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            f"Three-letter IAGA codes. Known: {STATION_HINT}"
+                        ),
+                    },
+                    "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD."},
+                    "end_date": {"type": "string", "description": "End date, YYYY-MM-DD (inclusive)."},
+                    "data_type": {
+                        "type": "string",
+                        "enum": ["definitive", "quasi-def", "adjusted", "reported", "best-avail", "auto"],
+                        "description": "Publication state. 'auto' walks a fallback chain. Default 'definitive'.",
+                    },
+                    "samples_per_day": {
+                        "type": "string",
+                        "enum": ["Minute", "Second"],
+                        "description": "Temporal resolution. Default 'Minute'.",
+                    },
+                    "max_downloads": {
+                        "type": "integer",
+                        "description": (
+                            "Ceiling on downloads for this call, shared by all stations. "
+                            "Defaults to 8. Windows beyond the ceiling are refused and "
+                            "listed under 'refused' rather than fetched."
+                        ),
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project to file the data under. Defaults to the open project.",
+                    },
+                },
+                "required": ["stations", "start_date", "end_date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_projects",
+            "description": "???????? ?????? ???? ???????? ? ???????????",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_project",
+            "description": (
+                "Pack a whole project into a single ZIP for download: the folder tree, "
+                "every CSV and HTML chart, and the manifests. Returns the archive path. "
+                "Call this once the work is done and tell the user the file name."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Project to export. Defaults to the open project.",
+                    }
+                },
+                "required": [],
             },
         },
     },
@@ -1077,7 +1202,8 @@ def _normalize_call(value: Any, depth: int = 0) -> list[tuple[str, dict[str, Any
     if not name:
         return []
     arguments = next((value[k] for k in _ARG_KEYS if k in value), {})
-    return [(str(name).strip(), _coerce_arguments(arguments))]
+    return [(str(name
+).strip(), _coerce_arguments(arguments))]
 
 
 def _calls_from_json(body: str) -> list[tuple[str, dict[str, Any]]]:
@@ -1281,10 +1407,15 @@ class FrameStore:
     that family, which keeps every single-day flow working unchanged.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, workspace: "projects.Workspace | None" = None) -> None:
         self._frames: dict[str, pd.DataFrame] = {}
         # family -> slots in write order; the last one is what the alias points at
         self._families: dict[str, list[str]] = {}
+        # The project this run is filling, if the user opened one. Kept here so
+        # every tool keeps the same (args, store) signature: a second channel
+        # into run_agent would have to be threaded past every existing handler and
+        # every test that calls one directly.
+        self.workspace = workspace if workspace is not None else projects.Workspace()
 
     @staticmethod
     def _normalise(handle: str) -> str:
@@ -1882,6 +2013,24 @@ def _handle_custom_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any
     )
 
 
+def _file_into_project(
+    store: FrameStore, chart: str, handles: Sequence[Any], kind: str
+) -> list[str]:
+    """Copy a saved chart into the project days its handles point at.
+
+    Returns an empty list when no project is open, which is every pre-project
+    flow: the plotter's own path is still what those runs report, so nothing about
+    the existing behaviour changes.
+    """
+    try:
+        return store.workspace.save_chart(chart, handles, kind=kind)
+    except OSError as exc:
+        # A project that cannot be written must not sink the chart: the chart is
+        # the answer, the filing is bookkeeping.
+        print(f"[agent] could not file {chart} into the project: {exc}")
+        return []
+
+
 def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     components = args.get("components") or ["H"]
     notes: list[str] = []
@@ -1902,9 +2051,11 @@ def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[An
     )
     if plotter.is_error(result):
         return result, f"plot_components failed: {result.get('error')}"
-    return {"ok": True, "path": result, "components": components, "rows": int(len(frame))}, (
-        "; ".join([*notes, f"Saved chart to {result}"])
-    )
+    filed = _file_into_project(store, result, [args.get("df")], "components")
+    payload = {"ok": True, "path": result, "components": components, "rows": int(len(frame))}
+    if filed:
+        payload["filed_into_project"] = filed
+    return payload, "; ".join([*notes, f"Saved chart to {result}"])
 
 
 def _handle_plot_comparison(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -1937,13 +2088,245 @@ def _handle_plot_comparison(args: dict[str, Any], store: FrameStore) -> tuple[An
     )
     if plotter.is_error(result):
         return result, f"plot_comparison failed: {result.get('error')}"
-    return {"ok": True, "path": result, "component": component}, "; ".join(
-        [*notes, f"Saved comparison to {result}"]
+    filed = _file_into_project(
+        store, result, [args.get("df1"), args.get("df2")], "comparison"
     )
+    payload = {"ok": True, "path": result, "component": component}
+    if filed:
+        payload["filed_into_project"] = filed
+    return payload, "; ".join([*notes, f"Saved comparison to {result}"])
+
+
+# --------------------------------------------------------------------------- #
+# projects: a folder tree the output actually lives in
+# --------------------------------------------------------------------------- #
+def _date_range(start: str, end: str) -> list[str]:
+    """Every date from ``start`` to ``end`` inclusive, as ``YYYY-MM-DD``.
+
+    Parsed by hand rather than with ``date.fromisoformat`` so a malformed date
+    fails with the model's own string in the message: the loop below reports a
+    bad date against the day it came from, and a bare ``ValueError`` would not
+    say which of eight windows was wrong.
+    """
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", str(start or "").strip())
+    if not match:
+        return []
+    try:
+        first = date(int(match[1]), int(match[2]), int(match[3]))
+    except ValueError:
+        return []
+    last = first
+    end_match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", str(end or start).strip())
+    if end_match:
+        try:
+            last = date(int(end_match[1]), int(end_match[2]), int(end_match[3]))
+        except ValueError:
+            last = first
+    if last < first:
+        first, last = last, first
+    out: list[str] = []
+    current = first
+    # Bounded so a reversed or absurd window cannot spin: the download budget
+    # caps real work anyway, and an unbounded date loop is a hang.
+    while current <= last and len(out) < 366:
+        out.append(current.isoformat())
+        current += timedelta(days=1)
+    return out
+
+
+def _handle_create_project(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    result = store.workspace.create(args.get("name"))
+    if projects.is_error(result):
+        return result, f"create_project failed: {result['error']}"
+    return {
+        "ok": True,
+        "project": result["project"],
+        "path": result["path"],
+        "layout": "projects/<project>/<station>/<date>/",
+        "available": store.workspace.known(),
+        "hint": (
+            "Now use fetch_many or fetch_observatory_data; each result is filed "
+            "under this project automatically, and export_project zips the tree."
+        ),
+    }, result["note"]
+
+
+def _handle_fetch_many(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Fetch one date range for several stations under a single download budget.
+
+    Partial failure is the expected case, not an exception: an observatory that
+    has not published a definitive value for a date will fail, and the run should
+    still be able to answer about the stations that worked. So every window is
+    attempted, each outcome is recorded separately, and only a malformed request
+    returns an error payload.
+    """
+    raw_stations = args.get("stations")
+    if isinstance(raw_stations, str):
+        raw_stations = [raw_stations]
+    stations = [str(s).strip().upper() for s in (raw_stations or []) if str(s).strip()]
+    if not stations:
+        return _error(
+            "missing_stations",
+            "fetch_many needs at least one station code.",
+            received=raw_stations,
+            hint=f"Pass 'stations' as a list of IAGA codes. Known: {STATION_HINT}",
+        ), "fetch_many refused: no station given."
+
+    days = _date_range(args.get("start_date"), args.get("end_date"))
+    if not days:
+        return _error(
+            "invalid_date",
+            "start_date must be YYYY-MM-DD and end_date the same or later.",
+            received={"start_date": args.get("start_date"), "end_date": args.get("end_date")},
+        ), "fetch_many refused: the date range could not be read."
+
+    # One ceiling for the whole call, not one per station. Three stations over ten
+    # days is thirty downloads; a per-station budget would quietly promise ninety.
+    wanted = args.get("max_downloads")
+    budget = MAX_BATCH_DOWNLOADS
+    if isinstance(wanted, int) and not isinstance(wanted, bool) and wanted > 0:
+        budget = min(wanted, MAX_BATCH_DOWNLOADS)
+
+    project = store.workspace.resolve(args.get("project"))
+    data_type = args.get("data_type") or "definitive"
+    samples = args.get("samples_per_day") or "Minute"
+
+    fetched: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    refused: list[dict[str, Any]] = []
+    spent = 0
+
+    for station in stations:
+        for day in days:
+            if spent >= budget:
+                refused.append(
+                    {"station": station, "date": day, "reason": "download budget exhausted"}
+                )
+                continue
+            spent += 1
+            # Counted before the call, not after: a request that hangs or raises
+            # still consumed the attempt, and a budget that only decrements on
+            # success is not a budget.
+            payload, _ = _handle_fetch(
+                {
+                    "station_code": station,
+                    "start_date": day,
+                    "end_date": day,
+                    "data_type": data_type,
+                    "samples_per_day": samples,
+                },
+                store,
+            )
+            if projects.is_error(payload):
+                failed.append(
+                    {
+                        "station": station,
+                        "date": day,
+                        "error": payload.get("error"),
+                        "message": payload.get("message"),
+                    }
+                )
+                continue
+            handle = payload.get("frame_handle") or f"raw:{station.lower()}:{day}"
+            frame = store.get(handle)
+            saved = (
+                store.workspace.save(station, day, frame, kind="raw", project=project)
+                if frame is not None
+                else {}
+            )
+            fetched.append(
+                {
+                    "station": station,
+                    "date": day,
+                    "frame_handle": handle,
+                    "rows": payload.get("rows"),
+                    "publication_state": payload.get("publication_state"),
+                    "offline": bool(payload.get("offline")),
+                    "saved_to_project": saved.get("path"),
+                }
+            )
+
+    if not fetched and not failed and not refused:
+        return _error(
+            "nothing_to_fetch",
+            "fetch_many had no station/day window to download.",
+            stations=stations, dates=days,
+        ), "fetch_many had nothing to do."
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "requested": {"stations": stations, "dates": days, "project": project},
+        "downloaded": spent,
+        "budget": budget,
+        "fetched": fetched,
+        "failed": failed,
+        "refused": refused,
+        "available_handles": store.names(),
+        "frame_handles": [item["frame_handle"] for item in fetched],
+    }
+    # A partial batch is still ok:true -- the stations that worked are usable. The
+    # counts are what let the model say "two of eight" instead of either
+    # overclaiming or reporting total failure.
+    result["summary"] = (
+        f"{len(fetched)} downloaded, {len(failed)} failed, {len(refused)} refused "
+        f"of {spent} attempts (budget {budget})"
+    )
+    return result, f"fetch_many: {result['summary']}."
+
+
+def _handle_export_project(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    name = store.workspace.resolve(args.get("name"))
+    if not name:
+        return _error(
+            "no_project",
+            "No project is open. Call create_project first, or pass 'name'.",
+            available=store.workspace.known(),
+        ), "export_project refused: no project to export."
+    result = projects.export_project(name, root=store.workspace.root)
+    if projects.is_error(result):
+        return result, f"export_project failed: {result['error']}"
+    return {
+        "ok": True,
+        "project": result["project"],
+        "path": result["path"],
+        "filename": Path(result["path"]).name,
+        "size": result["size"],
+        "files": result["files"],
+        "tree": store.workspace.tree_markdown(name),
+    }, f"Exported project {result['project']!r} to {result['path']} ({result['size']})."
+
+
+def _handle_list_projects(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    projects_list = store.workspace.known()
+    details = []
+    for name in projects_list:
+        manifest = projects.read_project_manifest(name, root=store.workspace.root)
+        if projects.is_error(manifest):
+            details.append({"name": name, "manifest_available": False})
+        else:
+            details.append({
+                "name": name,
+                "manifest_available": True,
+                "stations": manifest.get("stations", []),
+                "dates": manifest.get("dates", []),
+                "created_at": manifest.get("created_at"),
+                "updated_at": manifest.get("updated_at"),
+            })
+    return {
+        "ok": True,
+        "projects": projects_list,
+        "details": details,
+        "current": store.workspace.project,
+    }, f"list_projects: {len(projects_list)} projects found."
+
 
 
 HANDLERS: dict[str, Handler] = {
     "fetch_observatory_data": _handle_fetch,
+    "create_project": _handle_create_project,
+    "list_projects": _handle_list_projects,
+    "fetch_many": _handle_fetch_many,
+    "export_project": _handle_export_project,
     "calculate_derived_components": _handle_derive,
     "get_statistics": _handle_stats,
     "detect_anomalies": _handle_anomalies,
@@ -2175,6 +2558,11 @@ def run_agent(
             for key in ("message", "received", "reason", "hint"):
                 if isinstance(payload, dict) and payload.get(key) is not None:
                     entry[key] = payload[key]
+            # The project a project tool acted on. Without this the log says only
+            # that a ZIP exists, and an outside checker has no way to find the tree
+            # the run claims to have written.
+            if isinstance(payload, dict) and isinstance(payload.get("project"), str):
+                entry["project"] = payload["project"]
             # Record the handle the tool advertised. It is the only way an
             # outside checker can confirm the name the model is told to copy is
             # the name the store really holds.

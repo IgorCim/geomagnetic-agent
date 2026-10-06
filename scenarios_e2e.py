@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import agent_core as ac
+import project_store
 
 
 @dataclass
@@ -75,6 +76,11 @@ class Scenario:
     # a single collapsed curve, and a prose check passes that run.
     expect_traces: int = 0
     expect_trace_dates: list[str] = field(default_factory=list)
+    # A project scenario must leave a real tree behind. These paths are checked
+    # against the project on disk, not against anything the answer claims, so a
+    # run that says "the project is ready" without writing anything fails.
+    expect_project_paths: list[str] = field(default_factory=list)
+    expect_zip: bool = False
 
 
 SCENARIOS: list[Scenario] = [
@@ -108,6 +114,10 @@ SCENARIOS: list[Scenario] = [
         distinct_args=["df1", "df2"],
         expect_traces=2,
         expect_trace_dates=["2024-09-10", "2024-09-11"],
+        text_matches=[
+            r"10\s*сентября|2024-09-10",
+            r"11\s*сентября|2024-09-11",
+        ],
         explanation=(
             "the field failure: the second fetch used to overwrite the first, so "
             "the comparison had nothing to compare"
@@ -146,6 +156,10 @@ SCENARIOS: list[Scenario] = [
         require_plot_tally=True,
         expect_traces=2,
         expect_trace_dates=["2024-09-10", "2024-09-11"],
+        text_matches=[
+            r"10\s*сентября|2024-09-10",
+            r"11\s*сентября|2024-09-11",
+        ],
         explanation=(
             "the reported failure: the model shouts every handle, e.g. "
             "'RAW:IRT:2024-09-10'. Casing must not change which frame is used, and "
@@ -250,6 +264,58 @@ SCENARIOS: list[Scenario] = [
             "two days, each needing its own range, then a difference. The "
             "second fetch must not overwrite the first, or the two ranges come "
             "out identical"
+        ),
+    ),
+    Scenario(
+        name="project_batch",
+        query=(
+            "Собери проект «Ноярская буря»: скачай данные обсерваторий IRT и BOU "
+            "за 10 и 11 сентября 2024 года одним пакетным запросом, построй по "
+            "одному графику H за каждый день и выложи всё в архив."
+        ),
+        must_call=[
+            "create_project",
+            "fetch_many",
+            "plot_components",
+        ],
+        min_plots=2,
+        require_plot_tally=True,
+        # One batch call for two stations over two days: four windows in a single
+        # tool call. If the model falls back to fetch_observatory_data per station
+        # the run is slower and the project ends up half-written, so the shape of
+        # the call is part of what is being tested.
+        expect_project_paths=[
+            "irt/2024-09-10",
+            "irt/2024-09-11",
+            "bou/2024-09-10",
+            "bou/2024-09-11",
+        ],
+        expect_zip=True,
+        explanation=(
+            "Phase 2: two stations over two days in one fetch_many call, four "
+            "day-folders on disk, and a ZIP containing the tree"
+        ),
+    ),
+    Scenario(
+        name="three_days_clean",
+        query=(
+            "Построй графики горизонтальной составляющей H обсерватории IRT за "
+            "10, 11 и 12 сентября 2024 года — три отдельных графика, по одному "
+            "на каждый день."
+        ),
+        must_call=[
+            "fetch_observatory_data",
+            "fetch_observatory_data",
+            "fetch_observatory_data",
+            "plot_components",
+        ],
+        min_plots=3,
+        require_plot_tally=True,
+        text_contains=["Построено графиков: 3"],
+        explanation=(
+            "the counter and the run disagree: three charts and one 'Построено "
+            "графиков' line that says something else. The tally has to be exact, "
+            "because it is what the user reconciles against the file list"
         ),
     ),
 ]
@@ -400,11 +466,59 @@ def unrecovered_failures(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _check_project(
+    scenario: Scenario, result: dict[str, Any], log: list[dict[str, Any]]
+) -> list[str]:
+    """Did the run leave a real project behind?
+
+    Verified against the folders on disk, named by the project the tools reported.
+    An answer that says the archive is ready is not evidence of anything: the tree
+    either has ``bou/2024-09-11/`` in it or it does not.
+    """
+    if not scenario.expect_project_paths and not scenario.expect_zip:
+        return []
+
+    problems: list[str] = []
+    names = [
+        str(entry["project"])
+        for entry in log
+        if entry["tool"] == "create_project" and entry.get("ok") and entry.get("project")
+    ]
+    if not names:
+        return ["create_project reported no project name"]
+    project = names[0]
+
+    tree = {
+        row["path"]
+        for row in project_store.project_tree(project)
+    }
+    for wanted in scenario.expect_project_paths:
+        if f"{wanted}/" not in tree:
+            problems.append(
+                f"the project is missing {wanted}/ -- it holds {sorted(tree) or 'nothing'}"
+            )
+
+    if scenario.expect_zip:
+        exports = [
+            entry for entry in log
+            if entry["tool"] == "export_project" and entry.get("ok")
+        ]
+        if not exports:
+            problems.append("export_project was never called successfully")
+        else:
+            archive = exports[-1].get("path") or ""
+            if not archive or not Path(archive).is_file():
+                problems.append(f"export_project named a ZIP that is not there: {archive!r}")
+
+    return problems
+
+
 def check(scenario: Scenario, result: dict[str, Any]) -> list[str]:
     """Return a list of problems; empty means the scenario passed."""
     problems: list[str] = []
     log = result["tool_calls"]
     calls = [e["tool"] for e in log]
+    problems.extend(_check_project(scenario, result, log))
 
     # 1. the required calls happened, in order. A missing call does not stop the
     # audit: the remaining checks still run, so one run reports every problem

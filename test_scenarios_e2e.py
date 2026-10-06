@@ -190,7 +190,7 @@ def test_dry_run_lists_every_scenario():
     names = {s.name for s in e2e.SCENARIOS}
     assert names == {
         "one_day", "compare", "medians", "compare_uppercase", "three_days",
-        "median_F", "range_F", "compare_range_F",
+        "median_F", "range_F", "compare_range_F", "project_batch", "three_days_clean",
     }
     for scenario in e2e.SCENARIOS:
         assert scenario.query.strip()

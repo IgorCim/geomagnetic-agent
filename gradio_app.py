@@ -64,6 +64,7 @@ if str(_PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(_PROJECT_DIR))
 
 import agent_core as core  # noqa: E402  (import after the sys.path fix)
+import project_store  # noqa: E402
 
 try:
     import geomag_plotter as plotter
@@ -670,6 +671,92 @@ def make_chat_handler(brain: Any):
 # --------------------------------------------------------------------------- #
 # UI
 # --------------------------------------------------------------------------- #
+def _project_choices() -> list[str]:
+    """Project names for the selector, newest folder last."""
+    try:
+        return project_store.list_projects()
+    except OSError:
+        return []
+
+
+def _project_tree_frame(name: str) -> Any:
+    """A read-only table of one project's files.
+
+    ``interactive=False`` is the whole point: the panel is a view of what the
+    agent wrote, and a user who can edit a manifest of data-version and commit
+    hashes is a user who can make the archive lie about what it contains.
+    """
+    import pandas as pd
+
+    rows = project_store.project_tree(name)
+    if not rows:
+        return pd.DataFrame(columns=["Файл", "Размер"])
+    return pd.DataFrame(
+        [{"Файл": r["path"], "Размер": r["size"]} for r in rows]
+    )
+
+
+def _project_summary(name: str) -> str:
+    """One line about a project: how much data, from which commit."""
+    if not name:
+        return "Проект не выбран."
+    manifests = project_store.iter_manifests(name)
+    if not manifests:
+        return f"**{name}** — пусто."
+    stations = sorted({m.get("station", "?") for m in manifests if m.get("station")})
+    dates = sorted({m.get("date", "?") for m in manifests if m.get("date")})
+    commits = sorted({m.get("agent_commit") or "?" for m in manifests})
+    rows = sum(int(m.get("rows") or 0) for m in manifests)
+    return (
+        f"**{name}** — {len(manifests)} наборов, {rows} строк. "
+        f"Станции: {', '.join(stations)}. Дни: {len(dates)} "
+        f"({dates[0]} … {dates[-1]}). Код: {commits[0][:8] if commits[0] != '?' else '?'}."
+    )
+
+
+def _refresh_projects(selected: str | None = None):
+    """Reload the selector, keeping the current choice if it still exists."""
+    choices = _project_choices()
+    value = selected if selected in choices else (choices[0] if choices else None)
+    return (
+        gr.update(choices=choices, value=value)
+        if hasattr(gr, "update")
+        else {"choices": choices, "value": value},
+        _project_tree_frame(value) if value else _project_tree_frame(""),
+        _project_summary(value),
+        gr.update(visible=False) if hasattr(gr, "update") else {"visible": False},
+    )
+
+
+def _make_zip(name: str) -> Any:
+    """Build the ZIP on demand rather than on every keystroke."""
+    if not name:
+        return gr.update(visible=False) if hasattr(gr, "update") else {"visible": False}
+    try:
+        result = project_store.export_project(name)
+    except OSError as exc:
+        return gr.Info(f"Не удалось собрать архив: {exc}")
+    if project_store.is_error(result):
+        return gr.Info(result["message"])
+    return result["path"]
+
+
+def app_download_zip(project_state, tab_state):
+    name = (project_state or {}).get('project')
+    if not name:
+        return project_state, gr.update(value=None, label='??? ??????? ??? ??????????')
+    try:
+        result = project_store.export_project(name)
+    except Exception as exc:
+        return project_state, gr.update(value=None, label='?????? ????????: ' + str(exc))
+    if project_store.is_error(result):
+        return project_state, gr.update(value=None, label='?????? ????????: ' + str(result.get('error')))
+    path = Path(result['path'])
+    if not path.exists():
+        return project_state, gr.update(value=None, label='ZIP ?? ??????')
+    return project_state, gr.update(value=str(path), label='??????? ' + path.name + ' (' + str(result.get('size')) + ')', visible=True)
+
+
 def build_demo(brain: Any) -> gr.Blocks:
     """Assemble the interface around an already-loaded brain."""
     chat_and_plot = make_chat_handler(brain)
@@ -724,6 +811,34 @@ def build_demo(brain: Any) -> gr.Blocks:
                 "и с какими аргументами."
             )
 
+        with gr.Accordion("Проекты", open=False):
+            gr.Markdown(
+                "Проект группирует данные по схеме `<станция>/<дата>/`, "
+                "рядом с каждым набором лежит `manifest.json` — версия данных, "
+                "время загрузки и коммит агента."
+            )
+            with gr.Row():
+                project_pick = gr.Dropdown(
+                    choices=_project_choices(),
+                    label="Проект",
+                    interactive=True,
+                    scale=4,
+                )
+                refresh = gr.Button("Обновить", scale=1)
+            project_info = gr.Markdown("Проект не выбран.")
+            # Read-only on purpose: this is a view of what the agent wrote.
+            project_files = gr.Dataframe(
+                headers=["Файл", "Размер"],
+                label="Файлы проекта",
+                interactive=False,
+                wrap=True,
+            )
+            with gr.Row():
+                build_zip = gr.Button("Собрать ZIP", scale=1)
+            download = gr.DownloadButton(
+                label="Скачать проект (ZIP)", visible=False, scale=1
+            )
+
         plots_state = gr.State([])
 
         def submit(text, history, state):
@@ -742,6 +857,24 @@ def build_demo(brain: Any) -> gr.Blocks:
         ]
         send.click(submit, inputs=[textbox, chatbot, plots_state], outputs=outputs)
         textbox.submit(submit, inputs=[textbox, chatbot, plots_state], outputs=outputs)
+
+        # Projects: selecting one reloads its tree; the ZIP is built on demand so
+        # that opening the accordion never walks the whole tree.
+        project_outputs = [project_pick, project_files, project_info, download]
+        refresh.click(
+            lambda: _refresh_projects(),
+            outputs=project_outputs,
+        )
+        project_pick.change(
+            lambda name: _refresh_projects(name),
+            inputs=[project_pick],
+            outputs=project_outputs,
+        )
+        build_zip.click(
+            _make_zip,
+            inputs=[project_pick],
+            outputs=[download],
+        )
 
     return demo
 
@@ -770,3 +903,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    btn_download.click(
+        fn=app_download_zip,
+        inputs=[project_state, tab_state],
+        outputs=[project_state, downloads_state],
+    )

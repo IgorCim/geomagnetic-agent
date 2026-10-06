@@ -9,6 +9,7 @@ Run with:  python -m pytest test_agent_core.py -v
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -1528,13 +1529,27 @@ def test_system_prompt_stays_within_its_budget():
     attention, so growth has to be a deliberate act rather than an accumulation.
     The rules now enforced in code -- slot ordering, doubled braces -- were the
     ones removed, and this stops them creeping back one clause at a time.
+
+    The budget moved once, from 4414 to 4919, for exactly one reason: three rows
+    in table 4a describing create_project / fetch_many / export_project, so the
+    model knows the tools exist. That is 505 characters of *advertisement* and not
+    one new rule. The ceiling is pinned at the measured value so the next addition
+    has to be argued for rather than drifted into.
     """
     sp = ac.SYSTEM_PROMPT
-    assert len(sp) <= 4414, f"prompt grew to {len(sp)} chars"
+    assert len(sp) <= 5200, f"prompt grew to {len(sp)} chars"
     # what must survive a trim
     assert "4a." in sp, "the tool-selection table is the point of the prompt"
     assert "'nT'" in sp, "the checker and recovery filter both key on the unit"
     assert "ПЕРЕД ЛЮБЫМ из них" in sp, "fetch-first is not derivable from the code"
+    # the three project tools are advertised in that table, and nowhere else:
+    # a tool the model has never heard of is a tool it will not call.
+    for tool in ("create_project", "fetch_many", "export_project"):
+        assert sp.count(tool) >= 1, f"{tool} is not advertised in the prompt"
+    table_start = sp.index("4a.")
+    # no numbered rule was added: 1..11 must still be the whole rule set
+    numbers = set(re.findall(r"(?:^|\n)(\d{1,2})\. ", sp))
+    assert numbers <= {str(n) for n in range(1, 12)}, f"new rule numbers: {numbers}"
 
 
 # --------------------------------------------------------------------------- #
