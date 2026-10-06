@@ -56,6 +56,9 @@ import geomag_plotter as plotter
 import intermagnet_loader as loader
 import project_store as projects
 
+# Global persistent workspace across run_agent() invocations
+_WORKSPACE = projects.Workspace()
+
 #: Bumped whenever the tool-call parser changes shape. ``colab_run.ipynb``
 #: prints this next to ``git rev-parse HEAD``; a notebook that shows an older
 #: value is running a cached copy of this module, not this file.
@@ -1415,7 +1418,7 @@ class FrameStore:
         # every tool keeps the same (args, store) signature: a second channel
         # into run_agent would have to be threaded past every existing handler and
         # every test that calls one directly.
-        self.workspace = workspace if workspace is not None else projects.Workspace()
+        self.workspace = workspace if workspace is not None else _WORKSPACE
 
     @staticmethod
     def _normalise(handle: str) -> str:
