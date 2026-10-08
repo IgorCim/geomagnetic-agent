@@ -454,3 +454,16 @@ def test_offsets_round_trip_through_apply(frame):
     np.testing.assert_allclose(
         restored["H_offset"].to_numpy(), frame["H"].to_numpy(), rtol=1e-12
     )
+def test_magnetic_local_time_basic():
+    from geomag_coords import magnetic_local_time
+    res = magnetic_local_time(-13.08, '2024-09-10T12:00:00Z')
+    assert res['ok']
+    assert 0 <= res['mlt_hours'] < 24
+    assert res['mlt_hm']
+
+
+def test_group_by_mlt():
+    from geomag_coords import group_by_mlt
+    res = group_by_mlt([('IRT', 5.84), ('API', 11.55)], bin_hours=1)
+    assert res['ok']
+    assert res['bins']

@@ -31,6 +31,8 @@ later, so they are written next to the data rather than remembered.
 from __future__ import annotations
 
 import json
+import geomag_coords as gcoords
+import intermagnet_loader as iloader
 import subprocess
 import zipfile
 from datetime import datetime, timezone
@@ -279,6 +281,22 @@ def artifact_dir(
     return project_path / station_slug / day_slug
 
 
+def _geomag_for_station(station_code: str) -> dict | None:
+    try:
+        code = str(station_code or '').strip().upper()
+        regs = iloader.get_available_stations()
+        rec = regs.get(code)
+        if not rec: return None
+        if isinstance(rec, tuple) and len(rec) >= 3:
+            _name, lat, lon = rec[0], rec[1], rec[2]
+        else: return None
+        res = gcoords.geographic_to_geomagnetic(float(lat), float(lon))
+        if isinstance(res, dict) and res.get('ok'):
+            return {'geo_lat': res.get('geomag_lat'), 'geo_lon': res.get('geomag_lon'), 'model': res.get('model', 'tilted_dipole')}
+    except Exception:
+        return None
+    return None
+
 def save_artifact(
     project: str,
     station: str,
@@ -329,6 +347,7 @@ def save_artifact(
         # When it was written, and by which commit -- the reproduction pair.
         "downloaded_at": downloaded_at or attrs.get("downloaded_at") or utc_now(),
         "agent_commit": agent_commit(),
+        "geomagnetic_coords": _geomag_for_station(station),
         "written_at": utc_now(),
     }
     write_manifest(target / _MANIFEST, payload)

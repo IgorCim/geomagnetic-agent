@@ -1626,3 +1626,74 @@ def test_plot_comparison_auto_derives_both_shouted_handles(tmp_path, monkeypatch
     assert not ac.is_error(payload), payload
     assert note.count("auto-derived:") == 2, note
     assert Path(payload["path"]).is_file()
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: geomagnetic coordinates and MLT
+# --------------------------------------------------------------------------- #
+def test_geomag_coords_handler_returns_dipole_coordinates():
+    """The handler answers with tilted-dipole coordinates and names its model."""
+    payload, note = ac._handle_get_station_geomagnetic_coords(
+        {"station_code": "IRT"}, ac.FrameStore()
+    )
+    assert payload["ok"], payload
+    assert payload["model"] == "tilted_dipole"
+    assert -90 <= payload["geo_lat"] <= 90
+    assert -180 <= payload["geo_lon"] <= 180
+
+
+def test_geomag_coords_handler_reports_station_not_found_without_raising():
+    """An unknown IAGA code is an error payload, never an exception."""
+    payload, note = ac._handle_get_station_geomagnetic_coords(
+        {"station_code": "ZZZ"}, ac.FrameStore()
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "station_not_found"
+
+
+def test_calculate_mlt_is_inside_the_day():
+    """MLT is a time of day: 0 <= mlt < 24, with a human HH:MM companion."""
+    payload, note = ac._handle_calculate_mlt(
+        {"station_code": "IRT", "timestamp": "2024-09-10T12:00:00Z"},
+        ac.FrameStore(),
+    )
+    assert payload["ok"], payload
+    assert 0 <= payload["mlt_hours"] < 24
+    assert re.fullmatch(r"[0-2][0-9]:[0-5][0-9]", payload["mlt_hm"])
+    assert payload["model"] == "tilted_dipole"
+
+
+def test_calculate_mlt_propagates_station_not_found():
+    """The MLT tool must not swallow a registry miss."""
+    payload, note = ac._handle_calculate_mlt(
+        {"station_code": "ZZZ", "timestamp": "2024-09-10T12:00:00Z"},
+        ac.FrameStore(),
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "station_not_found"
+
+
+def test_group_stations_by_mlt_bins_every_station():
+    """All three verification stations land in exactly one bin each."""
+    payload, note = ac._handle_group_stations_by_mlt(
+        {
+            "stations": ["IRT", "API", "BSL"],
+            "timestamp": "2024-09-10T12:00:00Z",
+        },
+        ac.FrameStore(),
+    )
+    assert payload["ok"], payload
+    binned = [code for codes in payload["bins"].values() for code in codes]
+    assert sorted(binned) == ["API", "BSL", "IRT"]
+    for entry in payload["stations_mlt"]:
+        assert 0 <= entry["mlt_hours"] < 24
+
+
+def test_group_stations_by_mlt_skips_unknown_stations():
+    """A bad code in the list must not abort the good ones."""
+    payload, note = ac._handle_group_stations_by_mlt(
+        {"stations": ["IRT", "ZZZ"], "timestamp": "2024-09-10T12:00:00Z"},
+        ac.FrameStore(),
+    )
+    assert payload["ok"], payload
+    assert [c for codes in payload["bins"].values() for c in codes] == ["IRT"]

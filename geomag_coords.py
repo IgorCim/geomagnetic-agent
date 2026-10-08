@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 import pandas as pd
@@ -580,3 +581,122 @@ def apply_offsets(
     target = new_column or f"{column}_offset"
     out[target] = out[column].astype("float64") + value
     return out
+
+def magnetic_local_time(
+    geomag_lon: float,
+    timestamp: str | datetime | None = None,
+    *,
+    ut_hours: float | None = None,
+) -> dict[str, Any] | float:
+    """Calculate Magnetic Local Time (MLT) in hours.
+
+    MLT is defined such that 12:00 MLT corresponds to local noon in magnetic
+    coordinates (Sun at magnetic meridian). A common dipole approximation is:
+    MLT = (magnetic_longitude_deg / 15.0) + UT_hours + 12.0, normalized to [0,24).
+
+    Args:
+        geomag_lon: Geomagnetic longitude in degrees
+        timestamp: ISO timestamp (UTC). If None, uses current UTC
+        ut_hours: Override UT hours directly
+
+    Returns:
+        dict with mlt_hours, mlt_hm, model, normalized to 0..24
+    """
+    try:
+        geom_lon = _as_float(geomag_lon, 'geomag_lon')
+    except Exception as exc:
+        return _error('invalid_input', str(exc))
+
+    _ut_day: int | None = None
+    if ut_hours is not None:
+        try:
+            ut = float(ut_hours) % 24.0
+        except Exception as exc:
+            return _error('invalid_input', str(exc))
+    else:
+        if timestamp is None:
+            dt = datetime.now(timezone.utc)
+        elif isinstance(timestamp, datetime):
+            dt = timestamp.astimezone(timezone.utc) if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)
+        else:
+            s = str(timestamp)
+            # Try common formats
+            for fmt in ('%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+                try:
+                    dt = datetime.strptime(s.replace('Z', ''), fmt.replace('Z', ''))
+                    dt = dt.replace(tzinfo=timezone.utc)
+                    break
+                except Exception:
+                    continue
+            else:
+                try:
+                    dt = datetime.fromisoformat(s.replace('Z', '+00:00')).astimezone(timezone.utc)
+                except Exception as exc:
+                    return _error('invalid_input', f'Cannot parse timestamp {timestamp!r}: {exc}')
+
+        ut = (dt.hour + dt.minute / 60.0 + dt.second / 3600.0 + dt.microsecond / 3_600_000_000.0) % 24.0
+        _ut_day = dt.timetuple().tm_yday
+
+    # MLT is 12 h exactly when the station is on the subsolar geomagnetic
+    # meridian, so the subsolar point is converted with the same tilted dipole
+    # and the station's geomagnetic longitude is measured from it:
+    #   MLT = 12 + (geomag_lon - subsolar_geomag_lon) / 15
+    # Subsolar geographic longitude is 15 deg per hour from 12 UT eastward.
+    # Solar declination uses a one-term approximation; both errors are small
+    # compared with the tilted-dipole approximation itself.
+    if _ut_day is None:
+        decl = 0.0
+    else:
+        decl = -23.44 * math.cos(2.0 * math.pi * (_ut_day + 10.0) / 365.25)
+    subsolar_geo_lon = (12.0 - ut) * 15.0
+    subsolar = geographic_to_geomagnetic(decl, subsolar_geo_lon)
+    if isinstance(subsolar, dict) and subsolar.get('ok'):
+        subsolar_geomag_lon = subsolar['geomag_lon']
+    else:
+        subsolar_geomag_lon = 0.0
+    mlt = (12.0 + (geom_lon - subsolar_geomag_lon) / 15.0) % 24.0
+    h = int(mlt)
+    m = int((mlt - h) * 60.0 + 0.5) % 60  # round
+    if m == 60:
+        h = (h + 1) % 24
+        m = 0
+    hm = f'{h:02d}:{m:02d}'
+    return {
+        'ok': True,
+        'mlt_hours': float(round(mlt, 4)),
+        'mlt_hm': hm,
+        'ut_hours': float(round(ut, 4)),
+        'geomag_lon': float(geom_lon),
+        'model': 'tilted_dipole',
+    }
+
+
+def group_by_mlt(
+    stations_mlt: list[tuple[str, float]],
+    bin_hours: int = 1,
+) -> dict[str, Any]:
+    """Group stations by MLT bins."""
+    try:
+        bin_h = max(1, int(bin_hours))
+    except Exception:
+        bin_h = 1
+    bins = {}
+    details = []
+    for code, mlt_h in stations_mlt:
+        mlt_h = float(mlt_h) % 24.0
+        b = int(mlt_h // bin_h) * bin_h
+        bname = f'{b % 24:02d}-{(b + bin_h) % 24:02d}' if (b + bin_h) != 24 else f'{b:02d}-00'
+        bins.setdefault(bname, []).append(str(code).upper())
+        details.append({'code': str(code).upper(), 'mlt_hours': round(mlt_h, 4)})
+    # sort bins
+    def _k(x):
+        try:
+            return int(x.split('-')[0])
+        except:
+            return 0
+    return {
+        'ok': True,
+        'bin_hours': bin_h,
+        'bins': dict(sorted(bins.items(), key=lambda kv: _k(kv[0]))),
+        'stations_mlt': details,
+    }

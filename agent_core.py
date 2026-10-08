@@ -55,6 +55,7 @@ import geomag_math as geomath
 import geomag_plotter as plotter
 import intermagnet_loader as loader
 import project_store as projects
+import geomag_coords as gcoords
 
 # Global persistent workspace across run_agent() invocations
 _WORKSPACE = projects.Workspace()
@@ -142,6 +143,7 @@ SYSTEM_PROMPT = (
     "calculate_derived_components, потом get_statistics / detect_anomalies, "
     "потом plot_components / plot_comparison. Не перескакивай шаги.\n"
 "4a. ВЫБОР ИНСТРУМЕНТА — строго по этой таблице:\n"
+    "    - get_station_geomagnetic_coords(station_code), calculate_mlt(station_code, timestamp), group_stations_by_mlt(stations, timestamp) - geomag coords and MLT.\n"
     "    - list_projects() - ?????? ???? ????????.\n" +
     "    • X, Y, Z и F — это ГОТОВЫЕ колонки в сырых данных. Медиана, среднее, "
     "минимум, максимум, размах, стандартное отклонение: вызывай get_statistics "
@@ -647,6 +649,51 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "required": ["df1", "df2", "component"],
             },
         },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_station_geomagnetic_coords",
+            "description": "Geomagnetic coordinates (geo_lat, geo_lon) for a station via tilted dipole.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "station_code": {"type": "string", "description": "IAGA station code"}
+                },
+                "required": ["station_code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_mlt",
+            "description": "Magnetic Local Time (MLT) for a station at a UTC timestamp; mlt_hours in [0,24).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "station_code": {"type": "string", "description": "IAGA station code"},
+                    "timestamp": {"type": "string", "description": "ISO 8601 UTC timestamp"}
+                },
+                "required": ["station_code", "timestamp"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "group_stations_by_mlt",
+            "description": "Group stations into MLT bins at a UTC timestamp.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stations": {"type": "array", "items": {"type": "string"}, "description": "IAGA station codes"},
+                    "timestamp": {"type": "string", "description": "ISO 8601 UTC timestamp"},
+                    "bin_hours": {"type": "integer", "description": "Bin width in hours (default 1)"}
+                },
+                "required": ["stations", "timestamp"]
+            }
+        }
     },
 ]
 
@@ -2324,6 +2371,78 @@ def _handle_list_projects(args: dict[str, Any], store: FrameStore) -> tuple[Any,
 
 
 
+def _handle_get_station_geomagnetic_coords(args, store):
+    code = str(args.get('station_code') or '').strip().upper()
+    if not code:
+        return _error('invalid_input', 'station_code is required'), 'station_code is required'
+    try:
+        from intermagnet_loader import get_available_stations
+        rec = get_available_stations().get(code)
+    except Exception as exc:
+        return _error('registry_error', str(exc)), 'registry error'
+    if not rec:
+        return (
+            _error(
+                'station_not_found',
+                f'Station {code} is not in the INTERMAGNET registry',
+                hint='Check the IAGA code',
+            ),
+            f'station_not_found: {code}',
+        )
+    if not (isinstance(rec, tuple) and len(rec) >= 3):
+        return _error('registry_error', 'unexpected registry format'), 'registry error'
+    _name, lat, lon = rec[0], rec[1], rec[2]
+    try:
+        res = gcoords.geographic_to_geomagnetic(float(lat), float(lon))
+    except Exception as exc:
+        return _error('invalid_input', str(exc)), str(exc)
+    if isinstance(res, dict) and res.get('ok') is False:
+        return res, 'conversion failed'
+    out = dict(res)
+    out['station_code'] = code
+    out['geo_lat'] = out.get('geomag_lat')
+    out['geo_lon'] = out.get('geomag_lon')
+    return out, f'geomagnetic coordinates for {code}'
+
+
+def _handle_calculate_mlt(args, store):
+    code = str(args.get('station_code') or '').strip().upper()
+    ts = args.get('timestamp')
+    if not code or not ts:
+        return _error('invalid_input', 'station_code and timestamp are required'), 'missing arguments'
+    coords, _ = _handle_get_station_geomagnetic_coords({'station_code': code}, store)
+    if isinstance(coords, dict) and coords.get('error'):
+        return coords, coords.get('message')
+    res = gcoords.magnetic_local_time(float(coords['geo_lon']), str(ts))
+    if isinstance(res, dict) and res.get('ok') is False:
+        return res, 'MLT calculation failed'
+    return res, f'MLT for {code} at {ts}: {res.get("mlt_hours")} h'
+
+
+def _handle_group_stations_by_mlt(args, store):
+    stations = args.get('stations') or []
+    ts = args.get('timestamp')
+    if not stations or not ts:
+        return _error('invalid_input', 'stations and timestamp are required'), 'missing arguments'
+    bin_hours = args.get('bin_hours') or 1
+    try:
+        bin_hours = int(bin_hours)
+    except Exception:
+        return _error('invalid_input', 'bin_hours must be an integer'), 'bad bin_hours'
+    items = []
+    for sc in stations:
+        coords, _ = _handle_get_station_geomagnetic_coords({'station_code': str(sc)}, store)
+        if isinstance(coords, dict) and coords.get('error'):
+            continue  # a missing station must not abort the group
+        mlt = gcoords.magnetic_local_time(float(coords['geo_lon']), str(ts))
+        if isinstance(mlt, dict) and mlt.get('mlt_hours') is not None:
+            items.append((str(sc).upper(), mlt['mlt_hours']))
+    res = gcoords.group_by_mlt(items, bin_hours)
+    if isinstance(res, dict) and res.get('ok') is False:
+        return res, 'grouping failed'
+    return res, f'grouped {len(items)} stations by MLT'
+
+
 HANDLERS: dict[str, Handler] = {
     "fetch_observatory_data": _handle_fetch,
     "create_project": _handle_create_project,
@@ -2338,6 +2457,9 @@ HANDLERS: dict[str, Handler] = {
     "evaluate_custom_formula": _handle_custom_formula,
     "plot_components": _handle_plot_components,
     "plot_comparison": _handle_plot_comparison,
+    "get_station_geomagnetic_coords": _handle_get_station_geomagnetic_coords,
+    "calculate_mlt": _handle_calculate_mlt,
+    "group_stations_by_mlt": _handle_group_stations_by_mlt,
 }
 
 
