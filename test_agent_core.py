@@ -1914,6 +1914,30 @@ def test_llm_planner_falls_back_to_deterministic_on_bad_json():
     ]
 
 
+def test_llm_planner_verbose_reports_raw_output_and_fallback(capsys):
+    """verbose=True must print the raw model answer and the fallback reason."""
+    from agent_planner import LLMPlanner
+
+    brain = _PlanChatBrain("«годно» — и больше ничего годного")
+    state = LLMPlanner(brain).plan(
+        "Построй графики для 2 станций", verbose=True
+    )
+    out = capsys.readouterr().out
+    assert "LLM-ПЛАНИРОВЩИК: Сырой ответ модели" in out
+    assert "Ошибка парсинга" in out
+    assert len(state.tasks) == 2, "fallback must still produce the deterministic plan"
+
+
+def test_llm_planner_verbose_reports_task_count(capsys):
+    """On a good plan verbose must print the extracted JSON and the count."""
+    from agent_planner import LLMPlanner
+
+    LLMPlanner(_PlanChatBrain(PLAN_JSON)).plan("10 событий", verbose=True)
+    out = capsys.readouterr().out
+    assert "Извлечённый JSON" in out
+    assert "✅ Распарсено 3 подзадач" in out
+
+
 def test_llm_planner_complex_query_offline_mock():
     """A >10-task plan from a mocked model arrives as usable TaskSteps."""
     from agent_planner import LLMPlanner

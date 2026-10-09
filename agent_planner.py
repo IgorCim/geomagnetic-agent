@@ -117,6 +117,11 @@ class Planner:
 class LLMPlanner:
     """Planner that asks the model to split a complex request into subtasks."""
 
+    # A 260-chart job needs a big output budget: the default LlamaBrain cap is
+    # MAX_TOKENS=1200, which fits ~20 tasks, not hundreds.
+    PLAN_MAX_TOKENS = 4096
+    PLAN_TEMPERATURE = 0.1
+
     PLANNER_PROMPT = (
         "Ты — планировщик задач для геомагнитного агента.\n"
         "Разбей запрос пользователя на конкретные подзадачи.\n\n"
@@ -133,27 +138,56 @@ class LLMPlanner:
         "3. Для каждой станции и каждой даты — отдельные подзадачи.\n"
         "4. Если нужно создать проект — добавь create_project первой.\n"
         "5. Если нужен экспорт — добавь export_project последней.\n"
-        "6. Ответь ТОЛЬКО одним JSON-объектом, без пояснений и markdown."
+        "6. Ответь ТОЛЬКО одним JSON-объектом, без пояснений и markdown.\n"
+        "7. НЕ объединяй станции или даты в одной подзадаче. Мелко дроби: "
+        "одна станция + одна дата + один инструмент на каждую подзадачу. "
+        "Подзадач может быть сотни — это нормально."
     )
 
     def __init__(self, brain: Any):
         self.brain = brain
 
-    def plan(self, query: str) -> SessionState:
-        """Ask the model for the plan; fall back to :class:`Planner` on garbage."""
+    def plan(self, query: str, verbose: bool = False) -> SessionState:
+        """Ask the model for the plan; fall back to :class:`Planner` on garbage.
+
+        ``verbose`` prints the raw model output and the extracted JSON, so a
+        live run can be diagnosed when the split is suspicious (e.g. exactly
+        one task where hundreds were expected).
+        """
         prompt = (
             f"{self.PLANNER_PROMPT}\n\nЗапрос пользователя: {query}\n\nОтвет (JSON):"
         )
-        tasks = self._parse_json(self._ask(prompt))
-        fallback = Planner()
+        raw = self._ask(prompt)
 
+        if verbose:
+            print("=" * 70)
+            print("🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели")
+            print("=" * 70)
+            print((raw or "<пусто>")[:1000])
+            print("=" * 70)
+
+        extracted = self._extract_json(raw)
+        if verbose:
+            print("📋 Извлечённый JSON:")
+            print((extracted or "<нет>")[:500])
+            print("=" * 70)
+
+        tasks = self._parse_json(raw)
         if tasks is None:
-            return fallback.plan(query)
+            if verbose:
+                print("❌ Ошибка парсинга — Fallback на детерминированный Planner()")
+            return Planner().plan(query)
 
         state = SessionState(original_query=query)
         for index, item in enumerate(tasks, start=1):
             state.add_task(self._coerce_task(item, index))
-        return state if state.tasks else fallback.plan(query)
+        if not state.tasks:
+            if verbose:
+                print("❌ Пустой список задач — Fallback на детерминированный Planner()")
+            return Planner().plan(query)
+        if verbose:
+            print(f"✅ Распарсено {len(state.tasks)} подзадач")
+        return state
 
     def _ask(self, prompt: str) -> str:
         brain = self.brain
@@ -162,7 +196,9 @@ class LLMPlanner:
         if hasattr(brain, "create_completion"):
             try:
                 response = brain.create_completion(
-                    prompt=prompt, max_tokens=4096, temperature=0.1, stop=["}"]
+                    prompt=prompt,
+                    max_tokens=self.PLAN_MAX_TOKENS,
+                    temperature=self.PLAN_TEMPERATURE,
                 )
             except Exception:
                 return ""
@@ -171,8 +207,16 @@ class LLMPlanner:
                 return str(choices[0].get("text") or choices[0].get("message") or "")
             return ""
         if hasattr(brain, "chat"):
+            messages = [{"role": "user", "content": prompt}]
             try:
-                reply = brain.chat([{"role": "user", "content": prompt}], None)
+                # Bigger output budget for a long plan; a brain that does not
+                # accept the kwarg (ScriptedBrain, test doubles) is retried.
+                reply = brain.chat(messages, None, max_tokens=self.PLAN_MAX_TOKENS)
+            except TypeError:
+                try:
+                    reply = brain.chat(messages, None)
+                except Exception:
+                    return ""
             except Exception:
                 return ""
             if isinstance(reply, dict):
@@ -181,12 +225,12 @@ class LLMPlanner:
         return ""
 
     @staticmethod
-    def _parse_json(text: str) -> list[dict[str, Any]] | None:
-        """Pull the first balanced {...} object out of *text* and read tasks.
+    def _extract_json(text: str) -> str | None:
+        """Return the first balanced ``{...}`` object out of *text*.
 
-        The model often pads the JSON with prose or markdown fences, and a
-        ``stop`` token can cut it mid-object, so a bare ``json.loads`` is not
-        enough -- the braces are matched by hand first.
+        The model often pads the JSON with prose or markdown fences, so a bare
+        ``json.loads`` is not enough -- the braces are matched by hand first,
+        handling nested objects and string literals.
         """
         if not text:
             return None
@@ -218,8 +262,16 @@ class LLMPlanner:
                     break
         if end < 0:
             return None
+        return text[start : end + 1]
+
+    @classmethod
+    def _parse_json(cls, text: str) -> list[dict[str, Any]] | None:
+        """Pull the tasks out of the first balanced JSON object in *text*."""
+        snippet = cls._extract_json(text)
+        if snippet is None:
+            return None
         try:
-            data = json.loads(text[start : end + 1])
+            data = json.loads(snippet)
         except ValueError:
             return None
         if not isinstance(data, dict):

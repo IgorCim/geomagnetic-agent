@@ -972,12 +972,17 @@ class LlamaBrain:
         self._max_tokens = max_tokens
         self._temperature = temperature
 
-    def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> dict[str, Any]:
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
         response = self._llm.create_chat_completion(
             messages=messages,
             tools=tools,
             temperature=self._temperature,
-            max_tokens=self._max_tokens,
+            max_tokens=self._max_tokens if max_tokens is None else max_tokens,
         )
         message = response["choices"][0]["message"]
         return {
@@ -3109,12 +3114,11 @@ def run_agent_with_planner(
         from agent_planner import LLMPlanner
 
         planner = LLMPlanner(brain)
+        state = planner.plan(query, verbose=verbose)
     else:
         from agent_planner import Planner
 
-        planner = Planner()
-
-    state = planner.plan(query)
+        state = Planner().plan(query)
     shared = store if store is not None else FrameStore()
 
     if verbose:
