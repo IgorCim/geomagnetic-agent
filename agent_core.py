@@ -2820,12 +2820,16 @@ def run_agent(
     verbose: bool = True,
     system_prompt: str | None = None,
     tools: list[dict[str, Any]] | None = None,
+    store: FrameStore | None = None,
 ) -> dict[str, Any]:
     """Answer ``user_query`` by letting the model call the Stage 1/2 tools.
 
     ``system_prompt`` / ``tools`` override the defaults for planner subtasks:
     a narrow task sees a short prompt and only the schemas that can serve it.
     Defaults to :data:`SYSTEM_PROMPT` and :data:`TOOL_SCHEMAS`.
+
+    ``store`` lets the external brain share one :class:`FrameStore` across many
+    subtasks; when None a fresh store is created for this call.
 
     Returns ``{"ok", "text", "plots", "tool_calls", "rounds", "stop_reason"}``.
     ``text`` and ``plots`` are the stable contract; the rest is diagnostics.
@@ -2853,7 +2857,7 @@ def run_agent(
 
     prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
     schemas = tools if tools is not None else TOOL_SCHEMAS
-    store = FrameStore()
+    store = store or FrameStore()
     plots: list[str] = []
     log: list[dict[str, Any]] = []
     messages: list[dict[str, Any]] = [
@@ -3082,38 +3086,57 @@ def run_agent_with_planner(
     query: str,
     brain: Any = None,
     store: FrameStore | None = None,
-    max_rounds: int = 20,
+    max_rounds: int = 100,
     verbose: bool = False,
+    use_llm_planner: bool = True,
 ) -> dict[str, Any]:
     """Run a possibly-large request through the external planner.
 
-    The planner splits *query* into one :class:`~agent_state.TaskStep` per unit
-    ("N станций" -> N steps), and each step is executed by its own ``run_agent``
-    call with a *narrow* toolset (:func:`select_tools_for_task`) and a *short*
-    dynamic prompt (:func:`build_dynamic_prompt`) that carries the session TODO
-    context. Long jobs therefore stay within each sub-window's attention instead
-    of one model trying to hold 300 charts in a single conversation.
+    One :class:`~agent_state.TaskStep` per unit ("26 станций x 10 событий"
+    expands into hundreds of steps) and each step is executed by its own
+    ``run_agent`` call. With ``use_llm_planner=True`` (default) a real request is
+    split by the model itself (:class:`~agent_planner.LLMPlanner`), which beats
+    the regex planner on free-form phrasing; a parse failure falls back to the
+    deterministic :class:`~agent_planner.Planner`. When ``brain`` is absent the
+    model cannot plan, so the deterministic planner is used.
 
-    ``store`` is accepted for API symmetry but each subtask owns a fresh
-    :class:`FrameStore`: a subtask is deliberately self-contained (fetch ->
-    compute -> plot) so one failed step cannot poison the next one's data.
+    CRITICAL: every subtask shares the same :class:`FrameStore` (created here if
+    not passed). Frames fetched by step 1 are visible to step 260; without this
+    a batch job would re-download every day for every chart. The shared store is
+    returned so callers can inspect or reuse it.
     """
-    from agent_planner import Planner
+    if use_llm_planner and brain is not None and not is_error(brain) and hasattr(brain, "chat"):
+        from agent_planner import LLMPlanner
 
-    planner = Planner()
+        planner = LLMPlanner(brain)
+    else:
+        from agent_planner import Planner
+
+        planner = Planner()
+
     state = planner.plan(query)
+    shared = store if store is not None else FrameStore()
 
     if verbose:
         print(f"📋 План: {len(state.tasks)} подзадач")
-        for task in state.tasks:
+        for task in state.tasks[:10]:
             print(f"   - {task.id}: {task.description}")
+        if len(state.tasks) > 10:
+            print(f"   ... и ещё {len(state.tasks) - 10} подзадач")
 
     # A single "run_agent" task means the planner did not recognise the request:
-    # fall back to the ordinary single-question loop, full toolset and all.
+    # fall back to the ordinary single-question loop.
     if len(state.tasks) == 1 and state.tasks[0].tool_name == "run_agent":
-        return run_agent(
-            query, brain=brain, max_rounds=max_rounds, verbose=verbose
+        result = run_agent(
+            query,
+            brain=brain,
+            max_rounds=max_rounds,
+            verbose=verbose,
+            store=shared,
         )
+        result = dict(result) if isinstance(result, dict) else {"ok": False, "text": str(result)}
+        result["store"] = shared
+        return result
 
     results: list[dict[str, Any]] = []
     for task in state.tasks:
@@ -3131,6 +3154,7 @@ def run_agent_with_planner(
                 verbose=verbose,
                 system_prompt=sub_prompt,
                 tools=schemas,
+                store=shared,
             )
             ok = bool(result.get("ok")) if isinstance(result, dict) else False
             state.mark_done(task.id, result if ok else None)
@@ -3152,6 +3176,7 @@ def run_agent_with_planner(
         "results": results,
         "state": state.to_dict(),
         "summary": state.get_progress_summary(),
+        "store": shared,
     }
 
 

@@ -2,20 +2,20 @@
 
 A 7B model defeated by "build 300 charts" is not a failure of tooling but a
 failure of scope: one prompt, one conversation window, ten or twenty tool calls.
-The planner is deliberately deterministic Python, not text the model has to obey:
-it recognises the request shape (``N станций``, ``N дней``, ``N станций`` for
-statistics), expands it into one :class:`~agent_state.TaskStep` per unit, and
-hands the session to the runner which executes them one at a time with a narrow
-toolset and a short prompt.
+The :class:`Planner` handles that deterministically (regex shapes like
+``N станций``); the :class:`LLMPlanner` delegates the split to the model itself
+for free-form requests the regexes cannot see through, then falls back to the
+deterministic planner when the model's answer does not parse.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 from agent_state import SessionState, TaskStep
 
-__all__ = ["Planner"]
+__all__ = ["Planner", "LLMPlanner"]
 
 
 class Planner:
@@ -112,3 +112,135 @@ class Planner:
             month = self._MONTHS_RU.get(month_ru.lower(), "01")
             return f"{year}-{month}-{int(day):02d}"
         return "2024-09-10"
+
+
+class LLMPlanner:
+    """Planner that asks the model to split a complex request into subtasks."""
+
+    PLANNER_PROMPT = (
+        "Ты — планировщик задач для геомагнитного агента.\n"
+        "Разбей запрос пользователя на конкретные подзадачи.\n\n"
+        "ФОРМАТ ОТВЕТА (JSON):\n"
+        '{"tasks": [{"id": "step_001", "description": "Скачай данные для станции '
+        'BRW за 2024-10-10", "tool_name": "fetch_observatory_data", "tool_args": '
+        '{"station_code": "BRW", "start_date": "2024-10-10", "end_date": "2024-10-10"}}, '
+        '{"id": "step_002", "description": "Вычисли компоненты H, D, I для BRW", '
+        '"tool_name": "calculate_derived_components", "tool_args": {"df": '
+        '"raw:brw:2024-10-10", "components": ["H", "D", "I"]}}, ...]}\n\n'
+        "ПРАВИЛА:\n"
+        "1. Каждая подзадача — ОДИН вызов инструмента.\n"
+        "2. Порядок важен: сначала fetch, потом derive, потом plot.\n"
+        "3. Для каждой станции и каждой даты — отдельные подзадачи.\n"
+        "4. Если нужно создать проект — добавь create_project первой.\n"
+        "5. Если нужен экспорт — добавь export_project последней.\n"
+        "6. Ответь ТОЛЬКО одним JSON-объектом, без пояснений и markdown."
+    )
+
+    def __init__(self, brain: Any):
+        self.brain = brain
+
+    def plan(self, query: str) -> SessionState:
+        """Ask the model for the plan; fall back to :class:`Planner` on garbage."""
+        prompt = (
+            f"{self.PLANNER_PROMPT}\n\nЗапрос пользователя: {query}\n\nОтвет (JSON):"
+        )
+        tasks = self._parse_json(self._ask(prompt))
+        fallback = Planner()
+
+        if tasks is None:
+            return fallback.plan(query)
+
+        state = SessionState(original_query=query)
+        for index, item in enumerate(tasks, start=1):
+            state.add_task(self._coerce_task(item, index))
+        return state if state.tasks else fallback.plan(query)
+
+    def _ask(self, prompt: str) -> str:
+        brain = self.brain
+        if brain is None:
+            return ""
+        if hasattr(brain, "create_completion"):
+            try:
+                response = brain.create_completion(
+                    prompt=prompt, max_tokens=4096, temperature=0.1, stop=["}"]
+                )
+            except Exception:
+                return ""
+            choices = response.get("choices") or []
+            if choices and isinstance(choices[0], dict):
+                return str(choices[0].get("text") or choices[0].get("message") or "")
+            return ""
+        if hasattr(brain, "chat"):
+            try:
+                reply = brain.chat([{"role": "user", "content": prompt}], None)
+            except Exception:
+                return ""
+            if isinstance(reply, dict):
+                return str(reply.get("content") or reply.get("text") or "")
+            return ""
+        return ""
+
+    @staticmethod
+    def _parse_json(text: str) -> list[dict[str, Any]] | None:
+        """Pull the first balanced {...} object out of *text* and read tasks.
+
+        The model often pads the JSON with prose or markdown fences, and a
+        ``stop`` token can cut it mid-object, so a bare ``json.loads`` is not
+        enough -- the braces are matched by hand first.
+        """
+        if not text:
+            return None
+        start = text.find("{")
+        if start < 0:
+            return None
+        depth = 0
+        end = -1
+        in_string = False
+        escaped = False
+        for index in range(start, len(text)):
+            ch = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+        if end < 0:
+            return None
+        try:
+            data = json.loads(text[start : end + 1])
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        tasks = data.get("tasks")
+        return tasks if isinstance(tasks, list) else None
+
+    @staticmethod
+    def _coerce_task(item: Any, index: int) -> TaskStep:
+        """Normalise a raw JSON task into a :class:`TaskStep`."""
+        if isinstance(item, dict):
+            args = item.get("tool_args")
+            return TaskStep(
+                id=str(item.get("id") or f"step_{index:03d}"),
+                description=str(item.get("description") or item.get("tool_name") or ""),
+                tool_name=str(item.get("tool_name") or "run_agent"),
+                tool_args=args if isinstance(args, dict) else {},
+            )
+        return TaskStep(
+            id=f"step_{index:03d}",
+            description=str(item),
+            tool_name="run_agent",
+            tool_args={},
+        )

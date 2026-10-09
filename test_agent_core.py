@@ -1846,3 +1846,201 @@ def test_run_agent_with_planner_executes_each_subtask():
     assert result["state"]["current_task_index"] == 2
     assert "Выполнено 2 из 2" in result["text"]
 
+
+class _PlanChatBrain:
+    """A brain whose chat() returns a canned JSON plan (model/planner stand-in)."""
+
+    def __init__(self, text):
+        self._text = text
+
+    def chat(self, messages, tools):  # noqa: ARG002
+        return {"content": self._text, "tool_calls": None}
+
+
+PLAN_JSON = (
+    '```json\n{"tasks": ['
+    '{"id":"step_001","description":"Создай проект events",'
+    '"tool_name":"create_project","tool_args":{"project_name":"events"}},'
+    '{"id":"step_002","description":"Скачай данные BRW за 2024-10-10",'
+    '"tool_name":"fetch_observatory_data",'
+    '"tool_args":{"station_code":"BRW","start_date":"2024-10-10","end_date":"2024-10-10"}},'
+    '{"id":"step_003","description":"Построй H и D для BRW",'
+    '"tool_name":"plot_components",'
+    '"tool_args":{"df":"raw:brw:2024-10-10","components":["H","D"]}}]}\n```'
+)
+
+
+def test_llm_planner_parses_model_plan_ignoring_markdown_fences():
+    """The model wraps its JSON in ```json fences + prose; braces win."""
+    from agent_planner import LLMPlanner
+
+    state = LLMPlanner(_PlanChatBrain(PLAN_JSON)).plan(
+        "10 событий x 26 станций, графики в архив"
+    )
+    tool_names = [t.tool_name for t in state.tasks]
+    assert len(state.tasks) == 3
+    assert tool_names == [
+        "create_project",
+        "fetch_observatory_data",
+        "plot_components",
+    ]
+    assert state.tasks[1].tool_args["station_code"] == "BRW"
+    assert state.tasks[2].tool_args["components"] == ["H", "D"]
+
+
+def test_llm_planner_parses_truncated_plan_and_renumbers_ids():
+    """A ``stop`` token may cut the JSON mid-object; brace-matching must cope."""
+    from agent_planner import LLMPlanner
+
+    truncated = PLAN_JSON[:-14]  # chop the tail (']}\n```') leaving a cut object
+    state = LLMPlanner(_PlanChatBrain(truncated)).plan("какой-то запрос")
+    assert state.tasks, "even a truncated answer must yield the tasks it contains"
+    # ids are guaranteed unique even if the model repeated step numbers
+    ids = [t.id for t in state.tasks]
+    assert len(ids) == len(set(ids))
+
+
+def test_llm_planner_falls_back_to_deterministic_on_bad_json():
+    """Garbage output must not crash the run; Planner() takes over."""
+    from agent_planner import LLMPlanner
+
+    state = LLMPlanner(_PlanChatBrain("Я не понял задачу, повторите.")).plan(
+        "Построй графики для 2 станций за 10 сентября"
+    )
+    assert len(state.tasks) == 2
+    assert [t.tool_name for t in state.tasks] == [
+        "plot_components",
+        "plot_components",
+    ]
+
+
+def test_llm_planner_complex_query_offline_mock():
+    """A >10-task plan from a mocked model arrives as usable TaskSteps."""
+    from agent_planner import LLMPlanner
+
+    tasks = []
+    tools = ["create_project", "fetch_observatory_data", "plot_components"]
+    for i, tool in enumerate(tools, start=1):
+        tasks.append(
+            '{"id":"step_%03d","description":"%s #%d","tool_name":"%s","tool_args":{}}'
+            % (i, tool, i, tool)
+        )
+    mock_plan = '{"tasks":[' + ",".join(tasks) + "]}"
+    state = LLMPlanner(_PlanChatBrain(mock_plan)).plan("большой запрос")
+    tool_names = [t.tool_name for t in state.tasks]
+    assert len(state.tasks) == 3
+    assert set(tool_names) == set(tools)
+
+
+def test_llm_planner_complex_query_real_model():
+    """End-to-end with the Qwen brain. Skips locally (no model on disk).
+
+    Must run in Kaggle: load_brain downloads ~5 GB, which is banned in local
+    runs unless GEOMAG_OFFLINE is not set.
+    """
+    if not ac.model_is_downloaded():
+        pytest.skip("model not on disk; runs in Kaggle")
+    from agent_planner import LLMPlanner
+
+    brain = ac.load_brain()
+    planner = LLMPlanner(brain)
+    query = (
+        "Изучи 10 событий (событие01..событие10), для каждого собери данные "
+        "всех 26 станций и построй графики; объедини всё в архив"
+    )
+    state = planner.plan(query)
+    tool_names = [t.tool_name for t in state.tasks]
+    assert len(state.tasks) > 10, f"expected a real plan, got {len(state.tasks)}"
+    assert "create_project" in tool_names
+    assert "fetch_observatory_data" in tool_names
+    assert "plot_components" in tool_names
+
+
+class _FetchThenPlotBrain:
+    """Scripted brain: subtask 1 fetches, subtask 2 plots the same handle."""
+
+    def __init__(self, plan_json):
+        self._plan = plan_json
+        self._calls = 0
+        self.replies = [
+            {
+                "content": '<tool_call>{"name": "fetch_observatory_data", '
+                '"arguments": {"station_code": "BRW", "start_date": "2024-10-10", '
+                '"end_date": "2024-10-10"}}</tool_call>',
+                "tool_calls": None,
+            },
+            {"content": "Данные BRW скачаны.", "tool_calls": None},
+            {
+                "content": '<tool_call>{"name": "plot_components", '
+                '"arguments": {"df": "raw:brw:2024-10-10", "components": ["X"]}}'
+                "</tool_call>",
+                "tool_calls": None,
+            },
+            {"content": "График построен.", "tool_calls": None},
+        ]
+
+    def chat(self, messages, tools):  # noqa: ARG002
+        if self._calls == 0 and self._plan:
+            self._calls += 1
+            return {"content": self._plan, "tool_calls": None}
+        self._calls += 1
+        return self.replies.pop(0) if self.replies else {"content": "Готово.", "tool_calls": None}
+
+
+def test_shared_framestore_run_agent_two_calls_same_store(
+    monkeypatch, tmp_path
+):
+    """Fetch in one run_agent call, then plot the handle in a *second* call
+    sharing the same FrameStore: the plot must resolve without re-fetching."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+
+    store = ac.FrameStore()
+    brain = _FetchThenPlotBrain("")
+    out1 = ac.run_agent(
+        "Скачай BRW за 2024-10-10", brain=brain, verbose=False, store=store
+    )
+    assert out1["ok"], out1
+    assert "raw:brw:2024-10-10" in store.names()
+
+    out2 = ac.run_agent(
+        "Построй график X для BRW",
+        brain=brain,
+        verbose=False,
+        store=store,
+    )
+    assert out2["ok"], out2
+    assert out2["plots"], "plot of a handle created in the previous call must resolve"
+
+
+def test_shared_framestore_through_planner(monkeypatch, tmp_path):
+    """One run_agent_with_planner call: subtask 1 fetches, subtask 2 plots.
+    A single shared FrameStore means the plot subtask sees the fetch subtask's
+    data -- that is the whole point of the shared store."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+
+    plan_json = (
+        '{"tasks":['
+        '{"id":"step_001","description":"Скачай BRW",'
+        '"tool_name":"fetch_observatory_data",'
+        '"tool_args":{"station_code":"BRW","start_date":"2024-10-10","end_date":"2024-10-10"}},'
+        '{"id":"step_002","description":"Построй X",'
+        '"tool_name":"plot_components",'
+        '"tool_args":{"df":"raw:brw:2024-10-10","components":["X"]}}]}'
+    )
+    result = ac.run_agent_with_planner(
+        "Скачай и построй",
+        brain=_FetchThenPlotBrain(plan_json),
+        verbose=False,
+    )
+    assert result["ok"], result
+    assert len(result["results"]) == 2
+    assert all(r["ok"] for r in result["results"])
+    shared = result["store"]
+    assert isinstance(shared, ac.FrameStore)
+    assert "raw:brw:2024-10-10" in shared.names()
+    assert result["results"][1]["result"]["plots"], (
+        "subtask 2 must plot the frame fetched by subtask 1 in the SAME store"
+    )
+
