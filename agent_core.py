@@ -151,8 +151,10 @@ SYSTEM_PROMPT = (
     "долготы, LT от географической.\n"
     "    • НЕСКОЛЬКО СТАНЦИЙ: plot_overlay(stations, dates, component, offsets, "
     "time_system) — один компонент многих станций на ОДНОМ графике, ось X в "
-    "UT/LT/MLT, порядок станций с севера вниз по геомагнитной широте. Два дня "
-    "одной станции — это plot_comparison, НЕ plot_overlay.\n"
+    "UT/LT/MLT, порядок станций с севера вниз по геомагнитной широте. "
+    "АВТОМАТИЧЕСКИ скачивает данные и считает H/D/I сам, если их нет — "
+    "fetch_observatory_data и calculate_derived_components перед ним не нужны. "
+    "Два дня одной станции — это plot_comparison, НЕ plot_overlay.\n"
     "    • list_projects() — какие проекты уже созданы.\n"
     "    • X, Y, Z, F — ГОТОВЫЕ колонки сырых данных. Статистика (медиана, "
     "среднее, min, max, размах, std): get_statistics сразу с хэндлом raw и "
@@ -728,10 +730,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Draw one component from SEVERAL stations on ONE chart, each curve shifted by a "
                 "per-station nT offset, with the x axis in UT, LT or MLT. Stations are ordered "
-                "north-first by geomagnetic latitude. USE to compare several observatories, or to "
-                "stack them on a local/magnetic clock. DO NOT USE to compare two days of a single "
-                "station -- that is plot_comparison. The day must already be fetched "
-                "(handles raw:<station>:<date>)."
+                "north-first by geomagnetic latitude. AUTO-FETCHES any station/day that is not "
+                "loaded yet and derives H, D, I on the spot, so no fetch_observatory_data call "
+                "is needed first. USE to compare several observatories, or to stack them on a "
+                "local/magnetic clock. DO NOT USE to compare two days of a single station -- "
+                "that is plot_comparison."
             ),
             "parameters": {
                 "type": "object",
@@ -2590,6 +2593,45 @@ def _handle_plot_overlay(args, store):
     if not isinstance(offsets_in, dict):
         return _error('invalid_input', 'offsets must be an object of {station: nT}'), 'bad offsets'
 
+    # Data first: overlay must survive being called in the first round, before
+    # any data was fetched. The agent often jumps straight to the chart and the
+    # useful behaviour is to fetch the missing days on its behalf (mirroring the
+    # auto-derive in the plotting path) rather than spend a round teaching it
+    # about fetch_observatory_data.
+    notes: list[str] = []
+    for code in stations:
+        if store.resolve(f"raw:{code.lower()}:{date}")[0] is None:
+            try:
+                payload, note = _handle_fetch(
+                    {"station_code": code, "start_date": date, "end_date": date}, store
+                )
+            except Exception as exc:
+                payload = _error('auto_fetch_failed', str(exc))
+            if is_error(payload):
+                return (
+                    _error(
+                        'auto_fetch_failed',
+                        f"Could not fetch {code} for {date}: {payload.get('error')} "
+                        f"({payload.get('message', '')})".strip(),
+                        requested={'stations': stations, 'date': date},
+                        hint=(
+                            "plot_overlay tried to load the day itself; the download "
+                            "failed, so retry fetch_observatory_data manually."
+                        ),
+                    ),
+                    f"plot_overlay failed: auto-fetch of {code}/{date} failed",
+                )
+            notes.append(f"auto-fetched {code} for {date}")
+
+    # Derive the derived components so the sibling slots exist for later tools.
+    if component in analyzer.DERIVED:
+        for code in stations:
+            slot, note = _auto_derive(
+                store, f"derived:{code.lower()}:{date}", [component]
+            )
+            if slot is not None:
+                notes.append(note)
+
     frames: dict[str, Any] = {}
     time_shifts: dict[str, float] = {}
     offsets: dict[str, float] = {}
@@ -2664,9 +2706,12 @@ def _handle_plot_overlay(args, store):
         'time_system': time_system,
         'offsets_applied': offsets,
     }
+    if notes:
+        payload['auto'] = notes
     if filed:
         payload['filed_into_project'] = filed
-    return payload, f"overlay of {', '.join(order)} saved to {result}"
+    summary = notes + [f"overlay of {', '.join(order)} saved to {result}"]
+    return payload, " ".join(summary)
 
 
 def _sort_stations_north_first(codes: list[str]) -> list[str]:

@@ -757,15 +757,23 @@ def test_plot_overlay_two_stations_returns_html_and_offsets(tmp_path, monkeypatc
     assert payload["stations"].index("IRT") < payload["stations"].index("API")
 
 
-def test_plot_overlay_refuses_when_frames_were_never_fetched(tmp_path, monkeypatch):
-    """Calling overlay before fetching is an unknown_frame, not an exception."""
+def test_plot_overlay_auto_fetch_failure_is_reported(tmp_path, monkeypatch):
+    """When auto-fetch cannot download, the overlay says so instead of crashing."""
+    import intermagnet_loader as loader
+
+    monkeypatch.setattr(ac, "OFFLINE", False)
     monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+
+    def broken_fetch(**kw):
+        raise TimeoutError("no network in this test")
+
+    monkeypatch.setattr(loader, "fetch_observatory_data", broken_fetch)
     payload, note = ac._handle_plot_overlay(
         {"stations": ["IRT"], "dates": ["2024-09-10"], "component": "H"},
         ac.FrameStore(),
     )
     assert ac.is_error(payload)
-    assert payload["error"] == "unknown_frame"
+    assert payload["error"] == "auto_fetch_failed"
 
 
 def test_plot_overlay_rejects_an_unknown_time_system(tmp_path, monkeypatch):

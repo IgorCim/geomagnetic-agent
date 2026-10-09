@@ -1736,3 +1736,31 @@ def test_calculate_local_time_rejects_an_unparsable_timestamp():
     assert ac.is_error(payload)
     assert payload["error"] == "invalid_input"
 
+
+def test_plot_overlay_auto_fetch(tmp_path, monkeypatch):
+    """plot_overlay must fetch the day itself when the store is empty.
+
+    The live E2E run showed the agent calling plot_overlay in the very first
+    round, before any data was loaded, and then not retrying after the fetch.
+    The tool should be usable cold: it downloads the missing days, materialises
+    the derived slots, and only then draws the chart.
+    """
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = ac.FrameStore()
+    assert "raw:irt:2024-09-10" not in store.names()
+
+    result, note = ac._handle_plot_overlay(
+        {
+            "stations": ["IRT"],
+            "dates": ["2024-09-10"],
+            "component": "H",
+            "offsets": {"IRT": 0},
+        },
+        store,
+    )
+    assert result["ok"], result
+    assert "raw:irt:2024-09-10" in store.names(), "данные должны быть скачаны"
+    assert "derived:irt:2024-09-10" in store.names(), "derived должен быть вычислен"
+    assert result["auto"], note
+
