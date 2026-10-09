@@ -1764,3 +1764,85 @@ def test_plot_overlay_auto_fetch(tmp_path, monkeypatch):
     assert "derived:irt:2024-09-10" in store.names(), "derived должен быть вычислен"
     assert result["auto"], note
 
+
+# --------------------------------------------------------------------------- #
+# Phase 4: external brain (planner + dynamic tool selection)
+# --------------------------------------------------------------------------- #
+def test_planner_multi_station():
+    """One target per station: IRT, API, BSL -> three tasks."""
+    from agent_planner import Planner
+
+    state = Planner().plan("Построй графики для станций IRT, API, BSL за 10 сентября 2024")
+    assert len(state.tasks) == 3, "Должно быть 3 подзадачи"
+    assert state.tasks[0].tool_args["station"] == "IRT"
+    codes = [t.tool_args["station"] for t in state.tasks]
+    assert codes == ["IRT", "API", "BSL"]
+    assert all(t.tool_name == "plot_components" for t in state.tasks)
+    assert all(t.tool_args["date"] == "2024-09-10" for t in state.tasks)
+    assert state.original_query.startswith("Построй графики")
+
+
+def test_planner_batch_statistics():
+    """Статистика для N станций порождает N задач get_statistics."""
+    from agent_planner import Planner
+
+    state = Planner().plan("Посчитай медиану для 2 станций за 2024-09-10")
+    assert len(state.tasks) == 2
+    assert state.tasks[0].tool_name == "get_statistics"
+    assert state.tasks[0].tool_args["station"] == "IRT"
+
+
+def test_planner_unrecognized_query_is_one_run_agent_task():
+    """A free-form request stays a single task the model handles itself."""
+    from agent_planner import Planner
+
+    state = Planner().plan("Что такое магнитное поле Земли?")
+    assert len(state.tasks) == 1
+    assert state.tasks[0].tool_name == "run_agent"
+
+
+def test_select_tools_narrows_to_the_subtask_chain():
+    tools = ac.select_tools_for_task("plot_components")
+    names = [t["function"]["name"] for t in tools]
+    assert "plot_components" in names
+    assert "fetch_observatory_data" in names
+    assert len(tools) <= 5, "Не должно быть больше 5 инструментов"
+
+
+def test_select_tools_unknown_name_falls_back_to_everything():
+    tools = ac.select_tools_for_task("no_such_tool")
+    assert len(tools) == len(ac.TOOL_SCHEMAS)
+
+
+def test_build_dynamic_prompt_mentions_only_the_selected_tools():
+    tools = ac.select_tools_for_task("calculate_local_time")
+    prompt = ac.build_dynamic_prompt(ac.BASE_PROMPT_COMPACT, tools, "Контекст: 1/3")
+    assert "calculate_local_time" in prompt
+    assert "\n- plot_overlay:" not in prompt, "unselected tool must not be advertised"
+    assert "Контекст" in prompt
+
+
+class _AlwaysTextBrain:
+    """A brain that answers immediately, without tool calls."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def chat(self, messages, tools):  # noqa: ARG002
+        self.calls += 1
+        return {"content": "Готово.", "tool_calls": None}
+
+
+def test_run_agent_with_planner_executes_each_subtask():
+    """Two stations -> two subtasks, both succeed with a mock brain."""
+    result = ac.run_agent_with_planner(
+        "Построй графики для 2 станций за 10 сентября",
+        brain=_AlwaysTextBrain(),
+        verbose=False,
+    )
+    assert result["ok"], result
+    assert len(result["results"]) == 2
+    assert all(r["ok"] for r in result["results"])
+    assert result["state"]["current_task_index"] == 2
+    assert "Выполнено 2 из 2" in result["text"]
+

@@ -75,6 +75,9 @@ __all__ = [
     "load_brain",
     "parse_tool_calls",
     "run_agent",
+    "run_agent_with_planner",
+    "select_tools_for_task",
+    "build_dynamic_prompt",
     "is_error",
 ]
 
@@ -130,77 +133,47 @@ HANDLE_CASE_RULE = (
     "'raw:irt:2024-09-10' и 'raw:irt:2024-09-11'."
 )
 
-SYSTEM_PROMPT = (
-    "Ты — профессиональный геофизический ИИ-ассистент. У тебя есть инструменты. "
-    "Никогда не выдумывай цифры: любое число вызывай инструментом.\n\n"
-    "Правила работы:\n"
+BASE_PROMPT_COMPACT = (
+    "Ты — профессиональный геофизический ИИ-ассистент. Никогда не выдумывай цифры — "
+    "вызывай инструменты.\n\n"
+    "Правила:\n"
     "1. Отвечай на русском, кратко, как коллега-геофизик.\n"
-    "2. Любое число в ответе должно прийти из результата инструмента. "
-    "Нет результата — нет числа.\n"
+    "2. Любое число в ответе — только из результата инструмента.\n"
     "3. Данные бери fetch_observatory_data. Код станции — трёхбуквенный IAGA. "
     f"Известны: {STATION_HINT}.\n"
-    "4. Порядок для графика: fetch_observatory_data → "
-    "calculate_derived_components → get_statistics / detect_anomalies → "
-    "plot_components / plot_comparison. Шаги не перескакивай.\n"
-    "4a. ВЫБОР ИНСТРУМЕНТА — строго по таблице:\n"
-    "    • ГЕОМАГНЕТИЗМ: get_station_geomagnetic_coords(station_code) — "
-    "геомагнитные широта/долгота; calculate_mlt(station_code, timestamp) — "
-    "магнитное локальное время MLT; calculate_local_time(station_code, "
-    "timestamp) — гражданское местное время LT; group_stations_by_mlt("
-    "stations, timestamp) — станции по бинам MLT. MLT ≠ LT: MLT от магнитной "
-    "долготы, LT от географической.\n"
-    "    • НЕСКОЛЬКО СТАНЦИЙ: plot_overlay(stations, dates, component, offsets, "
-    "time_system) — один компонент многих станций на ОДНОМ графике, ось X в "
-    "UT/LT/MLT, порядок станций с севера вниз по геомагнитной широте. "
-    "АВТОМАТИЧЕСКИ скачивает данные и считает H/D/I сам, если их нет — "
-    "fetch_observatory_data и calculate_derived_components перед ним не нужны. "
-    "Два дня одной станции — это plot_comparison, НЕ plot_overlay.\n"
-    "    • list_projects() — какие проекты уже созданы.\n"
-    "    • X, Y, Z, F — ГОТОВЫЕ колонки сырых данных. Статистика (медиана, "
-    "среднее, min, max, размах, std): get_statistics сразу с хэндлом raw и "
-    "components=['F']. НЕ вызывай до неё calculate_derived_components — она "
-    "считает только H, D, I и ответит unknown_component.\n"
-    "    • H, D, I — считает только calculate_derived_components.\n"
-    "    • Размах (max минус min) — metric='delta'. Метрики 'range' НЕ "
-    "СУЩЕСТВУЕТ: calculate_derived_math знает ровно три — 'delta', 'dH_dt' "
-    "(скорость), 'anomaly' (отклонение от базы). component='F' или 'H'.\n"
-    "    • Своя формула — evaluate_custom_formula по колонкам X, Y, Z, F. "
-    "Формула НИКОГДА не исполняется как код, а разбирается в безопасный список "
-    "операций: пиши математику, но не имена файлов, не текст и не вызовы "
-    "функций.\n"
-    "    • calculate_baseline — тихая ночная база. Для metric='anomaly' это два "
-    "вызова, значение идёт в baseline_value.\n"
-    "    • ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data. Без созданного хэндла "
-    "raw инструменты ответят unknown_frame. Хэндл бери из frame_handle, не "
-    "выдумывай.\n"
-    "    • create_project — проект перед серией загрузок: всё попадёт в "
-    "projects/<проект>/<станция>/<дата>/.\n"
-    "    • fetch_many — несколько станций за диапазон одним вызовом. Бюджет "
-    "общий: смотри failed и refused и скажи, что пришло.\n"
-    "    • export_project — собирает проект в ZIP (CSV, графики, манифесты) и "
-    "возвращает путь.\n"
-    "5. Вместо DataFrame передавай строковый хэндл из поля \"frame_handle\": "
-    "полный слот \"raw:irt:2024-09-10\" / \"derived:irt:2024-09-10\" либо "
-    "семейство \"raw\" / \"derived\" / \"anomalies\" (самый свежий). Полный "
-    "список — в \"available_handles\". Не выдумывай хэндл.\n"
-    "6. Если инструмент вернул {\"ok\": false} и ответа нет — сообщи причину из "
-    "message и предложи, что делать. Промежуточную ошибку не пересказывай. "
-    "Свои цифры не подставляй.\n"
-    "7. В финальном ответе перечисли графики и файлы. Единицы всегда 'nT' — не "
-    "«нанотесла», не «нТл».\n"
-    "8. Можно вызвать несколько инструментов подряд. Для двух дней одной "
-    "станции — fetch_observatory_data дважды и два РАЗНЫХ хэндла в "
-    "plot_comparison.\n"
-    "9. ВАЖНО: Ты НЕ API-сервер. НИКОГДА не отвечай JSON, Python-словарём или "
-    "строкой {'content': ..., 'tool_calls': ...} — это ошибка.\n"
-    "10. ФОРМАТ ОТВЕТА строго так, только два варианта:\n"
-    "    (а) вызвать инструмент — ТОЛЬКО блок тегов, без слов, без markdown:\n"
+    "4. Для графика: fetch_observatory_data → calculate_derived_components "
+    "→ plot_components / plot_comparison / plot_overlay. Шаги не перескакивай.\n"
+    "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла raw математика "
+    "и графики ответят unknown_frame. Хэндл бери из frame_handle, не выдумывай.\n"
+    "5. Инструменты:\n"
+    "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
+    "create_project, export_project.\n"
+    "    • Математика: calculate_derived_components (считает только H, D, I; "
+    "X, Y, Z, F уже есть в raw), get_statistics, detect_anomalies, "
+    "calculate_derived_math — метрики 'delta', 'dH_dt', 'anomaly'; Метрики "
+    "'range' НЕ СУЩЕСТВУЕТ; calculate_baseline — база для 'anomaly', значение "
+    "в baseline_value; evaluate_custom_formula — формула не исполняется как код.\n"
+    "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt (магнитное "
+    "время), calculate_local_time (гражданское время), group_stations_by_mlt.\n"
+    "    • Графики: plot_components, plot_comparison, plot_overlay (несколько "
+    "станций; данные и H/D/I достаёт сам).\n"
+    "6. Вместо DataFrame передавай строковый хэндл из frame_handle: "
+    "\"raw:irt:2024-09-10\" / \"derived:irt:2024-09-10\" либо семейство "
+    "\"raw\" / \"derived\" / \"anomalies\".\n"
+    "7. Ошибку инструмента перескажи пользователю и предложи, что делать; свои "
+    "цифры не подставляй.\n"
+    "8. В ответе перечисли графики и файлы. Единицы — 'nT', не «нанотесла».\n"
+    "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
+    "10. ФОРМАТ ОТВЕТА: (а) вызов инструмента — только теги, без слов:\n"
     '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
     '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
-    "    (б) данные собраны — обычный текст, БЕЗ тегов и фигурных скобок.\n"
-    "    Сомневаешься — бери (а).\n\n"
+    "    (б) данных достаточно — обычный текст без тегов. Сомневаешься — бери (а).\n\n"
     f"11. {HANDLE_CASE_RULE}"
 )
+
+#: The base prompt the ordinary single-question loop uses. ``run_agent_with_planner``
+#: builds narrower prompts for long-running jobs from :data:`BASE_PROMPT_COMPACT`.
+SYSTEM_PROMPT = BASE_PROMPT_COMPACT
 
 
 # --------------------------------------------------------------------------- #
@@ -767,6 +740,63 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 
 TOOLS_BY_NAME = {t["function"]["name"] for t in TOOL_SCHEMAS}
 PLOT_TOOLS = {"plot_components", "plot_comparison", "plot_overlay"}
+
+#: Which tools a planner subtask may need. ``run_agent`` gets everything; a
+#: focused tool (say ``calculate_mlt``) gets only the two-step chain that can
+#: possibly serve it, so the model sees a short schema list instead of all 18.
+TOOL_SELECTION: dict[str, list[str]] = {
+    "plot_components": ["fetch_observatory_data", "calculate_derived_components", "plot_components"],
+    "plot_comparison": ["fetch_observatory_data", "calculate_derived_components", "plot_comparison"],
+    "plot_overlay": ["fetch_observatory_data", "calculate_derived_components", "plot_overlay"],
+    "get_statistics": ["fetch_observatory_data", "get_statistics"],
+    "calculate_derived_math": ["fetch_observatory_data", "calculate_derived_math"],
+    "detect_anomalies": ["fetch_observatory_data", "detect_anomalies"],
+    "calculate_local_time": ["calculate_local_time"],
+    "calculate_mlt": ["get_station_geomagnetic_coords", "calculate_mlt"],
+    "group_stations_by_mlt": ["get_station_geomagnetic_coords", "group_stations_by_mlt"],
+    "create_project": ["create_project"],
+    "fetch_many": ["fetch_many"],
+    "export_project": ["export_project"],
+    "run_agent": list(TOOLS_BY_NAME),
+}
+
+
+def select_tools_for_task(tool_name: str) -> list[dict[str, Any]]:
+    """Return only the schemas a subtask with *tool_name* may need.
+
+    The full 18-tool schema list goes into every ordinary ``run_agent`` call; a
+    subtask is the opposite -- one job, one tool, and just enough context to
+    fetch what it needs. Unknown names fall back to the full list, because a
+    tool the planner has never heard of must not be hidden from the model.
+    """
+    needed = TOOL_SELECTION.get(str(tool_name or ""), list(TOOLS_BY_NAME))
+    return [t for t in TOOL_SCHEMAS if t["function"]["name"] in needed]
+
+
+def build_dynamic_prompt(
+    base_prompt: str, tools: list[dict[str, Any]], context: str
+) -> str:
+    """Assemble a short system prompt for one focused subtask.
+
+    From the compact base prompt it keeps the behavioural rules (lowercase
+    handles, no invented numbers, the nT unit) and appends only the schemas
+    relevant to the current step plus the session's TODO context. Long example
+    tables that belong to single-shot use are not repeated here.
+    """
+    tools_text = "\n".join(
+        f"- {t['function']['name']}: {t['function'].get('description', '')[:100]}"
+        for t in tools
+    )
+    return f"""{base_prompt}
+
+Доступные инструменты для текущей задачи:
+{tools_text}
+
+Контекст выполнения:
+{context}
+
+Выполни текущую подзадачу. Если нужны данные — сначала вызови инструменты для их получения.
+"""
 
 
 # --------------------------------------------------------------------------- #
@@ -2788,8 +2818,14 @@ def run_agent(
     max_tool_calls: int = MAX_TOOL_CALLS,
     max_rounds: int = MAX_ROUNDS,
     verbose: bool = True,
+    system_prompt: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Answer ``user_query`` by letting the model call the Stage 1/2 tools.
+
+    ``system_prompt`` / ``tools`` override the defaults for planner subtasks:
+    a narrow task sees a short prompt and only the schemas that can serve it.
+    Defaults to :data:`SYSTEM_PROMPT` and :data:`TOOL_SCHEMAS`.
 
     Returns ``{"ok", "text", "plots", "tool_calls", "rounds", "stop_reason"}``.
     ``text`` and ``plots`` are the stable contract; the rest is diagnostics.
@@ -2815,11 +2851,13 @@ def run_agent(
     if brain is None or not hasattr(brain, "chat"):
         return _error("invalid_brain", "brain must expose a .chat(messages, tools) method")
 
+    prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
+    schemas = tools if tools is not None else TOOL_SCHEMAS
     store = FrameStore()
     plots: list[str] = []
     log: list[dict[str, Any]] = []
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": user_query},
     ]
 
@@ -2829,7 +2867,7 @@ def run_agent(
 
     for round_no in range(1, max_rounds + 1):
         try:
-            reply = brain.chat(messages, TOOL_SCHEMAS)
+            reply = brain.chat(messages, schemas)
         except Exception as exc:
             return _error("brain_failed", f"{type(exc).__name__}: {exc}", round=round_no)
 
@@ -3037,6 +3075,83 @@ def run_agent(
         "tool_calls": log,
         "rounds": max_rounds,
         "stop_reason": "round_limit",
+    }
+
+
+def run_agent_with_planner(
+    query: str,
+    brain: Any = None,
+    store: FrameStore | None = None,
+    max_rounds: int = 20,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """Run a possibly-large request through the external planner.
+
+    The planner splits *query* into one :class:`~agent_state.TaskStep` per unit
+    ("N станций" -> N steps), and each step is executed by its own ``run_agent``
+    call with a *narrow* toolset (:func:`select_tools_for_task`) and a *short*
+    dynamic prompt (:func:`build_dynamic_prompt`) that carries the session TODO
+    context. Long jobs therefore stay within each sub-window's attention instead
+    of one model trying to hold 300 charts in a single conversation.
+
+    ``store`` is accepted for API symmetry but each subtask owns a fresh
+    :class:`FrameStore`: a subtask is deliberately self-contained (fetch ->
+    compute -> plot) so one failed step cannot poison the next one's data.
+    """
+    from agent_planner import Planner
+
+    planner = Planner()
+    state = planner.plan(query)
+
+    if verbose:
+        print(f"📋 План: {len(state.tasks)} подзадач")
+        for task in state.tasks:
+            print(f"   - {task.id}: {task.description}")
+
+    # A single "run_agent" task means the planner did not recognise the request:
+    # fall back to the ordinary single-question loop, full toolset and all.
+    if len(state.tasks) == 1 and state.tasks[0].tool_name == "run_agent":
+        return run_agent(
+            query, brain=brain, max_rounds=max_rounds, verbose=verbose
+        )
+
+    results: list[dict[str, Any]] = []
+    for task in state.tasks:
+        if verbose:
+            print(f"\n🔧 Выполняю: {task.id} — {task.description}")
+        schemas = select_tools_for_task(task.tool_name)
+        sub_prompt = build_dynamic_prompt(
+            BASE_PROMPT_COMPACT, schemas, state.get_context_for_prompt()
+        )
+        try:
+            result = run_agent(
+                task.description,
+                brain=brain,
+                max_rounds=max_rounds,
+                verbose=verbose,
+                system_prompt=sub_prompt,
+                tools=schemas,
+            )
+            ok = bool(result.get("ok")) if isinstance(result, dict) else False
+            state.mark_done(task.id, result if ok else None)
+            if not ok:
+                state.mark_failed(task.id, str(result.get("text", result)))
+            results.append(
+                {"task_id": task.id, "ok": ok, "result": result if ok else None,
+                 "error": None if ok else str(result.get("text", result))}
+            )
+        except Exception as exc:
+            state.mark_failed(task.id, str(exc))
+            results.append({"task_id": task.id, "ok": False, "error": str(exc)})
+
+    done = sum(1 for r in results if r["ok"])
+    failed = len(results) - done
+    return {
+        "ok": failed == 0,
+        "text": f"Выполнено {done} из {len(results)} подзадач. Ошибок: {failed}.",
+        "results": results,
+        "state": state.to_dict(),
+        "summary": state.get_progress_summary(),
     }
 
 
