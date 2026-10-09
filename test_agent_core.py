@@ -1530,14 +1530,13 @@ def test_system_prompt_stays_within_its_budget():
     The rules now enforced in code -- slot ordering, doubled braces -- were the
     ones removed, and this stops them creeping back one clause at a time.
 
-    The budget moved once, from 4414 to 4919, for exactly one reason: three rows
-    in table 4a describing create_project / fetch_many / export_project, so the
-    model knows the tools exist. That is 505 characters of *advertisement* and not
-    one new rule. The ceiling is pinned at the measured value so the next addition
-    has to be argued for rather than drifted into.
+    Phase 3 rewrote the prompt into a tighter voice to advertise the geomagnetic
+    tools (geomag coords, MLT, LT, overlay) without new rules, and the ceiling was
+    pulled down from 5200 to 4500. It stays pinned at the measured value so the
+    next addition has to be argued for rather than drifted into.
     """
     sp = ac.SYSTEM_PROMPT
-    assert len(sp) <= 5200, f"prompt grew to {len(sp)} chars"
+    assert len(sp) <= 4500, f"prompt grew to {len(sp)} chars"
     # what must survive a trim
     assert "4a." in sp, "the tool-selection table is the point of the prompt"
     assert "'nT'" in sp, "the checker and recovery filter both key on the unit"
@@ -1697,3 +1696,43 @@ def test_group_stations_by_mlt_skips_unknown_stations():
     )
     assert payload["ok"], payload
     assert [c for codes in payload["bins"].values() for c in codes] == ["IRT"]
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: civil local time and the multi-station overlay
+# --------------------------------------------------------------------------- #
+def test_calculate_local_time_is_ut_plus_longitude_over_15():
+    """LT is civil time: UT + longitude/15, wrapped into [0, 24)."""
+    from intermagnet_loader import get_available_stations
+
+    lon = float(get_available_stations()["IRT"][2])
+    expected = (12.0 + lon / 15.0) % 24.0
+    payload, note = ac._handle_calculate_local_time(
+        {"station_code": "IRT", "timestamp": "2024-09-10T12:00:00Z"},
+        ac.FrameStore(),
+    )
+    assert payload["ok"], payload
+    assert abs(payload["lt_hours"] - expected) < 1e-3
+    assert re.fullmatch(r"[0-2][0-9]:[0-5][0-9]", payload["lt_hm"])
+    assert payload["model"] == "lt_ut_plus_lon_over_15"
+
+
+def test_calculate_local_time_propagates_station_not_found():
+    """The LT tool must not swallow a registry miss."""
+    payload, note = ac._handle_calculate_local_time(
+        {"station_code": "ZZZ", "timestamp": "2024-09-10T12:00:00Z"},
+        ac.FrameStore(),
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "station_not_found"
+
+
+def test_calculate_local_time_rejects_an_unparsable_timestamp():
+    """A garbage timestamp is an error payload, never an exception."""
+    payload, note = ac._handle_calculate_local_time(
+        {"station_code": "IRT", "timestamp": "not-a-time"},
+        ac.FrameStore(),
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "invalid_input"
+

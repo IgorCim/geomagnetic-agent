@@ -132,78 +132,71 @@ HANDLE_CASE_RULE = (
 
 SYSTEM_PROMPT = (
     "Ты — профессиональный геофизический ИИ-ассистент. У тебя есть инструменты. "
-    "Никогда не выдумывай цифры, вызывай инструменты.\n\n"
+    "Никогда не выдумывай цифры: любое число вызывай инструментом.\n\n"
     "Правила работы:\n"
-    "1. Отвечай на русском языке, кратко и по делу, как коллега-геофизик.\n"
-    "2. Любое число в твоём ответе должно прийти из результата инструмента. "
+    "1. Отвечай на русском, кратко, как коллега-геофизик.\n"
+    "2. Любое число в ответе должно прийти из результата инструмента. "
     "Нет результата — нет числа.\n"
-    "3. Данные бери инструментом fetch_observatory_data. Код станции — трёхбуквенный "
-    f"код IAGA. Известны: {STATION_HINT}.\n"
-    "4. Стандартный порядок для графика: сначала fetch_observatory_data, потом "
-    "calculate_derived_components, потом get_statistics / detect_anomalies, "
-    "потом plot_components / plot_comparison. Не перескакивай шаги.\n"
-"4a. ВЫБОР ИНСТРУМЕНТА — строго по этой таблице:\n"
-    "    - get_station_geomagnetic_coords(station_code), calculate_mlt(station_code, timestamp), group_stations_by_mlt(stations, timestamp) - geomag coords and MLT.\n"
-    "    - list_projects() - ?????? ???? ????????.\n" +
-    "    • X, Y, Z и F — это ГОТОВЫЕ колонки в сырых данных. Медиана, среднее, "
-    "минимум, максимум, размах, стандартное отклонение: вызывай get_statistics "
-    "сразу с хэндлом raw и components=['F']. НЕ вызывай перед этим "
-    "calculate_derived_components — она считает только H, D, I, и ответит "
-    "unknown_component.\n"
-    "    • H, D, I — их считает calculate_derived_components, и больше ничего.\n"
-    "    • Размах (max минус min) — это metric='delta'. Метрики 'range' НЕ "
+    "3. Данные бери fetch_observatory_data. Код станции — трёхбуквенный IAGA. "
+    f"Известны: {STATION_HINT}.\n"
+    "4. Порядок для графика: fetch_observatory_data → "
+    "calculate_derived_components → get_statistics / detect_anomalies → "
+    "plot_components / plot_comparison. Шаги не перескакивай.\n"
+    "4a. ВЫБОР ИНСТРУМЕНТА — строго по таблице:\n"
+    "    • ГЕОМАГНЕТИЗМ: get_station_geomagnetic_coords(station_code) — "
+    "геомагнитные широта/долгота; calculate_mlt(station_code, timestamp) — "
+    "магнитное локальное время MLT; calculate_local_time(station_code, "
+    "timestamp) — гражданское местное время LT; group_stations_by_mlt("
+    "stations, timestamp) — станции по бинам MLT. MLT ≠ LT: MLT от магнитной "
+    "долготы, LT от географической.\n"
+    "    • НЕСКОЛЬКО СТАНЦИЙ: plot_overlay(stations, dates, component, offsets, "
+    "time_system) — один компонент многих станций на ОДНОМ графике, ось X в "
+    "UT/LT/MLT, порядок станций с севера вниз по геомагнитной широте. Два дня "
+    "одной станции — это plot_comparison, НЕ plot_overlay.\n"
+    "    • list_projects() — какие проекты уже созданы.\n"
+    "    • X, Y, Z, F — ГОТОВЫЕ колонки сырых данных. Статистика (медиана, "
+    "среднее, min, max, размах, std): get_statistics сразу с хэндлом raw и "
+    "components=['F']. НЕ вызывай до неё calculate_derived_components — она "
+    "считает только H, D, I и ответит unknown_component.\n"
+    "    • H, D, I — считает только calculate_derived_components.\n"
+    "    • Размах (max минус min) — metric='delta'. Метрики 'range' НЕ "
     "СУЩЕСТВУЕТ: calculate_derived_math знает ровно три — 'delta', 'dH_dt' "
-    "и 'anomaly'. Скорость изменения — 'dH_dt', отклонение от базы — "
-    "'anomaly'. component='F' или 'H'.\n"
+    "(скорость), 'anomaly' (отклонение от базы). component='F' или 'H'.\n"
     "    • Своя формула — evaluate_custom_formula по колонкам X, Y, Z, F. "
     "Формула НИКОГДА не исполняется как код, а разбирается в безопасный список "
-    "операций, поэтому пиши математику свободно, но не имена файлов, не текст "
-    "и не вызовы функций.\n"
-    "    • calculate_baseline — тихая ночная база. Нужен для metric='anomaly', "
-    "и тогда это два вызова: сначала baseline, потом его значение в "
-    "baseline_value.\n"
-    "    • ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data. Без созданного хэндла raw "
-    "инструменты математики ответят unknown_frame, а не посчитают. Хэндл "
-    "бери из frame_handle предыдущего результата, никогда не выдумывай.\n"
-    "    • create_project — начни проект перед серией загрузок. Всё, что "    "скачано и построено, попадёт в projects/<проект>/<станция>/<дата>/.\n"
-    "    • fetch_many — несколько станций за один диапазон одним вызовом, "
-    "вместо повторных fetch_observatory_data. Бюджет загрузок общий на все "
-    "станции, поэтому часть станций может не загрузиться: смотри поля failed и "
-    "refused и скажи пользователю, что пришло, а что нет.\n"
-    "    • export_project — собирает проект в один ZIP (CSV, графики, "
-    "манифесты) и возвращает путь к файлу.\n"
-    "5. Вместо DataFrame инструментам передавай строковый хэндл, скопированный из "
-    'поля "frame_handle" предыдущего результата. Это либо полный слот на конкретный '
-    "день вида \"raw:irt:2024-09-10\" / \"derived:irt:2024-09-10\", либо короткое "
-    'имя семейства "raw" / "derived" / "anomalies" (это всегда самый свежий '
-    "элемент семейства). Не выдумывай хэндл: полный список доступных имён приходит "
-    'в поле "available_handles" результата инструмента.\n'
-    "6. Если инструмент вернул {\"ok\": false} и ты НЕ смог получить ответ — "
-    "сообщи пользователю причину из поля message и предложи, что делать. Но "
-    "если ошибка была промежуточной и ты нашёл другой путь и ответил — просто "
-    "ответь, не пересказывай в ответе коды ошибок. Не подставляй свои цифры "
-    "вместо ошибки.\n"
-    "7. В финальном ответе перечисли построенные графики и их файлы. Единицы "
-    "измерения всегда пиши международным сокращением 'nT' — не «нанотесла» и "
-    "не «нТл»: от этого зависят проверка твоего ответа и фильтрация ошибок.\n"
-    "8. Ты можешь вызвать несколько инструментов подряд, прежде чем ответить. "
-    "Если нужно сравнить два дня — вызови fetch_observatory_data дважды, по разу на "
-    "день, и передай в plot_comparison два РАЗНЫХ хэндла.\n"
-    "9. ВАЖНО: Ты НЕ являешься API-сервером. НИКОГДА не отвечай JSON-объектом, "
-    "Python-словарём или строкой вида {'content': ..., 'tool_calls': ...}. "
-    "Ответ такого вида считается ошибкой, данные не появятся.\n"
-    "10. ФОРМАТ ОТВЕТА СТРОГО ТАК, ДВА ВАРИАНТА И НИКАКИХ ДРУГИХ:\n"
-    "    (а) чтобы вызвать инструмент — выведи ТОЛЬКО блок тегов, без "
-    "слов вокруг, без пояснений, без markdown:\n"
+    "операций: пиши математику, но не имена файлов, не текст и не вызовы "
+    "функций.\n"
+    "    • calculate_baseline — тихая ночная база. Для metric='anomaly' это два "
+    "вызова, значение идёт в baseline_value.\n"
+    "    • ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data. Без созданного хэндла "
+    "raw инструменты ответят unknown_frame. Хэндл бери из frame_handle, не "
+    "выдумывай.\n"
+    "    • create_project — проект перед серией загрузок: всё попадёт в "
+    "projects/<проект>/<станция>/<дата>/.\n"
+    "    • fetch_many — несколько станций за диапазон одним вызовом. Бюджет "
+    "общий: смотри failed и refused и скажи, что пришло.\n"
+    "    • export_project — собирает проект в ZIP (CSV, графики, манифесты) и "
+    "возвращает путь.\n"
+    "5. Вместо DataFrame передавай строковый хэндл из поля \"frame_handle\": "
+    "полный слот \"raw:irt:2024-09-10\" / \"derived:irt:2024-09-10\" либо "
+    "семейство \"raw\" / \"derived\" / \"anomalies\" (самый свежий). Полный "
+    "список — в \"available_handles\". Не выдумывай хэндл.\n"
+    "6. Если инструмент вернул {\"ok\": false} и ответа нет — сообщи причину из "
+    "message и предложи, что делать. Промежуточную ошибку не пересказывай. "
+    "Свои цифры не подставляй.\n"
+    "7. В финальном ответе перечисли графики и файлы. Единицы всегда 'nT' — не "
+    "«нанотесла», не «нТл».\n"
+    "8. Можно вызвать несколько инструментов подряд. Для двух дней одной "
+    "станции — fetch_observatory_data дважды и два РАЗНЫХ хэндла в "
+    "plot_comparison.\n"
+    "9. ВАЖНО: Ты НЕ API-сервер. НИКОГДА не отвечай JSON, Python-словарём или "
+    "строкой {'content': ..., 'tool_calls': ...} — это ошибка.\n"
+    "10. ФОРМАТ ОТВЕТА строго так, только два варианта:\n"
+    "    (а) вызвать инструмент — ТОЛЬКО блок тегов, без слов, без markdown:\n"
     '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
     '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
-    "    Ровно одна пара фигурных скобок { } вокруг всего объекта и { } вокруг "
-    "arguments.\n"
-    "    (б) когда все данные получены и инструменты больше не нужны — обычный "
-    "текст на русском, БЕЗ тегов, БЕЗ фигурных скобок, БЕЗ кавычек вокруг "
-    "имён инструментов.\n"
-    "    Если сомневаешься между (а) и (б) — бери (а): лишний вызов "
-    "инструмента дешевле, чем выдуманный ответ.\n\n"
+    "    (б) данные собраны — обычный текст, БЕЗ тегов и фигурных скобок.\n"
+    "    Сомневаешься — бери (а).\n\n"
     f"11. {HANDLE_CASE_RULE}"
 )
 
@@ -654,7 +647,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_station_geomagnetic_coords",
-            "description": "Geomagnetic coordinates (geo_lat, geo_lon) for a station via tilted dipole.",
+            "description": (
+                "Tilted-dipole geomagnetic coordinates (geomag_lat, geomag_lon) of one station. "
+                "USE when the user asks how far north a station is in geomagnetic terms, or before "
+                "comparing storm amplitudes across stations. DO NOT USE to get the station's "
+                "geographic latitude/longitude, and do not call it for data download."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -668,7 +666,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "calculate_mlt",
-            "description": "Magnetic Local Time (MLT) for a station at a UTC timestamp; mlt_hours in [0,24).",
+            "description": (
+                "Magnetic Local Time (MLT) of one station at a UTC instant; mlt_hours in [0,24), "
+                "MLT=12 means magnetic noon. USE for 'what magnetic time is it at X'. DO NOT USE "
+                "when the user wants ordinary civil local time -- that is calculate_local_time; "
+                "MLT and LT differ by the magnetic-vs-geographic longitude."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -683,7 +686,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "group_stations_by_mlt",
-            "description": "Group stations into MLT bins at a UTC timestamp.",
+            "description": (
+                "Group several stations into MLT bins at one UTC instant. USE to see which stations "
+                "sit in the same magnetic-time sector. DO NOT USE for local/civil time, and do not "
+                "call it once per station -- it takes the whole list."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -695,10 +702,68 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_local_time",
+            "description": (
+                "Civil local time (LT) at a station: LT = UT + longitude/15, wrapped to [0,24), "
+                "returned as lt_hours and lt_hm. USE for 'what local time is it at X'. DO NOT USE "
+                "for magnetic local time -- that is calculate_mlt."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "station_code": {"type": "string", "description": "IAGA station code"},
+                    "timestamp": {"type": "string", "description": "ISO 8601 UTC timestamp"}
+                },
+                "required": ["station_code", "timestamp"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "plot_overlay",
+            "description": (
+                "Draw one component from SEVERAL stations on ONE chart, each curve shifted by a "
+                "per-station nT offset, with the x axis in UT, LT or MLT. Stations are ordered "
+                "north-first by geomagnetic latitude. USE to compare several observatories, or to "
+                "stack them on a local/magnetic clock. DO NOT USE to compare two days of a single "
+                "station -- that is plot_comparison. The day must already be fetched "
+                "(handles raw:<station>:<date>)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "IAGA station codes to overlay, e.g. ['IRT','API','BSL']"
+                    },
+                    "dates": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Dates as YYYY-MM-DD; one date shared by all stations."
+                    },
+                    "component": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
+                    "offsets": {
+                        "type": "object",
+                        "additionalProperties": {"type": "number"},
+                        "description": "nT shift per station for visual separation, e.g. {'IRT': 0, 'API': 150}. Missing stations get 0."
+                    },
+                    "time_system": {"type": "string", "enum": ["UT", "LT", "MLT"], "description": "X-axis time system, default UT."},
+                    "title": {"type": "string", "description": "Chart title."},
+                    "filename": {"type": "string", "description": "Output file name, .html."}
+                },
+                "required": ["stations", "dates", "component"]
+            }
+        }
+    },
 ]
 
 TOOLS_BY_NAME = {t["function"]["name"] for t in TOOL_SCHEMAS}
-PLOT_TOOLS = {"plot_components", "plot_comparison"}
+PLOT_TOOLS = {"plot_components", "plot_comparison", "plot_overlay"}
 
 
 # --------------------------------------------------------------------------- #
@@ -2443,6 +2508,210 @@ def _handle_group_stations_by_mlt(args, store):
     return res, f'grouped {len(items)} stations by MLT'
 
 
+def _handle_calculate_local_time(args, store):
+    code = str(args.get('station_code') or '').strip().upper()
+    ts = args.get('timestamp')
+    if not code or not ts:
+        return _error('invalid_input', 'station_code and timestamp are required'), 'missing arguments'
+    try:
+        from intermagnet_loader import get_available_stations
+        rec = get_available_stations().get(code)
+    except Exception as exc:
+        return _error('registry_error', str(exc)), 'registry error'
+    if not rec or rec[2] is None:
+        return (
+            _error(
+                'station_not_found',
+                f'No usable longitude for {code} in the INTERMAGNET registry',
+                hint='Check the IAGA code',
+            ),
+            f'station_not_found: {code}',
+        )
+    try:
+        longitude = float(rec[2])
+    except (TypeError, ValueError):
+        return _error('registry_error', f'longitude for {code} is not a number'), 'registry error'
+    try:
+        stamp = pd.to_datetime(str(ts), utc=True, errors='raise')
+    except Exception as exc:
+        return _error('invalid_input', f'Cannot parse timestamp {ts!r}: {exc}'), 'bad timestamp'
+    ut_hours = (stamp.hour + stamp.minute / 60.0 + stamp.second / 3600.0) % 24.0
+    lt = (ut_hours + longitude / 15.0) % 24.0
+    h = int(lt)
+    m = int((lt - h) * 60.0 + 0.5) % 60
+    if m == 60:
+        h = (h + 1) % 24
+        m = 0
+    result = {
+        'ok': True,
+        'station_code': code,
+        'timestamp_utc': stamp.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'lt_hours': float(round(lt, 4)),
+        'lt_hm': f'{h:02d}:{m:02d}',
+        'longitude': longitude,
+        'model': 'lt_ut_plus_lon_over_15',
+    }
+    return result, f"local time for {code} at {result['timestamp_utc']}: {result['lt_hm']}"
+
+
+def _station_registry_coords(code):
+    """Return ``(lat, lon)`` for a station, or ``None`` when unavailable."""
+    try:
+        from intermagnet_loader import get_available_stations
+        rec = get_available_stations().get(code)
+    except Exception:
+        return None
+    if not rec or rec[1] is None or rec[2] is None:
+        return None
+    try:
+        return float(rec[1]), float(rec[2])
+    except (TypeError, ValueError):
+        return None
+
+
+def _handle_plot_overlay(args, store):
+    stations = [str(s).strip().upper() for s in (args.get('stations') or []) if str(s).strip()]
+    dates = args.get('dates') or ([args['date']] if args.get('date') else [])
+    if isinstance(dates, str):
+        dates = [dates]
+    dates = [str(d).strip() for d in dates if str(d).strip()]
+    component = str(args.get('component') or 'H').strip().upper()
+    time_system = str(args.get('time_system') or 'UT').strip().upper()
+    if not stations:
+        return _error('invalid_input', 'stations must list at least one IAGA code'), 'missing stations'
+    if not dates:
+        return _error('invalid_input', 'dates must list at least one YYYY-MM-DD date'), 'missing dates'
+    if time_system not in ('UT', 'LT', 'MLT'):
+        return _error('invalid_input', "time_system must be 'UT', 'LT' or 'MLT'"), 'bad time_system'
+
+    # A single shared day keeps every trace on the same clock; the schema says so.
+    date = dates[0]
+    offsets_in = args.get('offsets') or {}
+    if not isinstance(offsets_in, dict):
+        return _error('invalid_input', 'offsets must be an object of {station: nT}'), 'bad offsets'
+
+    frames: dict[str, Any] = {}
+    time_shifts: dict[str, float] = {}
+    offsets: dict[str, float] = {}
+    missing: list[str] = []
+    for code in stations:
+        handle = f"raw:{code.lower()}:{date}"
+        frame, err = store.resolve(handle)
+        if frame is None:
+            missing.append(handle)
+            continue
+        frames[code] = frame
+        try:
+            offsets[code] = float(offsets_in.get(code, offsets_in.get(code.lower(), 0.0)))
+        except (TypeError, ValueError):
+            return _error('invalid_input', f'offset for {code} is not a number'), 'bad offset'
+        time_shifts[code] = _overlay_time_shift(code, frame, time_system)
+
+    if not frames:
+        return (
+            _error(
+                'unknown_frame',
+                f"No fetched data for {date}; nothing to overlay.",
+                requested={'stations': stations, 'date': date},
+                available=store.names(),
+                hint=(
+                    "Fetch each station first, e.g. raw:irt:%s, then call plot_overlay "
+                    "with the same date." % date
+                ),
+            ),
+            'plot_overlay failed: no frames resolved',
+        )
+    if missing:
+        return (
+            _error(
+                'unknown_frame',
+                f"Missing data for: {', '.join(missing)}.",
+                requested={'stations': stations, 'date': date},
+                available=store.names(),
+                hint=(
+                    "Fetch the missing stations for %s first (fetch_observatory_data "
+                    "or fetch_many), then retry plot_overlay." % date
+                ),
+            ),
+            'plot_overlay failed: some frames unresolved',
+        )
+
+    # North on top: sort by geomagnetic latitude, descending.
+    order = _sort_stations_north_first(list(frames))
+    ordered = {code: frames[code] for code in order}
+
+    result = plotter.plot_overlay(
+        ordered,
+        component=component,
+        offsets=offsets,
+        time_system=time_system,
+        time_shifts=time_shifts,
+        title=args.get('title') or f"Overlay {', '.join(order)} {date}",
+        filename=args.get('filename'),
+    )
+    if plotter.is_error(result):
+        return result, f"plot_overlay failed: {result.get('error')}"
+    filed = _file_into_project(
+        store, result, [f"raw:{code.lower()}:{date}" for code in order], "overlay"
+    )
+    payload = {
+        'ok': True,
+        'plot_path': result,
+        'path': result,
+        'stations': order,
+        'component': component,
+        'date': date,
+        'time_system': time_system,
+        'offsets_applied': offsets,
+    }
+    if filed:
+        payload['filed_into_project'] = filed
+    return payload, f"overlay of {', '.join(order)} saved to {result}"
+
+
+def _sort_stations_north_first(codes: list[str]) -> list[str]:
+    """Order stations by geomagnetic latitude, northern first."""
+    scored: list[tuple[float, str]] = []
+    for index, code in enumerate(codes):
+        coords = _station_registry_coords(code)
+        lat_m = None
+        if coords is not None:
+            conv = gcoords.geographic_to_geomagnetic(coords[0], coords[1])
+            if isinstance(conv, dict) and conv.get('ok'):
+                lat_m = conv.get('geomag_lat')
+        # Stations without coordinates keep their input order, below the located
+        # ones, so the chart never silently reorders what the user asked for.
+        scored.append((lat_m if lat_m is not None else -1000.0 - index, code))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [code for _, code in scored]
+
+
+def _overlay_time_shift(code: str, frame: pd.DataFrame, time_system: str) -> float:
+    """Hours to add to a station's time-of-day for the chosen clock."""
+    if time_system == 'UT':
+        return 0.0
+    coords = _station_registry_coords(code)
+    if coords is None:
+        return 0.0
+    lat, lon = coords
+    if time_system == 'LT':
+        return lon / 15.0
+    # MLT: advance at the same rate as UT, so a single offset taken at the first
+    # sample slides the whole trace onto the magnetic clock.
+    conv = gcoords.geographic_to_geomagnetic(lat, lon)
+    if not (isinstance(conv, dict) and conv.get('ok') and conv.get('geomag_lon') is not None):
+        return 0.0
+    try:
+        first = pd.to_datetime(frame['timestamp'], errors='coerce').dropna().iloc[0]
+    except (KeyError, IndexError):
+        return 0.0
+    mlt = gcoords.magnetic_local_time(conv['geomag_lon'], first.to_pydatetime())
+    if not (isinstance(mlt, dict) and mlt.get('mlt_hours') is not None):
+        return 0.0
+    ut_hours = (first.hour + first.minute / 60.0 + first.second / 3600.0) % 24.0
+    return float(mlt['mlt_hours']) - ut_hours
+
+
 HANDLERS: dict[str, Handler] = {
     "fetch_observatory_data": _handle_fetch,
     "create_project": _handle_create_project,
@@ -2460,6 +2729,8 @@ HANDLERS: dict[str, Handler] = {
     "get_station_geomagnetic_coords": _handle_get_station_geomagnetic_coords,
     "calculate_mlt": _handle_calculate_mlt,
     "group_stations_by_mlt": _handle_group_stations_by_mlt,
+    "calculate_local_time": _handle_calculate_local_time,
+    "plot_overlay": _handle_plot_overlay,
 }
 
 

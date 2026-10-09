@@ -714,3 +714,72 @@ def test_tally_names_a_chart_that_was_never_attempted_by_name():
     ]
     text = ac._with_plot_tally("Готово.", log)
     assert "never_made.html" in text, text
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: multi-station overlay
+# --------------------------------------------------------------------------- #
+def test_plot_overlay_two_stations_returns_html_and_offsets(tmp_path, monkeypatch):
+    """Two fetched stations overlay onto one HTML file, north first."""
+    import intermagnet_loader as loader
+
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(
+        loader,
+        "fetch_observatory_data",
+        lambda station_code=None, start_date=None, end_date=None, **kw: _day(start_date),
+    )
+    store = ac.FrameStore()
+    for code in ("IRT", "API"):
+        payload, _ = ac._handle_fetch(
+            {"station_code": code, "start_date": "2024-09-10", "end_date": "2024-09-10"},
+            store,
+        )
+        assert not ac.is_error(payload), payload
+
+    payload, note = ac._handle_plot_overlay(
+        {
+            "stations": ["API", "IRT"],
+            "dates": ["2024-09-10"],
+            "component": "H",
+            "offsets": {"IRT": 150},
+        },
+        store,
+    )
+    assert not ac.is_error(payload), payload
+    assert Path(payload["plot_path"]).exists()
+    assert payload["plot_path"] == payload["path"]
+    assert payload["component"] == "H"
+    assert payload["date"] == "2024-09-10"
+    assert payload["offsets_applied"]["IRT"] == 150.0
+    # IRT (geomag-lat ~41) must come before API (southern hemisphere).
+    assert payload["stations"].index("IRT") < payload["stations"].index("API")
+
+
+def test_plot_overlay_refuses_when_frames_were_never_fetched(tmp_path, monkeypatch):
+    """Calling overlay before fetching is an unknown_frame, not an exception."""
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    payload, note = ac._handle_plot_overlay(
+        {"stations": ["IRT"], "dates": ["2024-09-10"], "component": "H"},
+        ac.FrameStore(),
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "unknown_frame"
+
+
+def test_plot_overlay_rejects_an_unknown_time_system(tmp_path, monkeypatch):
+    """Only UT/LT/MLT are valid clocks; anything else is invalid_input."""
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    payload, note = ac._handle_plot_overlay(
+        {
+            "stations": ["IRT"],
+            "dates": ["2024-09-10"],
+            "component": "H",
+            "time_system": "GMT",
+        },
+        ac.FrameStore(),
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "invalid_input"
+

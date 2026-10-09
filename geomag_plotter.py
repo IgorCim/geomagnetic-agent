@@ -49,6 +49,7 @@ from geomag_analyzer import (
 __all__ = [
     "plot_components",
     "plot_comparison",
+    "plot_overlay",
     "plot_magnetogram",
     "is_error",
     "DEFAULT_OUTPUT_DIR",
@@ -463,6 +464,164 @@ def plot_comparison(
         out_name += ".html"
     path = _write(fig, target / out_name, include_plotlyjs)
     log.info("Comparison plotted: %s over %s points", name, total)
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# 2b. multi-station overlay
+# --------------------------------------------------------------------------- #
+_OVERLAY_COLORS = (
+    "#1f77b4",
+    "#d62728",
+    "#2ca02c",
+    "#9467bd",
+    "#ff7f0e",
+    "#8c564b",
+    "#e377c2",
+    "#17becf",
+)
+
+_TIME_SYSTEM_LABEL = {
+    "UT": "Time of day (UT)",
+    "LT": "Local time (LT)",
+    "MLT": "Magnetic local time (MLT)",
+}
+
+
+def plot_overlay(
+    frames: dict[str, pd.DataFrame],
+    component: str = "H",
+    offsets: dict[str, float] | None = None,
+    time_system: str = "UT",
+    time_shifts: dict[str, float] | None = None,
+    title: str | None = None,
+    output_dir: str | Path | None = None,
+    filename: str | None = None,
+    max_points: int = GL_THRESHOLD,
+    include_plotlyjs: Any = True,
+) -> str | dict[str, Any]:
+    """Overlay one component from several stations on a single shared axis.
+
+    Each station's curve is drawn on the same chart with a per-station vertical
+    ``offset`` (nT) so quiet-day and storm-day stations stay legible at the same
+    time, and a per-station ``time_shifts`` (hours) that slides the trace onto a
+    UT, LT or MLT clock. The x axis is a real datetime axis anchored to
+    :data:`TIME_OF_DAY_ANCHOR`, so ticks stay ``HH:MM`` and hover/rangeslider
+    keep working, exactly as in :func:`plot_comparison`.
+
+    Parameters
+    ----------
+    frames:
+        ``{station_code: DataFrame}`` in the order to draw them (top first). The
+        caller is responsible for ordering -- the agent sorts by geomagnetic
+        latitude so northern stations sit on top.
+    component:
+        Single component to plot, default ``'H'``. ``H``/``D``/``I`` are derived
+        on demand.
+    offsets:
+        Display-only vertical shift per station, in nT. Never written back to a
+        frame; a missing station gets ``0``.
+    time_system:
+        ``'UT'``, ``'LT'`` or ``'MLT'`` -- used only to label the x axis; the
+        actual shift is supplied by ``time_shifts``.
+    time_shifts:
+        Hours to add to each station's time-of-day, keyed by station code.
+    title, output_dir, filename, max_points, include_plotlyjs:
+        As for :func:`plot_components`.
+
+    Returns
+    -------
+    str
+        Absolute path to the written HTML file.
+    dict
+        Error payload on failure.
+    """
+    if not isinstance(frames, dict) or not frames:
+        return _error("invalid_input", "frames must be a non-empty {station: DataFrame} mapping.")
+
+    system = str(time_system or "UT").strip().upper()
+    if system not in _TIME_SYSTEM_LABEL:
+        return _error(
+            "invalid_input",
+            f"time_system must be one of UT/LT/MLT, got {time_system!r}.",
+        )
+
+    name = str(component).strip().upper()
+    offsets = offsets or {}
+    time_shifts = time_shifts or {}
+
+    fig = go.Figure()
+    total = 0
+    ordered: list[str] = []
+    for index, (station, frame) in enumerate(frames.items()):
+        code = str(station).strip().upper() or f"station{index + 1}"
+        problem = _check_frame(frame, code)
+        if problem is not None:
+            return problem
+        prepared = _prepare(frame, [name], code)
+        if isinstance(prepared, dict):
+            return prepared
+
+        try:
+            offset = float(offsets.get(station, offsets.get(code, 0.0)))
+        except (TypeError, ValueError):
+            return _error("invalid_input", f"offset for {code} is not a number.")
+        try:
+            shift = float(time_shifts.get(station, time_shifts.get(code, 0.0)))
+        except (TypeError, ValueError):
+            return _error("invalid_input", f"time shift for {code} is not a number.")
+
+        stamps = pd.to_datetime(prepared["timestamp"], errors="coerce")
+        total += int(stamps.notna().sum())
+        values = pd.to_numeric(prepared[name], errors="coerce") + offset
+        xs = _time_of_day(stamps) + pd.to_timedelta(shift, unit="h")
+        xs, ys, sampled = _downsample(xs, values, max_points)
+        if sampled:
+            log.warning("%s longer than max_points=%s; stride-sampled.", code, max_points)
+
+        unit = COMPONENT_UNITS.get(name, "")
+        suffix = f" ({offset:+g} nT)" if offset else ""
+        ordered.append(code)
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                name=f"{code}{suffix}",
+                mode="lines",
+                line={"width": 1.2, "color": _OVERLAY_COLORS[index % len(_OVERLAY_COLORS)]},
+                opacity=0.9,
+                connectgaps=False,
+                hovertemplate=(
+                    f"<b>{code}</b><br>%{{x|%H:%M}}<br>{unit}: %{{y:.2f}}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    unit = _unit_label([name])
+    axis_title = _TIME_SYSTEM_LABEL[system]
+    fig.update_layout(
+        title={"text": title or f"Overlay {', '.join(ordered)}", "x": 0.01, "xanchor": "left"},
+        xaxis={
+            "title": axis_title,
+            "type": "date",
+            "tickformat": "%H:%M",
+            "rangeslider": {"visible": True, "thickness": 0.06},
+            "gridcolor": "rgba(128,128,128,0.2)",
+        },
+        yaxis={"title": unit, "gridcolor": "rgba(128,128,128,0.2)"},
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        template="plotly_white",
+        margin={"t": 90, "b": 70},
+    )
+
+    target = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
+    out_name = filename or f"overlay_{name.lower()}_{_slug(title or 'stations')}.html"
+    if not out_name.endswith(".html"):
+        out_name += ".html"
+    path = _write(fig, target / out_name, include_plotlyjs)
+    log.info("Overlay plotted: %s stations, %s points", len(ordered), total)
     return path
 
 
