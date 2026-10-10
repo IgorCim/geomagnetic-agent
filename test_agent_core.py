@@ -2068,3 +2068,249 @@ def test_shared_framestore_through_planner(monkeypatch, tmp_path):
         "subtask 2 must plot the frame fetched by subtask 1 in the SAME store"
     )
 
+
+# --------------------------------------------------------------------------- #
+# Phase 5 -- Generator-Executor: task matrix + batch processing
+# --------------------------------------------------------------------------- #
+def _tiny_plot_components(args, store):
+    """A plot_components stand-in for matrix tests.
+
+    The real handler renders a ~5 MB plotlyjs HTML, and on this Windows test box
+    re-reading those files is subject to random multi-second on-access scans.
+    Rendering itself is already covered end to end by the plotter tests; here we
+    exercise the matrix wiring -- write a chart, file it into the project days,
+    land it in the export -- on a few hundred bytes instead.
+    """
+    frame, err = ac._resolve_plottable(
+        store, args.get("df"), args.get("components") or ["H"], []
+    )
+    if err:
+        return err, "plot_components failed: " + err["error"]
+    out = plotter.DEFAULT_OUTPUT_DIR / (args.get("filename") or "plot.html")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("<html>tiny plot</html>", encoding="utf-8")
+    filed = ac._file_into_project(store, str(out), [args.get("df")], "components")
+    payload = {
+        "ok": True,
+        "path": str(out),
+        "components": args.get("components") or ["H"],
+        "rows": int(len(frame)),
+    }
+    if filed:
+        payload["filed_into_project"] = filed
+    return payload, f"Saved chart to {out}"
+
+
+def _matrix_store(monkeypatch, tmp_path):
+    """An offline FrameStore whose project/export/plot output all stay in tmp."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path / "plots")
+    monkeypatch.setattr(ac.projects, "EXPORTS_ROOT", tmp_path / "exports")
+    monkeypatch.setitem(ac.HANDLERS, "plot_components", _tiny_plot_components)
+    return ac.FrameStore(ac.projects.Workspace(root=tmp_path / "projects"))
+
+
+MATRIX_ARGS = {
+    "events": ["2024-10-10", "2024-09-08"],
+    "stations": ["BRW", "SHU", "IRT"],
+    "actions": ["fetch", "calc_HDI", "plot"],
+    "project_name": "events",
+}
+
+
+def test_create_task_matrix_writes_the_cartesian_product(monkeypatch, tmp_path):
+    """2 events x 3 stations = 6 pending tasks, saved next to the project."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    payload, note = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    assert payload["ok"], payload
+    assert payload["total"] == 6
+    assert "Матрица создана. Всего задач: 6." in payload["summary"]
+    assert store.workspace.project == "events"
+
+    path = Path(payload["matrix_path"])
+    assert path.is_file()
+    matrix = json.loads(path.read_text(encoding="utf-8"))
+    assert matrix["total"] == 6 and matrix["pending"] == 6 and matrix["completed"] == 0
+    assert len(matrix["tasks"]) == 6
+    assert all(t["status"] == "pending" for t in matrix["tasks"])
+    cells = {(t["station"], t["event"]) for t in matrix["tasks"]}
+    assert len(cells) == 6
+    assert ("BRW", "2024-10-10") in cells and ("IRT", "2024-09-08") in cells
+    assert matrix["tasks"][0]["actions"] == [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "plot_components",
+    ]
+
+
+def test_process_matrix_batch_executes_cells_directly(monkeypatch, tmp_path):
+    """The batch tool wipes out the pending queue without any model calls."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    path = created["matrix_path"]
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": path, "batch_size": 4}, store
+    )
+    assert payload["ok"], payload
+    assert payload["processed"] == 4 and payload["succeeded"] == 4 and payload["failed"] == 0
+    assert payload["remaining"] == 2 and payload["progress"] == "4/6"
+    assert "Обработано 4 задач. Успешно: 4, Ошибок: 0." in payload["summary"]
+    assert "Осталось в матрице: 2." in payload["summary"]
+
+    done = payload["remaining"] == 2  # half the cells done
+    matrix = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert matrix["completed"] == 4 and matrix["pending"] == 2
+    assert sum(1 for t in matrix["tasks"] if t["status"] == "done") == 4
+
+    # The executors did real work: frames are in the shared store, charts on disk.
+    assert len(store.names()) >= 8  # 4 raw + 4 derived
+    assert (tmp_path / "plots").exists()
+
+    payload2, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": path, "batch_size": 4}, store
+    )
+    assert payload2["succeeded"] == 2 and payload2["remaining"] == 0
+    assert payload2["progress"] == "6/6"
+
+
+def test_process_matrix_batch_marks_a_failed_cell_without_stopping_the_batch(
+    monkeypatch, tmp_path
+):
+    """A broken cell is recorded as failed; the rest still complete."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    path = Path(created["matrix_path"])
+    matrix = json.loads(path.read_text(encoding="utf-8"))
+    matrix["tasks"][0]["actions"] = ["no_such_handler"]
+    path.write_text(json.dumps(matrix, ensure_ascii=False), encoding="utf-8")
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": str(path)}, store
+    )
+    assert payload["ok"]
+    assert payload["processed"] == 5 and payload["succeeded"] == 4 and payload["failed"] == 1
+    refreshed = json.loads(path.read_text(encoding="utf-8"))
+    assert refreshed["failed"] == 1 and refreshed["pending"] == 1
+    assert refreshed["tasks"][0]["status"] == "failed"
+    assert "no_such_handler" in (refreshed["tasks"][0]["error"] or "")
+
+
+def test_process_matrix_batch_resolves_a_bare_file_name_and_clamps_batch_size(
+    monkeypatch, tmp_path
+):
+    store = _matrix_store(monkeypatch, tmp_path)
+    created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    name = Path(created["matrix_path"]).name
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": name, "batch_size": -3}, store
+    )
+    assert payload["ok"] and payload["processed"] == 1  # clamped to the 1..20 minimum
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": name, "batch_size": 999}, store
+    )
+    assert payload["processed"] == 5 and payload["remaining"] == 0  # clamped to 20
+
+
+def test_process_matrix_batch_rejects_an_unknown_path(monkeypatch, tmp_path):
+    store = _matrix_store(monkeypatch, tmp_path)
+    payload, note = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": "nonexistent_matrix.json"}, store
+    )
+    assert not payload["ok"]
+    assert payload["error"] == "matrix_not_found"
+
+
+def test_create_task_matrix_validation_errors(monkeypatch, tmp_path):
+    store = _matrix_store(monkeypatch, tmp_path)
+    payload, _ = ac.HANDLERS["create_task_matrix"](
+        {"events": "bad-date", "stations": ["BRW"], "actions": ["plot"], "project_name": "x"}, store
+    )
+    assert not payload["ok"] and payload["error"] == "invalid_events"
+    payload, _ = ac.HANDLERS["create_task_matrix"](
+        {"events": ["2024-10-10"], "stations": ["BRW"], "actions": ["plot"]}, store
+    )
+    assert not payload["ok"] and payload["error"] == "missing_project_name"
+
+
+class _MatrixPlanBrain:
+    """chat() returns a plan that is a single create_task_matrix step."""
+
+    def chat(self, messages, tools):  # noqa: ARG002
+        return {
+            "content": (
+                '{"tasks":[{"id":"step_001","description":"Матрица",'
+                '"tool_name":"create_task_matrix",'
+                '"tool_args":{"events":["2024-10-10","2024-09-08"],'
+                '"stations":["BRW","SHU"],'
+                '"actions":["fetch","calc_HDI","plot"],'
+                '"project_name":"events"}}]}'
+            ),
+            "tool_calls": None,
+        }
+
+
+def test_run_agent_with_planner_single_matrix_plan_runs_the_whole_job(
+    monkeypatch, tmp_path
+):
+    """A plan of exactly one create_task_matrix task is executed end to end:
+    matrix written, batches ground through directly, project exported."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    result = ac.run_agent_with_planner(
+        "10 событий x 26 станций, графики в архив",
+        brain=_MatrixPlanBrain(),
+        store=store,
+        verbose=False,
+    )
+    assert result["ok"], result
+    assert result["matrix_path"] and Path(result["matrix_path"]).is_file()
+    assert any("raw:brw:2024-10-10" in h for h in result["store"].names())
+    assert Path(result["export"]["path"]).suffix == ".zip"
+    assert result["results"], "at least one process_matrix_batch result expected"
+
+
+class _ManyCellsPlanBrain:
+    """chat() returns 20 identical plot_components tasks (over the threshold)."""
+
+    def chat(self, messages, tools):  # noqa: ARG002
+        tasks = ",".join(
+            "{"
+            '"id": "step_%03d", "description": "p%d", '
+            '"tool_name": "plot_components", '
+            '"tool_args": {"station_code": "BRW", '
+            '"start_date": "2024-10-10", "end_date": "2024-10-10"}'
+            "}" % (i, i)
+            for i in range(1, 21)
+        )
+        return {"content": '{"tasks":[' + tasks + "]}", "tool_calls": None}
+
+
+def test_run_agent_with_planner_folds_a_large_plan_into_a_matrix(
+    monkeypatch, tmp_path
+):
+    """>MATRIX_THRESHOLD per-unit tasks are intercepted: instead of 20 model
+    round-trips the planner builds an events x stations matrix and grinds it."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    result = ac.run_agent_with_planner(
+        "много графиков для BRW",
+        brain=_ManyCellsPlanBrain(),
+        store=store,
+        verbose=False,
+    )
+    assert result["ok"], result
+    matrix = json.loads(Path(result["matrix_path"]).read_text(encoding="utf-8"))
+    assert matrix["completed"] == matrix["total"] == 1
+    assert "raw:brw:2024-10-10" in result["store"].names()
+    assert Path(result["export"]["path"]).suffix == ".zip"
+
+
+def test_the_two_matrix_tools_are_in_the_schema_registry():
+    """Every schema has a handler (parity test) and vice versa -- both new tools
+    must satisfy the toolset completeness guard."""
+    assert {"create_task_matrix", "process_matrix_batch"} <= ac.TOOLS_BY_NAME
+    assert ac.TOOLS_BY_NAME == set(ac.HANDLERS)
+    fetch_names = {t["function"]["name"] for t in ac.select_tools_for_task("process_matrix_batch")}
+    assert "fetch_observatory_data" in fetch_names
+    assert "plot_components" in fetch_names
+
