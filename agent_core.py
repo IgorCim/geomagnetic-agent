@@ -150,11 +150,11 @@ BASE_PROMPT_COMPACT = (
     "create_project, export_project.\n"
     "    • Пакетная работа: create_task_matrix (план \"события×станции\": ОДНА "
     "задача на станцию с её списком дат), process_matrix_batch "
-    "(run_until_complete=True обрабатывает ВСЕ станции и даты за один вызов), "
-    "export_project. При большом количестве станций/дат (>15 комбинаций) НЕ "
+    "(run_until_complete=True обрабатывает ВСЕ станции и даты и САМ собирает "
+    "архив за один вызов). При большом количестве станций/дат (>15 комбинаций) НЕ "
     "перечисляй задачи по одной — создай create_task_matrix c lists events, "
     "stations, actions и project_name, затем ОДИН вызов process_matrix_batch "
-    "с run_until_complete=True (без цикла), потом export_project.\n"
+    "с run_until_complete=True (без цикла); экспорт не нужен, архив соберётся сам.\n"
     "    • Математика: calculate_derived_components (считает только H, D, I; "
     "X, Y, Z, F уже есть в raw), get_statistics, detect_anomalies, "
     "calculate_derived_math — метрики 'delta', 'dH_dt', 'anomaly'; Метрики "
@@ -184,13 +184,15 @@ BASE_PROMPT_COMPACT = (
     "2. Как только матрица создана (в ответе 'Матрица создана'), НЕМЕДЛЕННО "
     "вызови process_matrix_batch с run_until_complete=True — он обработает все "
     "станции и все их даты за один вызов.\n"
-    "3. Проверяй ответ: если 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' — станции обработаны. "
-    "В сводке указано, сколько полностью успешных, частичных (есть пропуски) и "
-    "пустых станций.\n"
-    "4. После этого вызови export_project. После успешного вызова export_project "
-    "ОБЯЗАТЕЛЬНО напиши пользователю краткий текстовый отчёт: сколько станций "
-    "всего, сколько полностью успешных / частичных / пустых, и где лежит архив. "
-    "Не оставляй пользователя без ответа.\n"
+    "3. Проверяй ответ: если 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' — станции обработаны, "
+    "в сводке есть разбивка полностью успешных / частичных / пустых и путь к "
+    "архиву.\n"
+    "4. После вызова process_matrix_batch с run_until_complete=True ты получишь "
+    "готовую сводку и путь к архиву (экспорт делается автоматически). Твоя "
+    "ЕДИНСТВЕННАЯ задача — красиво оформить этот текст для пользователя: сколько "
+    "станций всего, сколько полностью успешных / частичных / пустых, где лежит "
+    "архив. НЕ вызывай больше никаких инструментов, в том числе export_project, и "
+    "не оставляй пользователя без ответа.\n"
     "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
     "create_task_matrix повторно, если матрица уже создана."
 )
@@ -414,7 +416,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Use this INSTEAD of generating a long list of tool calls when the "
                 "job spans many stations/dates (more than ~15 units). Then call "
                 "process_matrix_batch ONCE with run_until_complete=True (it grinds "
-                "every station, no per-step calls), then export_project."
+                "every station and collects the archive itself, no per-step calls)."
             ),
             "parameters": {
                 "type": "object",
@@ -456,13 +458,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "file created by create_task_matrix and runs every action (fetch, "
                 "derive, plot) for every event of every station internally, without "
                 "extra model round-trips. With run_until_complete=True (production) "
-                "finishes ALL pending stations in this one call and returns a summary "
-                "'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА. Станций всего: N. Полностью "
-                "успешных: X. Частичных (есть пропуски): Y. Полностью пустых (нет "
-                "данных ни за одну дату): Z. Список пустых станций: [...]'. With "
-                "run_until_complete=False (debugging) it processes only batch_size "
-                "stations and returns a parseable 'Обработано N. Успешно: X, Ошибок: "
-                "Y. Осталось задач: R.'"
+                "finishes ALL pending stations in this one call, AUTOMATICALLY collects "
+                "the project archive, and returns a summary 'МАССОВАЯ ОБРАБОТКА "
+                "ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ. Станций всего: N. Полностью успешных: "
+                "X. Частичных: Y. Полностью пустых: Z. Список пустых станций: [...]. "
+                "Архив с данными и графиками успешно собран: <path>'. No separate "
+                "export_project call is needed. With run_until_complete=False "
+                "(debugging) it processes only batch_size stations and returns a "
+                "parseable 'Обработано N. Успешно: X, Ошибок: Y. Осталось задач: R.'"
             ),
             "parameters": {
                 "type": "object",
@@ -3037,14 +3040,45 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     matrix["pending"] = remaining
     path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    archive: str | None = None
+    export_payload: Any = None
+    export_error: str | None = None
+    if run_until_complete and remaining == 0:
+        # The whole job is done, so Python collects the ZIP itself. After a heavy
+        # 260-cell run the 7B model reliably drops the follow-up export_project
+        # step and answers with nothing; folding the archive into this one tool
+        # call removes that step from the model's plate entirely.
+        project_name = str(matrix.get("project") or "")
+        if project_name:
+            export_payload, export_note = _handle_export_project(
+                {"name": project_name}, store
+            )
+            if not is_error(export_payload):
+                archive = export_payload.get("path") or export_payload.get("archive")
+            else:
+                export_error = export_payload.get("message") or export_note
+
     if run_until_complete:
-        summary = (
-            f"✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА. Станций всего: {total}. "
-            f"Полностью успешных: {full}. Частичных (есть пропуски): {partial}. "
-            f"Полностью пустых (нет данных ни за одну дату): {empty}. "
-            f"Список пустых станций: [{', '.join(empty_stations)}]. "
-            f"Файлы сохранены. СЛЕДУЮЩИЙ ШАГ: export_project."
-        )
+        if archive:
+            summary = (
+                f"✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ. "
+                f"Станций всего: {total}. Полностью успешных: {full}. "
+                f"Частичных: {partial}. Полностью пустых: {empty}. "
+                f"Список пустых станций: [{', '.join(empty_stations)}]. "
+                f"Архив с данными и графиками успешно собран: {archive}. "
+                f"СЛЕДУЮЩИЙ ШАГ: Просто напиши пользователю краткий итоговый "
+                f"отчет на основе этих данных. Больше не нужно вызывать никакие "
+                f"инструменты."
+            )
+        else:
+            summary = (
+                f"✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА. Станций всего: {total}. "
+                f"Полностью успешных: {full}. Частичных: {partial}. "
+                f"Полностью пустых: {empty}. "
+                f"Список пустых станций: [{', '.join(empty_stations)}]. "
+                f"Не удалось собрать архив: {export_error}. "
+                f"СЛЕДУЮЩИЙ ШАГ: сообщи пользователю итог и причину."
+            )
     else:
         summary = (
             f"Обработано {len(chunk)}. Успешно: {succeeded}, Ошибок: {failed_here}. "
@@ -3064,6 +3098,8 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
         "remaining": remaining,
         "total": total,
         "progress": f"{full + partial}/{total}",
+        "archive": archive,
+        "export": export_payload,
         "matrix_path": str(path),
         "results": processed,
         "summary": summary,
@@ -3180,8 +3216,15 @@ def _run_matrix_job(
     if verbose:
         print(f"   {payload['summary']}")
 
-    export_payload, export_note = _handle_export_project({"name": project_name}, store)
-    archive = export_payload.get("path") if not is_error(export_payload) else export_payload.get("message")
+    # process_matrix_batch now collects the archive itself once every station is
+    # done, so only export here if it somehow did not (keeps the ZIP path in the
+    # payload stable for callers that read ``export``).
+    export_payload = payload.get("export")
+    if not isinstance(export_payload, dict) or is_error(export_payload):
+        export_payload, export_note = _handle_export_project({"name": project_name}, store)
+    archive = payload.get("archive")
+    if not archive:
+        archive = export_payload.get("path") if not is_error(export_payload) else export_payload.get("message")
     text = (
         f"Матрица {project_name}: станций {create_payload['total']} — "
         f"полностью успешных {full}, частичных {partial}, пустых {empty}"

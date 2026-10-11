@@ -145,7 +145,7 @@ class LLMPlanner:
         "8. НЕ выводи списком больше 15 задач. Если комбинаций станций×дат "
         "больше 15 — верни ОДНУ подзадачу create_task_matrix с events, stations, "
         "actions, project_name; остальное (однократный process_matrix_batch "
-        "с run_until_complete=True и экспорт) сделает агент."
+        "с run_until_complete=True, который сам собирает архив) сделает агент."
     )
 
     def __init__(self, brain: Any):

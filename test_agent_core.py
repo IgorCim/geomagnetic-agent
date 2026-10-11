@@ -148,7 +148,8 @@ def test_system_prompt_enforces_the_massive_task_algorithm():
     assert "НИКОГДА не вызывай process_matrix_batch в цикле" in sp
     assert "run_until_complete=True" in sp
     assert "МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА" in sp
-    assert "Не оставляй пользователя без ответа" in sp
+    assert "НЕ вызывай больше никаких инструментов" in sp
+    assert "экспорт делается автоматически" in sp
     assert "process_matrix_batch" in sp
     assert len(sp) <= 4500, f"prompt grew to {len(sp)} chars"
 
@@ -2209,13 +2210,20 @@ def test_process_matrix_batch_run_until_complete_processes_everything_in_one_cal
     assert payload["full"] == 3 and payload["partial"] == 0 and payload["empty"] == 0
     assert payload["empty_stations"] == []
     assert payload["remaining"] == 0 and payload["progress"] == "3/3"
-    assert "МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА" in payload["summary"]
+    assert "МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ" in payload["summary"]
     assert "Станций всего: 3." in payload["summary"]
     assert "Полностью успешных: 3." in payload["summary"]
-    assert "Частичных (есть пропуски): 0." in payload["summary"]
-    assert "Полностью пустых (нет данных ни за одну дату): 0." in payload["summary"]
+    assert "Частичных: 0." in payload["summary"]
+    assert "Полностью пустых: 0." in payload["summary"]
     assert "Список пустых станций: []." in payload["summary"]
-    assert "СЛЕДУЮЩИЙ ШАГ: export_project" in payload["summary"]
+    assert "Больше не нужно вызывать никакие инструменты." in payload["summary"]
+
+    # The tool now collects the archive itself -- the model must not export.
+    archive = payload["archive"]
+    assert archive and Path(archive).is_file()
+    assert Path(archive).suffix == ".zip"
+    assert archive in payload["summary"]
+    assert payload["export"] and not ac.is_error(payload["export"])
 
     matrix = json.loads(Path(path).read_text(encoding="utf-8"))
     assert matrix["completed"] == 3 and matrix["pending"] == 0
@@ -2273,9 +2281,10 @@ def test_process_matrix_batch_classifies_full_partial_and_empty_stations(
     summary = payload["summary"]
     assert "Станций всего: 3." in summary
     assert "Полностью успешных: 1." in summary
-    assert "Частичных (есть пропуски): 1." in summary
-    assert "Полностью пустых (нет данных ни за одну дату): 1." in summary
+    assert "Частичных: 1." in summary
+    assert "Полностью пустых: 1." in summary
     assert "Список пустых станций: [IRT]." in summary
+    assert payload["archive"] and Path(payload["archive"]).is_file()
 
     refreshed = json.loads(path.read_text(encoding="utf-8"))
     assert refreshed["completed"] == 2 and refreshed["failed"] == 1
