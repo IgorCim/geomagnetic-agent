@@ -148,6 +148,7 @@ def test_system_prompt_enforces_the_massive_task_algorithm():
     assert "НИКОГДА не вызывай process_matrix_batch в цикле" in sp
     assert "run_until_complete=True" in sp
     assert "МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА" in sp
+    assert "Не оставляй пользователя без ответа" in sp
     assert "process_matrix_batch" in sp
     assert len(sp) <= 4500, f"prompt grew to {len(sp)} chars"
 
@@ -2205,15 +2206,81 @@ def test_process_matrix_batch_run_until_complete_processes_everything_in_one_cal
     assert payload["ok"], payload
     assert payload["completed_run"] is True
     assert payload["processed"] == 3 and payload["succeeded"] == 3 and payload["failed"] == 0
+    assert payload["full"] == 3 and payload["partial"] == 0 and payload["empty"] == 0
+    assert payload["empty_stations"] == []
     assert payload["remaining"] == 0 and payload["progress"] == "3/3"
     assert "МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА" in payload["summary"]
-    assert "Всего станций: 3. Успешно: 3, Ошибок: 0." in payload["summary"]
-    assert "СЛЕДУЮЩИЙ ШАГ: Вызови export_project" in payload["summary"]
+    assert "Станций всего: 3." in payload["summary"]
+    assert "Полностью успешных: 3." in payload["summary"]
+    assert "Частичных (есть пропуски): 0." in payload["summary"]
+    assert "Полностью пустых (нет данных ни за одну дату): 0." in payload["summary"]
+    assert "Список пустых станций: []." in payload["summary"]
+    assert "СЛЕДУЮЩИЙ ШАГ: export_project" in payload["summary"]
 
     matrix = json.loads(Path(path).read_text(encoding="utf-8"))
     assert matrix["completed"] == 3 and matrix["pending"] == 0
     # 3 stations x 2 events, each yielding a raw and a derived frame.
     assert len(store.names()) >= 12
+
+
+def test_process_matrix_batch_classifies_full_partial_and_empty_stations(
+    monkeypatch, tmp_path
+):
+    """The summary tells a fully successful station from a partial one (some
+    dates missing) and from one that yielded no data at all."""
+    store = _matrix_store(monkeypatch, tmp_path)
+
+    real_fetch = ac._handle_fetch
+
+    def flaky_fetch(args, store_):
+        date = str(args.get("start_date") or "")
+        if date.startswith("19"):  # marker for a date the archive has no data for
+            return ac._error("no_data", f"no data for {date}"), "fetch failed: no_data"
+        return real_fetch(args, store_)
+
+    monkeypatch.setitem(ac.HANDLERS, "fetch_observatory_data", flaky_fetch)
+
+    project = "mixed"
+    store.workspace.create(project)
+    tasks = [
+        {"id": "station_BRW", "station_code": "BRW",
+         "events": ["2024-10-10"], "actions": ["fetch_observatory_data"],
+         "status": "pending", "attempts": 0, "error": None},
+        {"id": "station_SHU", "station_code": "SHU",
+         "events": ["2024-10-10", "1990-01-01"],
+         "actions": ["fetch_observatory_data"],
+         "status": "pending", "attempts": 0, "error": None},
+        {"id": "station_IRT", "station_code": "IRT",
+         "events": ["1990-01-01", "1990-02-02"],
+         "actions": ["fetch_observatory_data"],
+         "status": "pending", "attempts": 0, "error": None},
+    ]
+    matrix = {
+        "project": project, "total": 3, "completed": 0, "failed": 0,
+        "pending": 3, "tasks": tasks,
+    }
+    path = ac._matrix_path(project, store.workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(matrix, ensure_ascii=False), encoding="utf-8")
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": str(path), "run_until_complete": True}, store
+    )
+    assert payload["ok"], payload
+    assert payload["full"] == 1 and payload["partial"] == 1 and payload["empty"] == 1
+    assert payload["empty_stations"] == ["IRT"]
+    assert payload["partial_stations"] == ["SHU"]
+    summary = payload["summary"]
+    assert "Станций всего: 3." in summary
+    assert "Полностью успешных: 1." in summary
+    assert "Частичных (есть пропуски): 1." in summary
+    assert "Полностью пустых (нет данных ни за одну дату): 1." in summary
+    assert "Список пустых станций: [IRT]." in summary
+
+    refreshed = json.loads(path.read_text(encoding="utf-8"))
+    assert refreshed["completed"] == 2 and refreshed["failed"] == 1
+    statuses = {t["station_code"]: t["status"] for t in refreshed["tasks"]}
+    assert statuses == {"BRW": "done", "SHU": "partial", "IRT": "failed"}
 
 
 def test_process_matrix_batch_marks_a_failed_cell_without_stopping_the_batch(

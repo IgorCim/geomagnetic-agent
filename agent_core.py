@@ -184,10 +184,13 @@ BASE_PROMPT_COMPACT = (
     "2. Как только матрица создана (в ответе 'Матрица создана'), НЕМЕДЛЕННО "
     "вызови process_matrix_batch с run_until_complete=True — он обработает все "
     "станции и все их даты за один вызов.\n"
-    "3. Проверяй ответ: если 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' и 'Ошибок: 0' — "
-    "всё готово.\n"
-    "4. Только после этого вызывай export_project и давай финальный текстовый "
-    "отчет.\n"
+    "3. Проверяй ответ: если 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' — станции обработаны. "
+    "В сводке указано, сколько полностью успешных, частичных (есть пропуски) и "
+    "пустых станций.\n"
+    "4. После этого вызови export_project. После успешного вызова export_project "
+    "ОБЯЗАТЕЛЬНО напиши пользователю краткий текстовый отчёт: сколько станций "
+    "всего, сколько полностью успешных / частичных / пустых, и где лежит архив. "
+    "Не оставляй пользователя без ответа.\n"
     "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
     "create_task_matrix повторно, если матрица уже создана."
 )
@@ -453,11 +456,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "file created by create_task_matrix and runs every action (fetch, "
                 "derive, plot) for every event of every station internally, without "
                 "extra model round-trips. With run_until_complete=True (production) "
-                "finishes ALL pending stations in this one call and returns "
-                "'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА... Всего станций: N. Успешно: X, "
-                "Ошибок: Y'. With run_until_complete=False (debugging) it processes "
-                "only batch_size stations and returns a parseable 'Обработано N. "
-                "Успешно: X, Ошибок: Y. Осталось задач: R.'"
+                "finishes ALL pending stations in this one call and returns a summary "
+                "'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА. Станций всего: N. Полностью "
+                "успешных: X. Частичных (есть пропуски): Y. Полностью пустых (нет "
+                "данных ни за одну дату): Z. Список пустых станций: [...]'. With "
+                "run_until_complete=False (debugging) it processes only batch_size "
+                "stations and returns a parseable 'Обработано N. Успешно: X, Ошибок: "
+                "Y. Осталось задач: R.'"
             ),
             "parameters": {
                 "type": "object",
@@ -2743,32 +2748,35 @@ def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool,
 
     The station loop is the outer dimension and the events list the inner one;
     both live here in Python, far from the model. Errors inside a single event
-    are logged and do NOT abort the rest of the station's events. An all-key
-    success returns ``(True, "")``; any failed event fails the station with an
-    aggregated description.
+    are logged and do NOT abort the rest of the station's events. Per-event
+    outcomes are written back onto the task as ``events_ok`` / ``events_failed``
+    so the batch summary can tell a fully successful station from a partial one
+    and from one that yielded no data at all. An all-key success returns
+    ``(True, "")``; any failed event fails the station with an aggregated
+    description, but the events that did work are still recorded as succeeded.
     """
     station = str(task.get("station_code") or "").strip().upper()
     events = [str(e) for e in (task.get("events") or [])]
     tools = task.get("actions") or _DEFAULT_MATRIX_ACTIONS
-    failures: list[str] = []
+    event_failures: dict[str, list[str]] = {event: [] for event in events}
     for event in events:
         for tool in tools:
             if tool not in HANDLERS:
-                failures.append(f"{event}: неизвестное действие {tool!r}")
+                event_failures[event].append(f"неизвестное действие {tool!r}")
                 break
             # Data prerequisites: a cell whose actions omit fetch/derive must
             # not fail on an unknown_frame -- the plot just gets data implicitly.
             if tool != "fetch_observatory_data":
                 ok, note = _ensure_matrix_fetch(station, event, store)
                 if not ok:
-                    failures.append(f"{event}: {note}")
+                    event_failures[event].append(note)
                     break
             if tool in ("plot_components", "plot_overlay"):
                 derived_slot = f"derived:{station.lower()}:{event}"
                 if store.get(derived_slot) is None:
                     ok, note = _ensure_matrix_derived(station, event, store)
                     if not ok:
-                        failures.append(f"{event}: {note}")
+                        event_failures[event].append(note)
                         break
             try:
                 payload, _ = HANDLERS[tool](
@@ -2776,11 +2784,13 @@ def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool,
                 )
             except Exception as exc:  # noqa: BLE001
                 traceback.print_exc()
-                failures.append(f"{event}: {tool} raised {type(exc).__name__}: {exc}")
+                event_failures[event].append(
+                    f"{tool} raised {type(exc).__name__}: {exc}"
+                )
                 break
             if is_error(payload):
-                failures.append(
-                    f"{event}: {tool}: {payload.get('error')}: "
+                event_failures[event].append(
+                    f"{tool}: {payload.get('error')}: "
                     f"{str(payload.get('message'))[:200]}"
                 )
                 break
@@ -2792,11 +2802,16 @@ def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool,
                 derived = store.get(f"derived:{station.lower()}:{event}")
                 if derived is not None:
                     store.workspace.save(station, event, derived, kind="derived")
-    if not failures:
+    failed_events = [e for e in events if event_failures[e]]
+    ok_events = [e for e in events if not event_failures[e]]
+    task["events_ok"] = ok_events
+    task["events_failed"] = failed_events
+    if not failed_events:
         return True, ""
-    for detail in failures:
+    details = [f"{e}: {event_failures[e][0]}" for e in failed_events]
+    for detail in details:
         print(f"[matrix] {station}/{detail} -- обработка станции продолжается.")
-    return False, f"события: {'; '.join(failures)}"
+    return False, f"события: {'; '.join(details)}"
 
 
 def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -2882,6 +2897,33 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
     }, summary
 
 
+def _matrix_station_class(task: dict[str, Any]) -> str:
+    """Classify a processed station task as full / partial / empty / pending.
+
+    ``full``  -- every event succeeded;
+    ``partial`` -- at least one event succeeded and at least one had no data;
+    ``empty`` -- no event yielded data (all no_data / station_not_found);
+    ``pending`` -- not run yet. Falls back to the persisted ``status`` for
+    matrices written before per-event tracking existed.
+    """
+    events_ok = task.get("events_ok")
+    events_failed = task.get("events_failed")
+    if events_ok is None and events_failed is None:
+        status = task.get("status")
+        if status == "done":
+            return "full"
+        if status == "partial":
+            return "partial"
+        if status == "failed":
+            return "empty"
+        return "pending"
+    if not events_failed:
+        return "full"
+    if events_ok:
+        return "partial"
+    return "empty"
+
+
 def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Execute matrix station-tasks, handling tools directly, no model in the loop.
 
@@ -2944,14 +2986,21 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
 
     succeeded = 0
     failed_here = 0
+    partial_here = 0
     processed: list[dict[str, Any]] = []
     for task in chunk:
         task["attempts"] = int(task.get("attempts") or 0) + 1
         ok, reason = _execute_matrix_task(task, store)
-        if ok:
+        events_ok = list(task.get("events_ok") or [])
+        events_failed = list(task.get("events_failed") or [])
+        if not events_failed:
             task["status"] = "done"
             task["error"] = None
             succeeded += 1
+        elif events_ok:
+            task["status"] = "partial"
+            task["error"] = reason
+            partial_here += 1
         else:
             task["status"] = "failed"
             task["error"] = reason
@@ -2960,24 +3009,41 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
             {
                 "station": task.get("station_code", ""),
                 "events": len(task.get("events") or []),
+                "events_ok": len(events_ok),
+                "events_failed": len(events_failed),
                 "ok": ok,
                 "error": None if ok else reason,
             }
         )
 
-    done = sum(1 for t in tasks if t.get("status") == "done")
-    failed = sum(1 for t in tasks if t.get("status") == "failed")
+    full = sum(1 for t in tasks if _matrix_station_class(t) == "full")
+    partial = sum(1 for t in tasks if _matrix_station_class(t) == "partial")
+    empty = sum(1 for t in tasks if _matrix_station_class(t) == "empty")
     remaining = sum(1 for t in tasks if t.get("status") == "pending")
-    matrix["completed"] = done
-    matrix["failed"] = failed
+    empty_stations = [
+        t.get("station_code", "")
+        for t in tasks
+        if _matrix_station_class(t) == "empty"
+    ]
+    partial_stations = [
+        t.get("station_code", "")
+        for t in tasks
+        if _matrix_station_class(t) == "partial"
+    ]
+    total = matrix.get("total", 0)
+    matrix["completed"] = full + partial
+    matrix["failed"] = empty
+    matrix["partial"] = partial
     matrix["pending"] = remaining
     path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     if run_until_complete:
         summary = (
-            f"✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА. Всего станций: {matrix.get('total', 0)}. "
-            f"Успешно: {done}, Ошибок: {failed}. Файлы сохранены. "
-            f"СЛЕДУЮЩИЙ ШАГ: Вызови export_project."
+            f"✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА. Станций всего: {total}. "
+            f"Полностью успешных: {full}. Частичных (есть пропуски): {partial}. "
+            f"Полностью пустых (нет данных ни за одну дату): {empty}. "
+            f"Список пустых станций: [{', '.join(empty_stations)}]. "
+            f"Файлы сохранены. СЛЕДУЮЩИЙ ШАГ: export_project."
         )
     else:
         summary = (
@@ -2990,9 +3056,14 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
         "processed": len(chunk),
         "succeeded": succeeded,
         "failed": failed_here,
+        "partial": partial_here,
+        "full": full,
+        "empty": empty,
+        "empty_stations": empty_stations,
+        "partial_stations": partial_stations,
         "remaining": remaining,
-        "total": matrix.get("total", 0),
-        "progress": f"{done}/{matrix.get('total', 0)}",
+        "total": total,
+        "progress": f"{full + partial}/{total}",
         "matrix_path": str(path),
         "results": processed,
         "summary": summary,
@@ -3102,19 +3173,23 @@ def _run_matrix_job(
             "summary": note,
             "store": store,
         }
-    done = int(payload["succeeded"])
-    failed = int(payload["failed"])
+    full = int(payload.get("full", payload.get("succeeded", 0)))
+    partial = int(payload.get("partial", 0))
+    empty = int(payload.get("empty", payload.get("failed", 0)))
+    empty_stations = payload.get("empty_stations") or []
     if verbose:
         print(f"   {payload['summary']}")
 
     export_payload, export_note = _handle_export_project({"name": project_name}, store)
     archive = export_payload.get("path") if not is_error(export_payload) else export_payload.get("message")
     text = (
-        f"Матрица {project_name}: выполнено {done}, ошибок {failed} "
-        f"из {create_payload['total']} станций. Архив: {archive}."
+        f"Матрица {project_name}: станций {create_payload['total']} — "
+        f"полностью успешных {full}, частичных {partial}, пустых {empty}"
+        + (f" ({', '.join(empty_stations)})" if empty_stations else "")
+        + f". Архив: {archive}."
     )
     return {
-        "ok": failed == 0,
+        "ok": empty == 0,
         "text": text,
         "results": batches,
         "matrix_path": path,
