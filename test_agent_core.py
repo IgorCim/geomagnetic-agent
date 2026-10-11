@@ -140,6 +140,16 @@ def test_system_prompt_marks_the_formula_dsl_as_safe():
     assert "evaluate_custom_formula" in ac.SYSTEM_PROMPT
 
 
+def test_system_prompt_enforces_the_massive_task_algorithm():
+    """The matrix loop is a strict workflow, so a 260-cell job cannot loop."""
+    sp = ac.SYSTEM_PROMPT
+    assert "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ" in sp
+    assert "НИКОГДА не вызывай create_task_matrix повторно" in sp
+    assert "'Осталось задач: 0'" in sp
+    assert "process_matrix_batch" in sp
+    assert len(sp) <= 4500, f"prompt grew to {len(sp)} chars"
+
+
 def test_slot_ordering_is_left_to_the_code_not_the_prompt():
     """Rule 5a is gone, because _auto_derive now covers the miss it warned about.
 
@@ -2125,6 +2135,8 @@ def test_create_task_matrix_writes_the_cartesian_product(monkeypatch, tmp_path):
     assert payload["ok"], payload
     assert payload["total"] == 6
     assert "Матрица создана. Всего задач: 6." in payload["summary"]
+    assert "СЛЕДУЮЩИЙ ШАГ: Вызови process_matrix_batch" in payload["summary"]
+    assert "sample_tasks" not in payload and "actions" not in payload
     assert store.workspace.project == "events"
 
     path = Path(payload["matrix_path"])
@@ -2155,8 +2167,8 @@ def test_process_matrix_batch_executes_cells_directly(monkeypatch, tmp_path):
     assert payload["ok"], payload
     assert payload["processed"] == 4 and payload["succeeded"] == 4 and payload["failed"] == 0
     assert payload["remaining"] == 2 and payload["progress"] == "4/6"
-    assert "Обработано 4 задач. Успешно: 4, Ошибок: 0." in payload["summary"]
-    assert "Осталось в матрице: 2." in payload["summary"]
+    assert "Обработано 4. Успешно: 4, Ошибок: 0." in payload["summary"]
+    assert "Осталось задач: 2." in payload["summary"]
 
     done = payload["remaining"] == 2  # half the cells done
     matrix = json.loads(Path(path).read_text(encoding="utf-8"))

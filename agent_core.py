@@ -153,7 +153,7 @@ BASE_PROMPT_COMPACT = (
     "export_project. При большом количестве станций/дат (>15 комбинаций) НЕ "
     "перечисляй задачи по одной — создай create_task_matrix c lists events, "
     "stations, actions и project_name, затем process_matrix_batch, пока в "
-    "сводке не будет 'Осталось в матрице: 0', потом export_project.\n"
+    "сводке не будет 'Осталось задач: 0', потом export_project.\n"
     "    • Математика: calculate_derived_components (считает только H, D, I; "
     "X, Y, Z, F уже есть в raw), get_statistics, detect_anomalies, "
     "calculate_derived_math — метрики 'delta', 'dH_dt', 'anomaly'; Метрики "
@@ -174,7 +174,19 @@ BASE_PROMPT_COMPACT = (
     '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
     '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
     "    (б) данных достаточно — обычный текст без тегов. Сомневаешься — бери (а).\n\n"
-    f"11. {HANDLE_CASE_RULE}"
+    f"11. {HANDLE_CASE_RULE}\n\n"
+    "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
+    "Если пользователь просит обработать множество станций и дат:\n"
+    "1. Сначала вызови create_task_matrix с нужными списками "
+    "(events, stations, actions, project_name).\n"
+    "2. Как только матрица создана (в ответе 'Матрица создана'), НЕМЕДЛЕННО "
+    "вызывай process_matrix_batch.\n"
+    "3. Проверяй ответ process_matrix_batch. Если 'Осталось задач > 0', "
+    "вызывай process_matrix_batch снова.\n"
+    "4. Повторяй шаг 3, пока в ответе не будет 'Осталось задач: 0'.\n"
+    "5. Только после этого вызывай export_project и давай финальный текстовый "
+    "отчет.\n"
+    "НИКОГДА не вызывай create_task_matrix повторно, если матрица уже создана."
 )
 
 #: The base prompt the ordinary single-question loop uses. ``run_agent_with_planner``
@@ -394,7 +406,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "model never has to enumerate hundreds of tasks in its own reply. "
                 "Use this INSTEAD of generating a long list of tool calls when the "
                 "job spans many stations/dates (more than ~15 units). Then loop "
-                "process_matrix_batch until its summary says 'Осталось в матрице: 0', "
+                "process_matrix_batch until its summary says 'Осталось задач: 0', "
                 "and finally export_project."
             ),
             "parameters": {
@@ -435,8 +447,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Execute the next batch of pending cells of a task matrix. Reads the "
                 "JSON file created by create_task_matrix and runs each action (fetch, "
-                "derive, plot) internally, without extra model round-trips. The summary "
-                "reports progress; keep calling with 'Осталось в матрице: 0' (or "
+                "derive, plot) internally, without extra model round-trips. Returns "
+                "a parseable status such as 'Обработано 5. Успешно: 5, Ошибок: 0. "
+                "Осталось задач: 255.'; keep calling until 'Осталось задач: 0' (or "
                 "remaining: 0) tells you all cells are done."
             ),
             "parameters": {
@@ -2824,14 +2837,15 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    summary = f"Матрица создана. Всего задач: {len(tasks)}. Файл: {path}"
+    summary = (
+        f"✅ Матрица создана. Всего задач: {len(tasks)}. Файл: {path}. "
+        f"СЛЕДУЮЩИЙ ШАГ: Вызови process_matrix_batch с batch_size={MATRIX_BATCH_SIZE}."
+    )
     return {
         "ok": True,
         "project": project_name,
         "total": len(tasks),
         "matrix_path": str(path),
-        "actions": actions,
-        "sample_tasks": tasks[:3],
         "summary": summary,
     }, summary
 
@@ -2842,7 +2856,7 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     Reads ``matrix_path``, runs the first ``batch_size`` pending tasks through
     :func:`_execute_matrix_task` -- direct Python handler calls, no model in the
     loop -- then persists the updated matrix. The summary line is the *executor*
-    contract: "Осталось в матрице: 0" is what tells a driver loop it is done.
+    contract: "Осталось задач: 0" is what tells a driver loop it is done.
     """
     value = str(args.get("matrix_path") or "").strip()
     path: Path | None = None
@@ -2907,8 +2921,8 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     summary = (
-        f"Обработано {len(chunk)} задач. Успешно: {succeeded}, Ошибок: {failed_here}. "
-        f"Осталось в матрице: {remaining}. Текущий прогресс: {done}/{matrix.get('total', 0)}."
+        f"Обработано {len(chunk)}. Успешно: {succeeded}, Ошибок: {failed_here}. "
+        f"Осталось задач: {remaining}."
     )
     return {
         "ok": True,
