@@ -141,11 +141,13 @@ def test_system_prompt_marks_the_formula_dsl_as_safe():
 
 
 def test_system_prompt_enforces_the_massive_task_algorithm():
-    """The matrix loop is a strict workflow, so a 260-cell job cannot loop."""
+    """The matrix run is a one-shot workflow, so a 260-cell job cannot loop."""
     sp = ac.SYSTEM_PROMPT
     assert "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ" in sp
     assert "НИКОГДА не вызывай create_task_matrix повторно" in sp
-    assert "'Осталось задач: 0'" in sp
+    assert "НИКОГДА не вызывай process_matrix_batch в цикле" in sp
+    assert "run_until_complete=True" in sp
+    assert "МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА" in sp
     assert "process_matrix_batch" in sp
     assert len(sp) <= 4500, f"prompt grew to {len(sp)} chars"
 
@@ -2128,26 +2130,30 @@ MATRIX_ARGS = {
 }
 
 
-def test_create_task_matrix_writes_the_cartesian_product(monkeypatch, tmp_path):
-    """2 events x 3 stations = 6 pending tasks, saved next to the project."""
+def test_create_task_matrix_groups_work_by_station(monkeypatch, tmp_path):
+    """2 events x 3 stations is only 3 station-tasks, each carrying both dates."""
     store = _matrix_store(monkeypatch, tmp_path)
     payload, note = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
     assert payload["ok"], payload
-    assert payload["total"] == 6
-    assert "Матрица создана. Всего задач: 6." in payload["summary"]
+    assert payload["total"] == 3
+    assert "Матрица создана. Всего задач: 3." in payload["summary"]
     assert "СЛЕДУЮЩИЙ ШАГ: Вызови process_matrix_batch" in payload["summary"]
+    assert "run_until_complete=True" in payload["summary"]
     assert "sample_tasks" not in payload and "actions" not in payload
     assert store.workspace.project == "events"
 
     path = Path(payload["matrix_path"])
     assert path.is_file()
     matrix = json.loads(path.read_text(encoding="utf-8"))
-    assert matrix["total"] == 6 and matrix["pending"] == 6 and matrix["completed"] == 0
-    assert len(matrix["tasks"]) == 6
+    assert matrix["total"] == 3 and matrix["pending"] == 3 and matrix["completed"] == 0
+    assert len(matrix["tasks"]) == 3
     assert all(t["status"] == "pending" for t in matrix["tasks"])
-    cells = {(t["station"], t["event"]) for t in matrix["tasks"]}
-    assert len(cells) == 6
-    assert ("BRW", "2024-10-10") in cells and ("IRT", "2024-09-08") in cells
+    codes = {t["station_code"] for t in matrix["tasks"]}
+    assert codes == {"BRW", "SHU", "IRT"}
+    assert all(
+        t["events"] == ["2024-10-10", "2024-09-08"] for t in matrix["tasks"]
+    )
+    assert all(t["id"] == f"station_{t['station_code']}" for t in matrix["tasks"])
     assert matrix["tasks"][0]["actions"] == [
         "fetch_observatory_data",
         "calculate_derived_components",
@@ -2156,40 +2162,64 @@ def test_create_task_matrix_writes_the_cartesian_product(monkeypatch, tmp_path):
 
 
 def test_process_matrix_batch_executes_cells_directly(monkeypatch, tmp_path):
-    """The batch tool wipes out the pending queue without any model calls."""
+    """The batch tool grinds station-tasks (and their events) with no model calls."""
     store = _matrix_store(monkeypatch, tmp_path)
     created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
     path = created["matrix_path"]
 
     payload, _ = ac.HANDLERS["process_matrix_batch"](
-        {"matrix_path": path, "batch_size": 4}, store
+        {"matrix_path": path, "batch_size": 2}, store
     )
     assert payload["ok"], payload
-    assert payload["processed"] == 4 and payload["succeeded"] == 4 and payload["failed"] == 0
-    assert payload["remaining"] == 2 and payload["progress"] == "4/6"
-    assert "Обработано 4. Успешно: 4, Ошибок: 0." in payload["summary"]
-    assert "Осталось задач: 2." in payload["summary"]
+    assert payload["processed"] == 2 and payload["succeeded"] == 2 and payload["failed"] == 0
+    assert payload["remaining"] == 1 and payload["progress"] == "2/3"
+    assert "Обработано 2. Успешно: 2, Ошибок: 0." in payload["summary"]
+    assert "Осталось задач: 1." in payload["summary"]
 
-    done = payload["remaining"] == 2  # half the cells done
     matrix = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert matrix["completed"] == 4 and matrix["pending"] == 2
-    assert sum(1 for t in matrix["tasks"] if t["status"] == "done") == 4
+    assert matrix["completed"] == 2 and matrix["pending"] == 1
+    assert sum(1 for t in matrix["tasks"] if t["status"] == "done") == 2
 
-    # The executors did real work: frames are in the shared store, charts on disk.
-    assert len(store.names()) >= 8  # 4 raw + 4 derived
+    # The executors did real work: 2 stations x 2 events = 4 raw + 4 derived.
+    assert len(store.names()) >= 8
     assert (tmp_path / "plots").exists()
 
     payload2, _ = ac.HANDLERS["process_matrix_batch"](
         {"matrix_path": path, "batch_size": 4}, store
     )
-    assert payload2["succeeded"] == 2 and payload2["remaining"] == 0
-    assert payload2["progress"] == "6/6"
+    assert payload2["succeeded"] == 1 and payload2["remaining"] == 0
+    assert payload2["progress"] == "3/3"
+
+
+def test_process_matrix_batch_run_until_complete_processes_everything_in_one_call(
+    monkeypatch, tmp_path
+):
+    """run_until_complete=True ignores batch_size and finishes the whole job."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    path = created["matrix_path"]
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": path, "run_until_complete": True, "batch_size": 1}, store
+    )
+    assert payload["ok"], payload
+    assert payload["completed_run"] is True
+    assert payload["processed"] == 3 and payload["succeeded"] == 3 and payload["failed"] == 0
+    assert payload["remaining"] == 0 and payload["progress"] == "3/3"
+    assert "МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА" in payload["summary"]
+    assert "Всего станций: 3. Успешно: 3, Ошибок: 0." in payload["summary"]
+    assert "СЛЕДУЮЩИЙ ШАГ: Вызови export_project" in payload["summary"]
+
+    matrix = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert matrix["completed"] == 3 and matrix["pending"] == 0
+    # 3 stations x 2 events, each yielding a raw and a derived frame.
+    assert len(store.names()) >= 12
 
 
 def test_process_matrix_batch_marks_a_failed_cell_without_stopping_the_batch(
     monkeypatch, tmp_path
 ):
-    """A broken cell is recorded as failed; the rest still complete."""
+    """A broken station is recorded as failed; the rest still complete."""
     store = _matrix_store(monkeypatch, tmp_path)
     created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
     path = Path(created["matrix_path"])
@@ -2201,9 +2231,9 @@ def test_process_matrix_batch_marks_a_failed_cell_without_stopping_the_batch(
         {"matrix_path": str(path)}, store
     )
     assert payload["ok"]
-    assert payload["processed"] == 5 and payload["succeeded"] == 4 and payload["failed"] == 1
+    assert payload["processed"] == 3 and payload["succeeded"] == 2 and payload["failed"] == 1
     refreshed = json.loads(path.read_text(encoding="utf-8"))
-    assert refreshed["failed"] == 1 and refreshed["pending"] == 1
+    assert refreshed["failed"] == 1 and refreshed["pending"] == 0
     assert refreshed["tasks"][0]["status"] == "failed"
     assert "no_such_handler" in (refreshed["tasks"][0]["error"] or "")
 
@@ -2222,7 +2252,7 @@ def test_process_matrix_batch_resolves_a_bare_file_name_and_clamps_batch_size(
     payload, _ = ac.HANDLERS["process_matrix_batch"](
         {"matrix_path": name, "batch_size": 999}, store
     )
-    assert payload["processed"] == 5 and payload["remaining"] == 0  # clamped to 20
+    assert payload["processed"] == 2 and payload["remaining"] == 0  # clamped to 20
 
 
 def test_process_matrix_batch_rejects_an_unknown_path(monkeypatch, tmp_path):
@@ -2322,6 +2352,10 @@ def test_the_two_matrix_tools_are_in_the_schema_registry():
     must satisfy the toolset completeness guard."""
     assert {"create_task_matrix", "process_matrix_batch"} <= ac.TOOLS_BY_NAME
     assert ac.TOOLS_BY_NAME == set(ac.HANDLERS)
+    batch = next(
+        t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == "process_matrix_batch"
+    )
+    assert "run_until_complete" in batch["function"]["parameters"]["properties"]
     fetch_names = {t["function"]["name"] for t in ac.select_tools_for_task("process_matrix_batch")}
     assert "fetch_observatory_data" in fetch_names
     assert "plot_components" in fetch_names

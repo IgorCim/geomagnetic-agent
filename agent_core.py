@@ -148,12 +148,13 @@ BASE_PROMPT_COMPACT = (
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
     "create_project, export_project.\n"
-    "    • Пакетная работа: create_task_matrix (план \"события×станции\" одной "
-    "матрицей), process_matrix_batch (выполнить батч из матрицы напрямую), "
+    "    • Пакетная работа: create_task_matrix (план \"события×станции\": ОДНА "
+    "задача на станцию с её списком дат), process_matrix_batch "
+    "(run_until_complete=True обрабатывает ВСЕ станции и даты за один вызов), "
     "export_project. При большом количестве станций/дат (>15 комбинаций) НЕ "
     "перечисляй задачи по одной — создай create_task_matrix c lists events, "
-    "stations, actions и project_name, затем process_matrix_batch, пока в "
-    "сводке не будет 'Осталось задач: 0', потом export_project.\n"
+    "stations, actions и project_name, затем ОДИН вызов process_matrix_batch "
+    "с run_until_complete=True (без цикла), потом export_project.\n"
     "    • Математика: calculate_derived_components (считает только H, D, I; "
     "X, Y, Z, F уже есть в raw), get_statistics, detect_anomalies, "
     "calculate_derived_math — метрики 'delta', 'dH_dt', 'anomaly'; Метрики "
@@ -178,15 +179,17 @@ BASE_PROMPT_COMPACT = (
     "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
     "Если пользователь просит обработать множество станций и дат:\n"
     "1. Сначала вызови create_task_matrix с нужными списками "
-    "(events, stations, actions, project_name).\n"
+    "(events, stations, actions, project_name). Матрица группируется по станциям: "
+    "одна задача на станцию, внутри — список её дат.\n"
     "2. Как только матрица создана (в ответе 'Матрица создана'), НЕМЕДЛЕННО "
-    "вызывай process_matrix_batch.\n"
-    "3. Проверяй ответ process_matrix_batch. Если 'Осталось задач > 0', "
-    "вызывай process_matrix_batch снова.\n"
-    "4. Повторяй шаг 3, пока в ответе не будет 'Осталось задач: 0'.\n"
-    "5. Только после этого вызывай export_project и давай финальный текстовый "
+    "вызови process_matrix_batch с run_until_complete=True — он обработает все "
+    "станции и все их даты за один вызов.\n"
+    "3. Проверяй ответ: если 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' и 'Ошибок: 0' — "
+    "всё готово.\n"
+    "4. Только после этого вызывай export_project и давай финальный текстовый "
     "отчет.\n"
-    "НИКОГДА не вызывай create_task_matrix повторно, если матрица уже создана."
+    "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
+    "create_task_matrix повторно, если матрица уже создана."
 )
 
 #: The base prompt the ordinary single-question loop uses. ``run_agent_with_planner``
@@ -401,13 +404,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "create_task_matrix",
             "description": (
-                "Plan a large batch job as ONE matrix: every combination of the "
-                "given events and stations becomes a task in a JSON file, so the "
-                "model never has to enumerate hundreds of tasks in its own reply. "
+                "Plan a large batch job as ONE matrix grouped BY STATION: one task "
+                "per station carrying the full list of its event dates, so a "
+                "10-events x 26-stations job is a 26-task matrix, not 260 -- the "
+                "model never has to enumerate hundreds of cells in its own reply. "
                 "Use this INSTEAD of generating a long list of tool calls when the "
-                "job spans many stations/dates (more than ~15 units). Then loop "
-                "process_matrix_batch until its summary says 'Осталось задач: 0', "
-                "and finally export_project."
+                "job spans many stations/dates (more than ~15 units). Then call "
+                "process_matrix_batch ONCE with run_until_complete=True (it grinds "
+                "every station, no per-step calls), then export_project."
             ),
             "parameters": {
                 "type": "object",
@@ -445,12 +449,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "process_matrix_batch",
             "description": (
-                "Execute the next batch of pending cells of a task matrix. Reads the "
-                "JSON file created by create_task_matrix and runs each action (fetch, "
-                "derive, plot) internally, without extra model round-trips. Returns "
-                "a parseable status such as 'Обработано 5. Успешно: 5, Ошибок: 0. "
-                "Осталось задач: 255.'; keep calling until 'Осталось задач: 0' (or "
-                "remaining: 0) tells you all cells are done."
+                "Execute the pending STATION tasks of a task matrix. Reads the JSON "
+                "file created by create_task_matrix and runs every action (fetch, "
+                "derive, plot) for every event of every station internally, without "
+                "extra model round-trips. With run_until_complete=True (production) "
+                "finishes ALL pending stations in this one call and returns "
+                "'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА... Всего станций: N. Успешно: X, "
+                "Ошибок: Y'. With run_until_complete=False (debugging) it processes "
+                "only batch_size stations and returns a parseable 'Обработано N. "
+                "Успешно: X, Ошибок: Y. Осталось задач: R.'"
             ),
             "parameters": {
                 "type": "object",
@@ -459,9 +466,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "The matrix_path returned by create_task_matrix.",
                     },
+                    "run_until_complete": {
+                        "type": "boolean",
+                        "description": (
+                            "True = process every pending station to completion "
+                            "inside this one call (recommended). False = process "
+                            "only batch_size stations (debugging)."
+                        ),
+                    },
                     "batch_size": {
                         "type": "integer",
-                        "description": "Pending cells to run this call. Default 5 (optimal 3-5).",
+                        "description": "Stations per call when run_until_complete=False. Default 5. Ignored when run_until_complete=True.",
                     },
                 },
                 "required": ["matrix_path"],
@@ -834,9 +849,11 @@ PLOT_TOOLS = {"plot_components", "plot_comparison", "plot_overlay"}
 # Generator-Executor batch jobs. A 10-events x 26-stations request is 260 units
 # of work; asking the model to enumerate them in one JSON reply overflows its
 # context, so anything above MATRIX_THRESHOLD units is executed through a task
-# matrix instead: create_task_matrix writes the plan once, and
-# process_matrix_batch grinds through it in small chunks calling the handlers
-# directly (no per-step LLM round-trip).
+# matrix instead. The matrix is grouped BY STATION (one task per station with the
+# full list of its event dates), so a 260-cell job is a 26-task matrix; a single
+# process_matrix_batch(run_until_complete=True) grinds it in Python -- no per-unit
+# LLM round-trip. Matrix generation and batch execution must both land in the
+# graph to keep the "one matrix task per station" invariant true for new players.
 MATRIX_THRESHOLD = 15
 MATRIX_BATCH_SIZE = 5
 _DEFAULT_MATRIX_ACTIONS = [
@@ -2722,57 +2739,72 @@ def _ensure_matrix_derived(
 
 
 def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool, str]:
-    """Run every action of one matrix cell by calling handlers directly.
+    """Run one STATION task: every event of the station, every action per event.
 
-    This is the whole point of the Generator-Executor pattern: the batch tool
-    executes ``fetch -> derive -> plot`` as plain Python calls, so a 260-cell job
-    costs 260/5 = 52 tool calls instead of hundreds of model round-trips.
+    The station loop is the outer dimension and the events list the inner one;
+    both live here in Python, far from the model. Errors inside a single event
+    are logged and do NOT abort the rest of the station's events. An all-key
+    success returns ``(True, "")``; any failed event fails the station with an
+    aggregated description.
     """
-    station = task.get("station", "")
-    event = task.get("event", "")
-    for tool in task.get("actions") or _DEFAULT_MATRIX_ACTIONS:
-        if tool not in HANDLERS:
-            return False, f"Неизвестное действие {tool!r} в матрице."
-        # Data prerequisites: a cell whose actions omit fetch/derive must not
-        # fail on an unknown_frame -- the plot just gets its data implicitly.
-        if tool != "fetch_observatory_data":
-            ok, note = _ensure_matrix_fetch(station, event, store)
-            if not ok:
-                return False, note
-        if tool in ("plot_components", "plot_overlay"):
-            derived_slot = f"derived:{station.lower()}:{event}"
-            if store.get(derived_slot) is None:
-                ok, note = _ensure_matrix_derived(station, event, store)
+    station = str(task.get("station_code") or "").strip().upper()
+    events = [str(e) for e in (task.get("events") or [])]
+    tools = task.get("actions") or _DEFAULT_MATRIX_ACTIONS
+    failures: list[str] = []
+    for event in events:
+        for tool in tools:
+            if tool not in HANDLERS:
+                failures.append(f"{event}: неизвестное действие {tool!r}")
+                break
+            # Data prerequisites: a cell whose actions omit fetch/derive must
+            # not fail on an unknown_frame -- the plot just gets data implicitly.
+            if tool != "fetch_observatory_data":
+                ok, note = _ensure_matrix_fetch(station, event, store)
                 if not ok:
-                    return False, note
-        try:
-            payload, _ = HANDLERS[tool](
-                _matrix_task_args(tool, station, event, store), store
-            )
-        except Exception as exc:  # noqa: BLE001
-            traceback.print_exc()
-            return False, f"{tool} raised {type(exc).__name__}: {exc}"
-        if is_error(payload):
-            return (
-                False,
-                f"{tool}: {payload.get('error')}: {str(payload.get('message'))[:200]}",
-            )
-        if tool == "fetch_observatory_data" and payload.get("frame_handle"):
-            frame = store.get(payload["frame_handle"])
-            if frame is not None:
-                store.workspace.save(station, event, frame, kind="raw")
-        if tool == "calculate_derived_components":
-            derived = store.get(f"derived:{station.lower()}:{event}")
-            if derived is not None:
-                store.workspace.save(station, event, derived, kind="derived")
-    return True, ""
+                    failures.append(f"{event}: {note}")
+                    break
+            if tool in ("plot_components", "plot_overlay"):
+                derived_slot = f"derived:{station.lower()}:{event}"
+                if store.get(derived_slot) is None:
+                    ok, note = _ensure_matrix_derived(station, event, store)
+                    if not ok:
+                        failures.append(f"{event}: {note}")
+                        break
+            try:
+                payload, _ = HANDLERS[tool](
+                    _matrix_task_args(tool, station, event, store), store
+                )
+            except Exception as exc:  # noqa: BLE001
+                traceback.print_exc()
+                failures.append(f"{event}: {tool} raised {type(exc).__name__}: {exc}")
+                break
+            if is_error(payload):
+                failures.append(
+                    f"{event}: {tool}: {payload.get('error')}: "
+                    f"{str(payload.get('message'))[:200]}"
+                )
+                break
+            if tool == "fetch_observatory_data" and payload.get("frame_handle"):
+                frame = store.get(payload["frame_handle"])
+                if frame is not None:
+                    store.workspace.save(station, event, frame, kind="raw")
+            if tool == "calculate_derived_components":
+                derived = store.get(f"derived:{station.lower()}:{event}")
+                if derived is not None:
+                    store.workspace.save(station, event, derived, kind="derived")
+    if not failures:
+        return True, ""
+    for detail in failures:
+        print(f"[matrix] {station}/{detail} -- обработка станции продолжается.")
+    return False, f"события: {'; '.join(failures)}"
 
 
 def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
-    """Write the full events x stations plan to ``<project>/_matrix.json``.
+    """Write the station-grouped plan to ``<project>/<project>_matrix.json``.
 
-    The matrix is the *generator* half of the pattern: one JSON file holds every
-    pending unit, so the model never has to enumerate them in its own reply.
+    The matrix is the *generator* half of the pattern: ONE task per station,
+    carrying the full list of its event dates, so the model never has to
+    enumerate the events x stations product -- a 10x26 job is a 26-task matrix.
     """
     project_name = str(args.get("project_name") or "").strip()
     if not project_name:
@@ -2815,14 +2847,14 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
 
     tasks = [
         {
-            "event": event,
-            "station": station,
+            "id": f"station_{station}",
+            "station_code": station,
+            "events": list(events),
+            "actions": list(actions),
             "status": "pending",
             "attempts": 0,
             "error": None,
-            "actions": list(actions),
         }
-        for event in events
         for station in stations
     ]
     matrix: dict[str, Any] = {
@@ -2839,7 +2871,7 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
 
     summary = (
         f"✅ Матрица создана. Всего задач: {len(tasks)}. Файл: {path}. "
-        f"СЛЕДУЮЩИЙ ШАГ: Вызови process_matrix_batch с batch_size={MATRIX_BATCH_SIZE}."
+        f"СЛЕДУЮЩИЙ ШАГ: Вызови process_matrix_batch с run_until_complete=True."
     )
     return {
         "ok": True,
@@ -2851,12 +2883,15 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
 
 
 def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
-    """Execute the next chunk of pending matrix cells, handling tools directly.
+    """Execute matrix station-tasks, handling tools directly, no model in the loop.
 
-    Reads ``matrix_path``, runs the first ``batch_size`` pending tasks through
-    :func:`_execute_matrix_task` -- direct Python handler calls, no model in the
-    loop -- then persists the updated matrix. The summary line is the *executor*
-    contract: "Осталось задач: 0" is what tells a driver loop it is done.
+    Reads ``matrix_path`` and runs pending stations through
+    :func:`_execute_matrix_task` -- direct Python handler calls. With
+    ``run_until_complete=True`` (the production path) *every* pending station --
+    and, inside it, every event of that station -- is processed inside this one
+    call; ``run_until_complete=False`` (debugging) processes only ``batch_size``
+    stations so the flow can be inspected step by step. Event errors inside a
+    station are logged and recorded but never abort the station.
     """
     value = str(args.get("matrix_path") or "").strip()
     path: Path | None = None
@@ -2886,6 +2921,17 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     except (OSError, ValueError) as exc:
         return _error("matrix_unreadable", f"Cannot read matrix: {exc}"), "matrix unreadable."
 
+    raw_flag = args.get("run_until_complete", False)
+    if isinstance(raw_flag, bool):
+        run_until_complete = raw_flag
+    else:
+        run_until_complete = str(raw_flag or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+
     raw_size = args.get("batch_size", MATRIX_BATCH_SIZE)
     try:
         batch_size = max(1, min(int(raw_size), 20))
@@ -2894,7 +2940,7 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
 
     tasks = matrix.get("tasks") or []
     pending = [t for t in tasks if t.get("status") == "pending"]
-    chunk = pending[:batch_size]
+    chunk = pending if run_until_complete else pending[:batch_size]
 
     succeeded = 0
     failed_here = 0
@@ -2910,7 +2956,14 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
             task["status"] = "failed"
             task["error"] = reason
             failed_here += 1
-        processed.append({"event": task["event"], "station": task["station"], "ok": ok, "error": None if ok else reason})
+        processed.append(
+            {
+                "station": task.get("station_code", ""),
+                "events": len(task.get("events") or []),
+                "ok": ok,
+                "error": None if ok else reason,
+            }
+        )
 
     done = sum(1 for t in tasks if t.get("status") == "done")
     failed = sum(1 for t in tasks if t.get("status") == "failed")
@@ -2920,12 +2973,20 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     matrix["pending"] = remaining
     path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    summary = (
-        f"Обработано {len(chunk)}. Успешно: {succeeded}, Ошибок: {failed_here}. "
-        f"Осталось задач: {remaining}."
-    )
+    if run_until_complete:
+        summary = (
+            f"✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА. Всего станций: {matrix.get('total', 0)}. "
+            f"Успешно: {done}, Ошибок: {failed}. Файлы сохранены. "
+            f"СЛЕДУЮЩИЙ ШАГ: Вызови export_project."
+        )
+    else:
+        summary = (
+            f"Обработано {len(chunk)}. Успешно: {succeeded}, Ошибок: {failed_here}. "
+            f"Осталось задач: {remaining}."
+        )
     return {
         "ok": True,
+        "completed_run": run_until_complete,
         "processed": len(chunk),
         "succeeded": succeeded,
         "failed": failed_here,
@@ -2994,16 +3055,16 @@ def _run_matrix_job(
     store: FrameStore,
     verbose: bool = False,
 ) -> dict[str, Any]:
-    """create_task_matrix -> loop process_matrix_batch -> export_project.
+    """create_task_matrix -> one run_until_complete=True batch -> export_project.
 
     The full Generator-Executor run, called by :func:`run_agent_with_planner`
-    whenever a plan degenerates into hundreds of per-unit tasks. Each batch is
-    executed by handlers directly, so the whole job runs in Python.
+    whenever a plan degenerates into per-unit tasks. The batch tool grinds every
+    station (and every event inside it) in Python; the model is not in the loop.
     """
     if verbose:
         print(
             f"🏭 Матрица: {len(events)} событий x {len(stations)} станций = "
-            f"{len(events) * len(stations)} задач (проект {project_name!r})."
+            f"{len(stations)} задач (проект {project_name!r})."
         )
     create_payload, create_note = _handle_create_task_matrix(
         {
@@ -3026,36 +3087,31 @@ def _run_matrix_job(
         }
     path = create_payload["matrix_path"]
 
-    batches: list[dict[str, Any]] = []
-    done = 0
-    failed = 0
-    while True:
-        payload, note = _handle_process_matrix_batch(
-            {"matrix_path": path, "batch_size": MATRIX_BATCH_SIZE}, store
-        )
-        batches.append({"ok": not is_error(payload), "payload": payload, "note": note})
-        if is_error(payload):
-            return {
-                "ok": False,
-                "text": payload.get("message", note),
-                "results": batches,
-                "matrix_path": path,
-                "export": None,
-                "summary": note,
-                "store": store,
-            }
-        done += int(payload["succeeded"])
-        failed += int(payload["failed"])
-        if verbose:
-            print(f"   {payload['summary']}")
-        if payload["processed"] == 0 or payload["remaining"] == 0:
-            break
+    payload, note = _handle_process_matrix_batch(
+        {"matrix_path": path, "run_until_complete": True, "batch_size": MATRIX_BATCH_SIZE},
+        store,
+    )
+    batches = [{"ok": not is_error(payload), "payload": payload, "note": note}]
+    if is_error(payload):
+        return {
+            "ok": False,
+            "text": payload.get("message", note),
+            "results": batches,
+            "matrix_path": path,
+            "export": None,
+            "summary": note,
+            "store": store,
+        }
+    done = int(payload["succeeded"])
+    failed = int(payload["failed"])
+    if verbose:
+        print(f"   {payload['summary']}")
 
     export_payload, export_note = _handle_export_project({"name": project_name}, store)
     archive = export_payload.get("path") if not is_error(export_payload) else export_payload.get("message")
     text = (
         f"Матрица {project_name}: выполнено {done}, ошибок {failed} "
-        f"из {create_payload['total']} задач. Архив: {archive}."
+        f"из {create_payload['total']} станций. Архив: {archive}."
     )
     return {
         "ok": failed == 0,
