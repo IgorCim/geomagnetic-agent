@@ -2352,6 +2352,64 @@ def test_create_task_matrix_validation_errors(monkeypatch, tmp_path):
     assert not payload["ok"] and payload["error"] == "missing_project_name"
 
 
+def test_create_task_matrix_returns_the_exact_matrix_path(monkeypatch, tmp_path):
+    """The payload carries matrix_path so the model never has to guess it."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    payload, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    assert payload["ok"]
+    assert payload["matrix_path"] and Path(payload["matrix_path"]).is_file()
+    assert Path(payload["matrix_path"]).name == "events_matrix.json"
+    assert payload["matrix_path"] in payload["summary"]
+
+
+def test_run_agent_short_circuits_a_completed_matrix(monkeypatch, tmp_path):
+    """After process_matrix_batch(run_until_complete=True) the loop returns the
+    tool's own summary at once -- it never feeds the long payload back to the
+    model nor asks it for a final rephrase (the empty-answer failure)."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    brain = ac.ScriptedBrain(
+        [
+            {
+                "content": _text_call(
+                    "create_task_matrix",
+                    json.dumps(
+                        {
+                            "events": ["2024-10-10", "2024-09-08"],
+                            "stations": ["BRW", "SHU"],
+                            "actions": ["fetch", "calc_HDI", "plot"],
+                            "project_name": "shortcircuit",
+                        }
+                    ),
+                ),
+                "tool_calls": None,
+            },
+            {
+                # A deliberately wrong file name: the tool must still resolve it
+                # via the current project, then short-circuit.
+                "content": _text_call(
+                    "process_matrix_batch",
+                    json.dumps(
+                        {"matrix_path": "task_matrix.json", "run_until_complete": True}
+                    ),
+                ),
+                "tool_calls": None,
+            },
+        ]
+    )
+    result = ac.run_agent("матрица станций", brain=brain, store=store, verbose=False)
+
+    assert result["stop_reason"] == "matrix_completed_short_circuit"
+    assert "МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ" in result["text"]
+    assert "Архив с данными и графиками успешно собран:" in result["text"]
+    # The model was asked only twice: create, then process. No final rephrase.
+    assert brain.calls == 2
+    # The completed matrix actually produced an archive on disk.
+    found = re.search(r"собран:\s*(\S+?)\.\s*СЛЕДУЮЩИЙ", result["text"])
+    assert found, result["text"]
+    assert Path(found.group(1)).is_file()
+    assert Path(found.group(1)).suffix == ".zip"
+
+
 class _MatrixPlanBrain:
     """chat() returns a plan that is a single create_task_matrix step."""
 

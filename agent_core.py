@@ -2953,6 +2953,26 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
                 if probe.is_file():
                     path = probe
                     break
+    if path is None:
+        # The model guessed a wrong file name (e.g. "task_matrix.json"). Rather
+        # than fail and burn another round-trip, fall back to the matrix of the
+        # currently-open project, or to the only matrix in the workspace.
+        current = store.workspace.project
+        if current:
+            probe = _matrix_path(current, store.workspace)
+            if probe.is_file():
+                path = probe
+        if path is None:
+            found = sorted(
+                p
+                for known in projects.list_projects(store.workspace.root)
+                for p in projects.project_dir(known, store.workspace.root).glob(
+                    "*_matrix.json"
+                )
+                if p.is_file()
+            )
+            if len(found) == 1:
+                path = found[0]
     if path is None or not path.is_file():
         return _error(
             "matrix_not_found",
@@ -3865,6 +3885,37 @@ def run_agent(
             if verbose:
                 status = "ok" if entry["ok"] else f"FAILED ({entry.get('error')})"
                 print(f"[agent] round {round_no}: {name}({_short(args)}) -> {status}")
+
+            # Short-circuit: a finished matrix run already carries the final
+            # human-readable summary and the archive path. Feeding that long
+            # payload back to a 7B model overflows its context and yields an
+            # empty answer (the "Нет текстового ответа" seen in Kaggle), so hand
+            # the tool's own summary to the user directly instead of asking the
+            # model to rephrase it.
+            if (
+                name == "process_matrix_batch"
+                and entry["ok"]
+                and isinstance(payload, dict)
+                and (payload.get("completed_run") is True or payload.get("archive"))
+            ):
+                text = str(payload.get("summary") or "").strip()
+                if not text and isinstance(payload.get("export"), dict):
+                    text = str(payload["export"].get("message") or "").strip()
+                if not text:
+                    text = "Массовая обработка завершена."
+                if verbose:
+                    print(
+                        f"[agent] round {round_no}: matrix completed, "
+                        "short-circuiting to the tool summary (no extra LLM call)"
+                    )
+                return {
+                    "ok": True,
+                    "text": text,
+                    "plots": plots,
+                    "tool_calls": log,
+                    "rounds": round_no,
+                    "stop_reason": "matrix_completed_short_circuit",
+                }
 
             messages.append({"role": "tool", "content": _dumps(payload)})
 
