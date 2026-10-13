@@ -1,4 +1,4 @@
-"""Agent Core -- the brain of the geomagnetic AI assistant.
+﻿"""Agent Core -- the brain of the geomagnetic AI assistant.
 
 A local Qwen 2.5 7B Instruct (GGUF, Q4_K_M) is driven through
 ``llama-cpp-python`` and given access to the Stage 1 + Stage 2 Python tools in
@@ -56,6 +56,7 @@ import geomag_plotter as plotter
 import intermagnet_loader as loader
 import project_store as projects
 import geomag_coords as gcoords
+import physics_engine as pengine
 
 # Global persistent workspace across run_agent() invocations
 _WORKSPACE = projects.Workspace()
@@ -159,7 +160,7 @@ BASE_PROMPT_COMPACT = (
     "X, Y, Z, F уже есть в raw), get_statistics, detect_anomalies, "
     "calculate_derived_math — метрики 'delta', 'dH_dt', 'anomaly'; Метрики "
     "'range' НЕ СУЩЕСТВУЕТ; calculate_baseline — база для 'anomaly', значение "
-    "в baseline_value; evaluate_custom_formula — формула не исполняется как код.\n"
+    "в baseline_value; evaluate_custom_formula — формула не исполняется как код. Также apply_physics_formula — научные формулы (sq_baseline, deltas, gic, dst_proxy, ey_coupling, detect_ssc). \n"
     "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt (магнитное "
     "время), calculate_local_time (гражданское время), group_stations_by_mlt.\n"
     "    • Графики: plot_components, plot_comparison, plot_overlay (несколько "
@@ -812,6 +813,40 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "apply_physics_formula",
+            "description": (
+                "Compute a physical quantity from a frame and store it as a new derived, "
+                "plottable series. ONE tool for the whole scientific layer. metric is one of: "
+                "'sq_baseline' (quiet Sq baseline from the 00:00-04:00 UT night window), "
+                "'deltas' (Sq-removed dX/dY/dZ/dH/F_delta), 'gic' (dH/dt, the GIC proxy in "
+                "nT/min), 'dst_proxy' (Sq-removed equatorial H depression, a Dst stand-in), "
+                "'ey_coupling' (solar-wind coupling E_y = V*Bz, needs external_params V and Bz), "
+                "'detect_ssc' (sudden-commencement onsets from a sharp rise in H)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "df_descriptor": _FRAME_ARG,
+                    "metric": {
+                        "type": "string",
+                        "enum": ["sq_baseline", "deltas", "gic", "dst_proxy", "ey_coupling", "detect_ssc"],
+                        "description": "Which physical formula to apply. 'ey_coupling' also needs external_params.",
+                    },
+                    "external_params": {
+                        "type": "object",
+                        "description": (
+                            "Solar-wind inputs for 'ey_coupling' only: {'V': <km/s>, 'Bz': <nT>} "
+                            "from L1/OMNIWeb. Ignored by the other metrics."
+                        ),
+                    },
+                },
+                "required": ["df_descriptor", "metric"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "plot_overlay",
             "description": (
                 "Draw one component from SEVERAL stations on ONE chart, each curve shifted by a "
@@ -903,6 +938,7 @@ TOOL_SELECTION: dict[str, list[str]] = {
     "plot_components": ["fetch_observatory_data", "calculate_derived_components", "plot_components"],
     "plot_comparison": ["fetch_observatory_data", "calculate_derived_components", "plot_comparison"],
     "plot_overlay": ["fetch_observatory_data", "calculate_derived_components", "plot_overlay"],
+    "apply_physics_formula": ["fetch_observatory_data", "apply_physics_formula"],
     "get_statistics": ["fetch_observatory_data", "get_statistics"],
     "calculate_derived_math": ["fetch_observatory_data", "calculate_derived_math"],
     "detect_anomalies": ["fetch_observatory_data", "detect_anomalies"],
@@ -3420,6 +3456,103 @@ def _station_registry_coords(code):
         return None
 
 
+_PHYSICS_METRICS: dict[str, Any] = {
+    "sq_baseline": pengine.extract_sq_baseline,
+    "deltas": pengine.calculate_deltas,
+    "gic": pengine.calculate_gic_proxy,
+    "dst_proxy": pengine.calculate_dst_proxy,
+    "ey_coupling": pengine.calculate_coupling_function,
+    "detect_ssc": pengine.detect_ssc,
+}
+
+
+def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Run one physical formula and store the enriched frame as a derived slot.
+
+    ONE meta-tool for the whole scientific layer: a small model cannot be trusted
+    to remember six signatures, and a new metric should be a table row here, not
+    a new schema in the prompt budget. The result is always a frame with the new
+    physical columns, so it is plottable and can feed the next tool.
+    """
+    descriptor = args.get("df_descriptor") or args.get("df") or ""
+    metric = str(args.get("metric") or "").strip().lower()
+    external = args.get("external_params")
+    external = external if isinstance(external, dict) else None
+
+    func = _PHYSICS_METRICS.get(metric)
+    if func is None:
+        return _error(
+            "unknown_metric",
+            f"metric={metric!r} is not supported.",
+            available=sorted(_PHYSICS_METRICS),
+            hint="Pick one of the listed metrics; ey_coupling also needs external_params.",
+        ), f"apply_physics_formula refused metric {metric!r}."
+
+    frame, err = store.resolve(descriptor)
+    if err:
+        return err, f"apply_physics_formula failed: {err.get('error')}"
+
+    # ey_coupling is the only metric with a second, required argument.
+    result = func(frame, external) if metric == "ey_coupling" else func(frame)
+    if pengine.is_error(result):
+        return result, f"apply_physics_formula failed: {result.get('error')}"
+
+    slot = store.derive_name(descriptor or "raw", "derived")
+    store.put(slot, result)
+    summary = _summarise_frame(result, store, slot)
+    summary["metric"] = metric
+    summary["physics_column"] = _PHYSICS_COLUMNS.get(metric, [])
+    return summary, _physics_note(metric, result, slot)
+
+
+#: The column each metric adds, for the summary and the model's benefit.
+_PHYSICS_COLUMNS: dict[str, list[str]] = {
+    "sq_baseline": ["X_sq", "Y_sq", "Z_sq", "H_sq", "F_sq"],
+    "deltas": ["dX", "dY", "dZ", "dH", "F_delta"],
+    "gic": ["dH_dt"],
+    "dst_proxy": ["dst_proxy"],
+    "ey_coupling": ["E_y"],
+    "detect_ssc": ["dH_dt", "ssc_flag"],
+}
+
+
+def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
+    """A one-line, quotable Russian result -- the only thing the LLM must read."""
+    attrs = getattr(result, "attrs", {})
+    if metric == "sq_baseline":
+        base = attrs.get("sq_baseline", {})
+        return (
+            f"✅ Sq-базовая линия (ночная медиана 00:00–04:00 UT) рассчитана: "
+            f"H_sq={base.get('H')} нТ, X_sq={base.get('X')} нТ -> хэндл {slot!r}."
+        )
+    if metric == "deltas":
+        peak = _jsonable(result["F_delta"].abs().max())
+        return (
+            f"✅ Дельты (dX, dY, dZ, dH, F_delta) рассчитаны; максимальное "
+            f"отклонение F_delta={peak} нТ -> хэндл {slot!r}."
+        )
+    if metric == "gic":
+        return (
+            f"✅ GIC-прокси рассчитан. Максимальный градиент dH/dt: "
+            f"{attrs.get('dH_dt_peak_abs_nT_per_min')} нТ/мин -> хэндл {slot!r}."
+        )
+    if metric == "dst_proxy":
+        low = _jsonable(result["dst_proxy"].min())
+        return (
+            f"✅ Упрощённый Dst-прокси рассчитан; минимум (пик бури) "
+            f"{low} нТ -> хэндл {slot!r}."
+        )
+    if metric == "ey_coupling":
+        ey = attrs.get("ey_coupling", {}).get("E_y_mV_m")
+        return f"✅ Функция связи Ey рассчитана: E_y = {ey} мВ/м -> хэндл {slot!r}."
+    if metric == "detect_ssc":
+        return (
+            f"✅ Детектирование SSC выполнено. Найдено событий: "
+            f"{attrs.get('ssc_count', 0)} -> хэндл {slot!r}."
+        )
+    return f"✅ {metric} рассчитан -> хэндл {slot!r}."
+
+
 def _handle_plot_overlay(args, store):
     stations = [str(s).strip().upper() for s in (args.get('stations') or []) if str(s).strip()]
     dates = args.get('dates') or ([args['date']] if args.get('date') else [])
@@ -3626,6 +3759,7 @@ HANDLERS: dict[str, Handler] = {
     "group_stations_by_mlt": _handle_group_stations_by_mlt,
     "calculate_local_time": _handle_calculate_local_time,
     "plot_overlay": _handle_plot_overlay,
+    "apply_physics_formula": _handle_apply_physics_formula,
 }
 
 
@@ -4397,3 +4531,6 @@ def _main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main())
+
+
+

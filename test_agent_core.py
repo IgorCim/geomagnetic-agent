@@ -2494,3 +2494,70 @@ def test_the_two_matrix_tools_are_in_the_schema_registry():
     assert "fetch_observatory_data" in fetch_names
     assert "plot_components" in fetch_names
 
+
+
+def _physics_store() -> ac.FrameStore:
+    store = ac.FrameStore()
+    stamps = pd.date_range("2024-09-10 00:00:00", periods=10, freq="min", tz="UTC")
+    df = pd.DataFrame({"timestamp": stamps, "X": [100.0] * 10, "Y": [0.0] * 10, "Z": [-300.0] * 10})
+    store.put("raw:irt:2024-09-10", df)
+    return store
+
+
+def test_apply_physics_formula_is_registered_and_advertised():
+    assert "apply_physics_formula" in ac.TOOLS_BY_NAME
+    assert "apply_physics_formula" in ac.HANDLERS
+    assert "apply_physics_formula" in ac.SYSTEM_PROMPT
+    names = {t["function"]["name"] for t in ac.select_tools_for_task("apply_physics_formula")}
+    assert "apply_physics_formula" in names
+    assert "fetch_observatory_data" in names
+
+
+def test_apply_physics_formula_sq_baseline_stores_a_derived_slot():
+    store = _physics_store()
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "sq_baseline"}, store
+    )
+    assert payload["ok"], payload
+    assert "derived:irt:2024-09-10" in store.names()
+
+
+def test_apply_physics_formula_gic_reports_a_peak():
+    store = _physics_store()
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "gic"}, store
+    )
+    assert payload["ok"], payload
+    assert "нТ/мин" in note
+
+
+def test_apply_physics_formula_ey_coupling_without_external_params_errors():
+    store = _physics_store()
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "ey_coupling"}, store
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "missing_external_params"
+
+
+def test_apply_physics_formula_ey_coupling_with_external_params_computes():
+    store = _physics_store()
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "ey_coupling",
+            "external_params": {"V": 400, "Bz": -5},
+        },
+        store,
+    )
+    assert payload["ok"], payload
+    assert "E_y" in store.get("derived:irt:2024-09-10").columns
+
+
+def test_apply_physics_formula_unknown_metric_is_refused():
+    store = _physics_store()
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "nonsense"}, store
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "unknown_metric"
