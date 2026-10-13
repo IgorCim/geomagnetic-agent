@@ -156,11 +156,12 @@ BASE_PROMPT_COMPACT = (
     "перечисляй задачи по одной — создай create_task_matrix c lists events, "
     "stations, actions и project_name, затем ОДИН вызов process_matrix_batch "
     "с run_until_complete=True (без цикла); экспорт не нужен, архив соберётся сам.\n"
-    "    • Математика: calculate_derived_components (считает только H, D, I; "
+    "    • Математика: calculate_derived_components (только H, D, I; "
     "X, Y, Z, F уже есть в raw), get_statistics, detect_anomalies, "
-    "calculate_derived_math — метрики 'delta', 'dH_dt', 'anomaly'; Метрики "
-    "'range' НЕ СУЩЕСТВУЕТ; calculate_baseline — база для 'anomaly', значение "
-    "в baseline_value; evaluate_custom_formula — формула не исполняется как код. Также apply_physics_formula — научные формулы (sq_baseline, deltas, gic, dst_proxy, ey_coupling, detect_ssc). \n"
+    "calculate_derived_math (метрики 'delta', 'dH_dt', 'anomaly'; "
+    "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (значение в baseline_value), "
+    "evaluate_custom_formula (не исполняется как код). Физика: "
+    "apply_physics_formula.\n"
     "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt (магнитное "
     "время), calculate_local_time (гражданское время), group_stations_by_mlt.\n"
     "    • Графики: plot_components, plot_comparison, plot_overlay (несколько "
@@ -177,6 +178,10 @@ BASE_PROMPT_COMPACT = (
     '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
     "    (б) данных достаточно — обычный текст без тегов. Сомневаешься — бери (а).\n\n"
     f"11. {HANDLE_CASE_RULE}\n\n"
+    "ЖЕСТКИЕ ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ:\n"
+    "- Не выдумывай названия инструментов — только из схемы.\n"
+    "- Физика (базовая линия, дельты, GIC, индексы) — ТОЛЬКО apply_physics_formula.\n"
+    "- df_descriptor — ТОЛЬКО точное значение из результата предыдущего инструмента, формат 'raw:код:дата' (напр. 'raw:irt:2024-09-10'). Не модифицируй его.\n\n"
     "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
     "Если пользователь просит обработать множество станций и дат:\n"
     "1. Сначала вызови create_task_matrix с нужными списками "
@@ -270,7 +275,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "available columns, and a frame_handle such as 'raw:irt:2024-09-10'. "
                 "Call it once per day you need and keep those distinct handles: the "
                 "short name 'raw' only ever points at the most recent fetch. "
-                "Values are in nT, timestamps are UTC."
+                "Values are in nT, timestamps are UTC. "
+                "ВАЖНО: Этот инструмент возвращает строковый дескриптор фрейма в "
+                "формате 'raw:<station_code>:<date>' (например, 'raw:irt:2024-09-10'). "
+                "Ты ДОЛЖЕН использовать ИМЕННО этот возвращенный дескриптор как "
+                "аргумент df_descriptor в последующих вызовах инструмента "
+                "apply_physics_formula. Не придумывай свои названия фреймов."
             ),
             "parameters": {
                 "type": "object",
@@ -821,7 +831,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "'deltas' (Sq-removed dX/dY/dZ/dH/F_delta), 'gic' (dH/dt, the GIC proxy in "
                 "nT/min), 'dst_proxy' (Sq-removed equatorial H depression, a Dst stand-in), "
                 "'ey_coupling' (solar-wind coupling E_y = V*Bz, needs external_params V and Bz), "
-                "'detect_ssc' (sudden-commencement onsets from a sharp rise in H)."
+                "'detect_ssc' (sudden-commencement onsets from a sharp rise in H). "
+                "Аргумент metric ДОЛЖЕН быть строго одной из следующих строк: "
+                "'sq_baseline', 'deltas', 'gic', 'dst_proxy', 'ey_coupling', 'detect_ssc'. "
+                "Любые другие значения приведут к ошибке."
             ),
             "parameters": {
                 "type": "object",
