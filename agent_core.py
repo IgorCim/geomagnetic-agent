@@ -93,7 +93,13 @@ MODEL_REPO = "Qwen/Qwen2.5-7B-Instruct-GGUF"
 MODEL_STEM = "qwen2.5-7b-instruct-q4_k_m"
 MODELS_DIR = Path(os.environ.get("GEOMAG_MODELS_DIR", "models"))
 
-N_CTX = 8192
+#: Context window handed to llama.cpp. 8192 left ~200 free tokens once the full
+#: 21-schema list was appended to the system prompt, so the model produced an
+#: empty answer ("Нет текстового ответа"). Doubling it to 16384 keeps a wide
+#: safety margin while the schema diet (dynamic selection + trimmed
+#: descriptions) cuts what we actually send. ``load_brain(n_ctx=...)`` overrides.
+N_CTX = 16384
+N_CTX_FALLBACK = 12288
 N_BATCH = 512
 TEMPERATURE = 0.1          # a scientist wants determinism, not creativity
 MAX_TOKENS = 1200
@@ -140,65 +146,46 @@ BASE_PROMPT_COMPACT = (
     "Правила:\n"
     "1. Отвечай на русском, кратко, как коллега-геофизик.\n"
     "2. Любое число в ответе — только из результата инструмента.\n"
-    "3. Данные бери fetch_observatory_data. Код станции — трёхбуквенный IAGA. "
+    "3. Данные бери fetch_observatory_data, код станции — трёхбуквенный IAGA. "
     f"Известны: {STATION_HINT}.\n"
-    "4. Для графика: fetch_observatory_data → calculate_derived_components "
-    "→ plot_components / plot_comparison / plot_overlay. Шаги не перескакивай.\n"
-    "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла raw математика "
-    "и графики ответят unknown_frame. Хэндл бери из frame_handle, не выдумывай.\n"
+    "4. График: fetch_observatory_data → calculate_derived_components → "
+    "plot_components / plot_comparison / plot_overlay.\n"
+    "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла raw математика и "
+    "графики ответят unknown_frame. Хэндл бери из frame_handle.\n"
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
     "create_project, export_project.\n"
-    "    • Пакетная работа: create_task_matrix (план \"события×станции\": ОДНА "
-    "задача на станцию с её списком дат), process_matrix_batch "
-    "(run_until_complete=True обрабатывает ВСЕ станции и даты и САМ собирает "
-    "архив за один вызов). При большом количестве станций/дат (>15 комбинаций) НЕ "
-    "перечисляй задачи по одной — создай create_task_matrix c lists events, "
-    "stations, actions и project_name, затем ОДИН вызов process_matrix_batch "
-    "с run_until_complete=True (без цикла); экспорт не нужен, архив соберётся сам.\n"
-    "    • Математика: calculate_derived_components (только H, D, I; "
-    "X, Y, Z, F уже есть в raw), get_statistics, detect_anomalies, "
-    "calculate_derived_math (метрики 'delta', 'dH_dt', 'anomaly'; "
-    "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (значение в baseline_value), "
-    "evaluate_custom_formula (не исполняется как код). Физика: "
-    "apply_physics_formula.\n"
+    "    • Пакетно: create_task_matrix (события×станции, ОДНА задача на станцию с "
+    "её датами), process_matrix_batch (run_until_complete=True — все станции за "
+    "один вызов).\n"
+    "    • Математика: calculate_derived_components (H, D, I), get_statistics, "
+    "detect_anomalies, calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
+    "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (baseline_value), "
+    "evaluate_custom_formula (не исполняется как код), apply_physics_formula.\n"
     "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt (магнитное "
     "время), calculate_local_time (гражданское время), group_stations_by_mlt.\n"
-    "    • Графики: plot_components, plot_comparison, plot_overlay (несколько "
-    "станций; данные и H/D/I достаёт сам).\n"
-    "6. Вместо DataFrame передавай строковый хэндл из frame_handle: "
-    "\"raw:irt:2024-09-10\" / \"derived:irt:2024-09-10\" либо семейство "
-    "\"raw\" / \"derived\" / \"anomalies\".\n"
-    "7. Ошибку инструмента перескажи пользователю и предложи, что делать; свои "
-    "цифры не подставляй.\n"
-    "8. В ответе перечисли графики и файлы. Единицы — 'nT', не «нанотесла».\n"
+    "    • Графики: plot_components, plot_comparison, plot_overlay.\n"
+    "6. Вместо DataFrame передавай хэндл: \"raw:irt:2024-09-10\" / "
+    "\"derived:irt:2024-09-10\" либо \"raw\" / \"derived\" / \"anomalies\".\n"
+    "7. Ошибку инструмента перескажи и предложи, что делать; свои цифры не "
+    "подставляй.\n"
+    "8. Перечисли графики и файлы. Единицы — 'nT'.\n"
     "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
-    "10. ФОРМАТ ОТВЕТА: (а) вызов инструмента — только теги, без слов:\n"
+    "10. ФОРМАТ ОТВЕТА: (а) вызов — только теги, без слов:\n"
     '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
-    '{"station_code": "IRT", "start_date": "2024-09-10", "end_date": "2024-09-10"}}</tool_call>\n'
-    "    (б) данных достаточно — обычный текст без тегов. Сомневаешься — бери (а).\n\n"
+    '{"station_code": "IRT", "start_date": "2024-09-10", '
+    '"end_date": "2024-09-10"}}</tool_call>\n'
+    "    (б) данных достаточно — обычный текст без тегов.\n"
     f"11. {HANDLE_CASE_RULE}\n\n"
-    "ЖЕСТКИЕ ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ:\n"
-    "- Не выдумывай названия инструментов — только из схемы.\n"
-    "- Физика (базовая линия, дельты, GIC, индексы) — ТОЛЬКО apply_physics_formula.\n"
-    "- df_descriptor — ТОЛЬКО точное значение из результата предыдущего инструмента, формат 'raw:код:дата' (напр. 'raw:irt:2024-09-10'). Не модифицируй его.\n\n"
     "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
-    "Если пользователь просит обработать множество станций и дат:\n"
-    "1. Сначала вызови create_task_matrix с нужными списками "
-    "(events, stations, actions, project_name). Матрица группируется по станциям: "
-    "одна задача на станцию, внутри — список её дат.\n"
-    "2. Как только матрица создана (в ответе 'Матрица создана'), НЕМЕДЛЕННО "
-    "вызови process_matrix_batch с run_until_complete=True — он обработает все "
-    "станции и все их даты за один вызов.\n"
-    "3. Проверяй ответ: если 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' — станции обработаны, "
-    "в сводке есть разбивка полностью успешных / частичных / пустых и путь к "
-    "архиву.\n"
-    "4. После вызова process_matrix_batch с run_until_complete=True ты получишь "
-    "готовую сводку и путь к архиву (экспорт делается автоматически). Твоя "
-    "ЕДИНСТВЕННАЯ задача — красиво оформить этот текст для пользователя: сколько "
-    "станций всего, сколько полностью успешных / частичных / пустых, где лежит "
-    "архив. НЕ вызывай больше никаких инструментов, в том числе export_project, и "
-    "не оставляй пользователя без ответа.\n"
+    "Если просят обработать множество станций и дат:\n"
+    "1) создай create_task_matrix (events, stations, actions, project_name);\n"
+    "2) затем ОДИН вызов process_matrix_batch с run_until_complete=True — он "
+    "обработает все станции и даты за раз;\n"
+    "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' — там разбивка успешных / "
+    "частичных / пустых и путь к архиву (экспорт делается автоматически);\n"
+    "4) красиво оформи эту сводку. НЕ вызывай больше никаких инструментов, в т.ч. "
+    "export_project.\n"
     "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
     "create_task_matrix повторно, если матрица уже создана."
 )
@@ -270,17 +257,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "fetch_observatory_data",
             "description": (
-                "Download geomagnetic data for one INTERMAGNET observatory. "
-                "Call this first, before any analysis. Returns the row count, the "
-                "available columns, and a frame_handle such as 'raw:irt:2024-09-10'. "
-                "Call it once per day you need and keep those distinct handles: the "
-                "short name 'raw' only ever points at the most recent fetch. "
-                "Values are in nT, timestamps are UTC. "
-                "ВАЖНО: Этот инструмент возвращает строковый дескриптор фрейма в "
-                "формате 'raw:<station_code>:<date>' (например, 'raw:irt:2024-09-10'). "
-                "Ты ДОЛЖЕН использовать ИМЕННО этот возвращенный дескриптор как "
-                "аргумент df_descriptor в последующих вызовах инструмента "
-                "apply_physics_formula. Не придумывай свои названия фреймов."
+                "Download one day of minute data for one INTERMAGNET observatory "
+                "(three-letter IAGA code). Call this first, before any analysis. "
+                "Returns df_descriptor 'raw:<STATION>:<date>'; reuse it verbatim."
             ),
             "parameters": {
                 "type": "object",
@@ -338,14 +317,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "fetch_many",
             "description": (
-                "Download one date range for SEVERAL observatories in a single call. "
-                "Use this instead of repeating fetch_observatory_data when more than "
-                "one station is needed: the stations share one budget of downloads, "
-                "and each returns its own frame_handle such as 'raw:irt:2024-09-10'. "
-                "A station that cannot be downloaded is reported in 'failed' while the "
-                "others still succeed -- partial results are normal, so report what "
-                "arrived and what did not. When a project is open, each day's data is "
-                "also written into it as CSV."
+                "Download one date range for SEVERAL observatories in one call. Use "
+                "instead of repeating fetch_observatory_data. Stations share one "
+                "download budget; each returns its own df_descriptor. A station that "
+                "fails is listed under 'failed' while the rest still succeed."
             ),
             "parameters": {
                 "type": "object",
@@ -353,9 +328,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "stations": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": (
-                            f"Three-letter IAGA codes. Known: {STATION_HINT}"
-                        ),
+                        "description": "Three-letter IAGA codes.",
                     },
                     "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD."},
                     "end_date": {"type": "string", "description": "End date, YYYY-MM-DD (inclusive)."},
@@ -390,7 +363,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_projects",
-            "description": "???????? ?????? ???? ???????? ? ???????????",
+            "description": "List the projects currently on disk.",
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -420,14 +393,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "create_task_matrix",
             "description": (
-                "Plan a large batch job as ONE matrix grouped BY STATION: one task "
-                "per station carrying the full list of its event dates, so a "
-                "10-events x 26-stations job is a 26-task matrix, not 260 -- the "
-                "model never has to enumerate hundreds of cells in its own reply. "
-                "Use this INSTEAD of generating a long list of tool calls when the "
-                "job spans many stations/dates (more than ~15 units). Then call "
-                "process_matrix_batch ONCE with run_until_complete=True (it grinds "
-                "every station and collects the archive itself, no per-step calls)."
+                "Plan a large batch job as ONE matrix grouped BY STATION: one task per "
+                "station carrying all its event dates. Use INSTEAD of a long list of "
+                "tool calls when the job spans many stations/dates (>~15 units). Then "
+                "call process_matrix_batch once with run_until_complete=True."
             ),
             "parameters": {
                 "type": "object",
@@ -435,12 +404,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "events": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Event dates, YYYY-MM-DD, e.g. [\"2024-10-10\", \"2024-09-08\"].",
+                        "description": "Event dates, YYYY-MM-DD.",
                     },
                     "stations": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": f"Three-letter IAGA codes. Known: {STATION_HINT}",
+                        "description": "Three-letter IAGA codes.",
                     },
                     "actions": {
                         "type": "array",
@@ -465,18 +434,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "process_matrix_batch",
             "description": (
-                "Execute the pending STATION tasks of a task matrix. Reads the JSON "
-                "file created by create_task_matrix and runs every action (fetch, "
-                "derive, plot) for every event of every station internally, without "
-                "extra model round-trips. With run_until_complete=True (production) "
-                "finishes ALL pending stations in this one call, AUTOMATICALLY collects "
-                "the project archive, and returns a summary 'МАССОВАЯ ОБРАБОТКА "
-                "ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ. Станций всего: N. Полностью успешных: "
-                "X. Частичных: Y. Полностью пустых: Z. Список пустых станций: [...]. "
-                "Архив с данными и графиками успешно собран: <path>'. No separate "
-                "export_project call is needed. With run_until_complete=False "
-                "(debugging) it processes only batch_size stations and returns a "
-                "parseable 'Обработано N. Успешно: X, Ошибок: Y. Осталось задач: R.'"
+                "Execute the pending STATION tasks of a task matrix (read from the "
+                "matrix_path create_task_matrix returned). run_until_complete=True "
+                "finishes ALL pending stations in this one call, builds the project "
+                "archive automatically, and returns a summary starting "
+                "'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА'; no separate export_project call is "
+                "needed. False processes only batch_size stations (debugging)."
             ),
             "parameters": {
                 "type": "object",
@@ -574,13 +537,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "calculate_derived_math",
             "description": (
-                "Measure how a component behaved over time, as a scalar you may quote: "
-                "the peak-to-peak variation ('range', 'how much did H swing'), the "
-                "rate of change in nT per minute, or the distance from a baseline. "
-                "Use metric='delta' for a storm's total excursion, 'dH_dt' for how "
-                "fast the field was changing, and 'anomaly' to subtract a quiet "
-                "reference obtained from calculate_baseline. Returns a new "
-                "frame_handle holding the per-sample series, plus the scalar."
+                "Measure a component over time as a scalar you may quote: 'delta' "
+                "(max-min variation), 'dH_dt' (rate of change in nT/min), or 'anomaly' "
+                "(value minus baseline_value from calculate_baseline). Returns a new "
+                "derived df_descriptor holding the series, plus the scalar."
             ),
             "parameters": {
                 "type": "object",
@@ -659,15 +619,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "evaluate_custom_formula",
             "description": (
-                "Compute a custom arithmetic expression over the columns of a frame and "
-                "get the result as a new plottable series. Use it for a quantity the "
-                "built-in tools do not cover, e.g. 'sqrt(X**2 + Y**2) + Z/10' or "
-                "'degrees(atan2(Z, sqrt(X**2 + Y**2)))' for inclination in degrees. "
-                f"Allowed columns: {', '.join(geomath.available_columns())} plus the frame's own "
-                f"numeric columns. Allowed operators: + - * / % **. Allowed functions: "
-                f"{', '.join(sorted(geomath.DSL_FUNCTIONS))}, plus the constants pi and e. "
-                "Anything else is refused: the formula is parsed, never executed, so no "
-                "Python code can run."
+                "Compute a custom arithmetic expression over a frame's columns; returns "
+                "a new plottable series. Use for a quantity the built-in tools do not "
+                "cover, e.g. 'sqrt(X**2 + Y**2) + Z/10'. Columns: "
+                f"{', '.join(geomath.available_columns())} plus the frame's own numeric "
+                f"columns. Operators: + - * / % **. Functions: "
+                f"{', '.join(sorted(geomath.DSL_FUNCTIONS))}, plus pi and e. The formula "
+                "is parsed, never executed."
             ),
             "parameters": {
                 "type": "object",
@@ -825,16 +783,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "apply_physics_formula",
             "description": (
-                "Compute a physical quantity from a frame and store it as a new derived, "
-                "plottable series. ONE tool for the whole scientific layer. metric is one of: "
-                "'sq_baseline' (quiet Sq baseline from the 00:00-04:00 UT night window), "
-                "'deltas' (Sq-removed dX/dY/dZ/dH/F_delta), 'gic' (dH/dt, the GIC proxy in "
-                "nT/min), 'dst_proxy' (Sq-removed equatorial H depression, a Dst stand-in), "
-                "'ey_coupling' (solar-wind coupling E_y = V*Bz, needs external_params V and Bz), "
-                "'detect_ssc' (sudden-commencement onsets from a sharp rise in H). "
-                "Аргумент metric ДОЛЖЕН быть строго одной из следующих строк: "
-                "'sq_baseline', 'deltas', 'gic', 'dst_proxy', 'ey_coupling', 'detect_ssc'. "
-                "Любые другие значения приведут к ошибке."
+                "Apply ONE physical formula to a frame and store the result as a new "
+                "derived, plottable series. metric must be exactly one of the enum "
+                "values; 'ey_coupling' also needs external_params (V, Bz)."
             ),
             "parameters": {
                 "type": "object",
@@ -862,13 +813,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "plot_overlay",
             "description": (
-                "Draw one component from SEVERAL stations on ONE chart, each curve shifted by a "
-                "per-station nT offset, with the x axis in UT, LT or MLT. Stations are ordered "
-                "north-first by geomagnetic latitude. AUTO-FETCHES any station/day that is not "
-                "loaded yet and derives H, D, I on the spot, so no fetch_observatory_data call "
-                "is needed first. USE to compare several observatories, or to stack them on a "
-                "local/magnetic clock. DO NOT USE to compare two days of a single station -- "
-                "that is plot_comparison."
+                "Draw one component from SEVERAL stations on ONE chart, each shifted by a "
+                "per-station nT offset; x axis in UT, LT or MLT; stations ordered "
+                "north-first. Auto-fetches and derives any missing station/day. USE to "
+                "compare observatories; DO NOT USE for two days of one station "
+                "(use plot_comparison)."
             ),
             "parameters": {
                 "type": "object",
@@ -990,6 +939,179 @@ def select_tools_for_task(tool_name: str) -> list[dict[str, Any]]:
     """
     needed = TOOL_SELECTION.get(str(tool_name or ""), list(TOOLS_BY_NAME))
     return [t for t in TOOL_SCHEMAS if t["function"]["name"] in needed]
+
+
+#: Upper bound on the schemas a single free-form ``run_agent`` question may see.
+#: The full 21-schema list is what filled the 8192-token window to ~200 tokens of
+#: headroom; a question only ever needs a handful.
+TOOLS_PER_TASK = 6
+
+#: The frame summary handed back to the model is capped at this many characters,
+#: so a 1440-row frame cannot dump columns/statistics into the context.
+FRAME_SUMMARY_MAX_CHARS = 400
+
+#: Keywords -> the tools a free-form question about them can need. The selector
+#: unions every match, always keeps the data source, and caps the result so the
+#: full schema list can never be sent by accident.
+_QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        ("график", "построй", "нарисуй", "chart", "plot", "визуализ", "наложи", "overlay",
+         "сравни", "comparison"),
+        ("calculate_derived_components", "plot_components"),
+    ),
+    (
+        ("сравн", "два дня", "comparison"),
+        ("plot_comparison",),
+    ),
+    (
+        ("наложи", "несколько станц", "overlay"),
+        ("plot_overlay",),
+    ),
+    (
+        ("статистик", "statistic", "средн", "минимум", "максимум", "mean", "min", "max",
+         "разброс", "std"),
+        ("get_statistics",),
+    ),
+    (
+        ("аномали", "anomal", "выброс", "базовая линия", "baseline", "baseline_value"),
+        ("detect_anomalies", "calculate_baseline"),
+    ),
+    (
+        ("дельта", "delta", "dH_dt", "dh/dt", "производн", "скорость изменен",
+         "формул", "formula", "выражен", "expression"),
+        ("calculate_derived_math", "evaluate_custom_formula"),
+    ),
+    (
+        ("sq", "gic", "dst", "coupling", "ssc", "физик", "индекс", "ey", "bz", "связи",
+         "спокойн", "базис", "космической погод", "solar"),
+        ("apply_physics_formula",),
+    ),
+    (
+        ("mlt", "магнитное время", "локальн", "гражданск", "местное время", "координ",
+         "широт", "долгот", "geomagnetic", "latitude"),
+        ("get_station_geomagnetic_coords", "calculate_mlt", "calculate_local_time",
+         "group_stations_by_mlt"),
+    ),
+    (
+        ("проект", "project", "список", "архив", "zip"),
+        ("list_projects", "create_project", "export_project", "fetch_many"),
+    ),
+)
+
+#: Words that mean "this is a bulk job": the matrix pair must always ride along.
+_MASS_TASK_KEYWORDS = (
+    "матриц", "matrix", "станций", "станции", "событий", "пакет", "batch", "массов",
+    "обработа", "все станции", "много", "десять", "несколько дат", "по одной",
+)
+
+#: The matrix pair plus the pipeline a bulk job runs; the selector always adds
+#: these when it sees a bulk request, whatever else matched.
+_MATRIX_TOOLS = (
+    "create_task_matrix",
+    "process_matrix_batch",
+    "fetch_observatory_data",
+    "calculate_derived_components",
+    "plot_components",
+)
+
+
+def select_tools_for_query(query: str, cap: int = TOOLS_PER_TASK) -> list[dict[str, Any]]:
+    """Pick the few schemas a free-form question can need.
+
+    The full 21-schema list overflows a small model's window; a question only
+    needs the data source plus the handful of tools its intent implies. Mass
+    requests always carry the matrix pair (:data:`_MATRIX_TOOLS`), because
+    evicting them would strand the bulk algorithm. When nothing matches, the
+    first *cap* schemas are returned -- never the whole list.
+    """
+    text = str(query or "").lower()
+    chosen: list[str] = ["fetch_observatory_data"]
+
+    if any(word in text for word in _MASS_TASK_KEYWORDS):
+        chosen.extend(_MATRIX_TOOLS)
+
+    for words, tools in _QUERY_TOOL_KEYWORDS:
+        if any(word in text for word in words):
+            chosen.extend(tools)
+
+    # Ordered, de-duplicated, capped; the data source is always first.
+    ordered: list[str] = []
+    for name in chosen:
+        if name in TOOLS_BY_NAME and name not in ordered:
+            ordered.append(name)
+
+    if len(ordered) <= 1:  # only the data source matched -> arbitrary safe set
+        return list(TOOL_SCHEMAS[:cap])
+
+    keep = set(ordered[:cap])
+    # The matrix pair is mandatory for a bulk job even if the cap would drop it.
+    if any(word in text for word in _MASS_TASK_KEYWORDS):
+        keep.update({"create_task_matrix", "process_matrix_batch"})
+    return [t for t in TOOL_SCHEMAS if t["function"]["name"] in keep]
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token count: ~3 chars/token for Cyrillic, ~4 for Latin.
+
+    Good enough to fail a prompt that has out-grown its window; the real
+    tokenizer is not guaranteed to be importable in every deployment.
+    """
+    cyrillic = sum(1 for ch in text if "\u0400" <= ch <= "\u04ff")
+    other = len(text) - cyrillic
+    return (cyrillic + 2) // 3 + (other + 3) // 4
+
+
+def prompt_budget(
+    system_prompt: str,
+    schemas: list[dict[str, Any]],
+    n_ctx: int = N_CTX,
+) -> dict[str, Any]:
+    """One budget line for a call: system + schemas, estimated tokens vs n_ctx."""
+    schemas_json = _dumps(schemas)
+    est = estimate_tokens(system_prompt) + estimate_tokens(schemas_json)
+    return {
+        "system_chars": len(system_prompt),
+        "schemas_chars": len(schemas_json),
+        "tools": len(schemas),
+        "est_tokens": est,
+        "n_ctx": n_ctx,
+    }
+
+
+#: Fields a tool result must keep when it is too big to send whole: the model
+#: needs the outcome, the handle to reuse, and any number it is meant to quote.
+_MODEL_PAYLOAD_KEYS = (
+    "ok", "error", "message", "hint", "rows", "n_missing", "frame_handle",
+    "available_handles", "handle_aliases", "path", "plot", "metric", "result",
+    "station", "date", "computed", "offline", "publication_state", "source",
+)
+
+
+def _compact_tool_message(payload: Any, max_chars: int = FRAME_SUMMARY_MAX_CHARS) -> str:
+    """The string a tool result turns into for the model, capped at *max_chars*.
+
+    A 1440-row frame summarised with per-column statistics is legitimately
+    large, but the model does not need the column dump to act -- it needs the
+    handle and the headline number. Handlers still return the full payload to
+    their callers; only what crosses into the context window is trimmed here.
+    """
+    text = _dumps(payload)
+    if len(text) <= max_chars or not isinstance(payload, dict):
+        return text if len(text) <= max_chars else text[:max_chars]
+
+    compact = {k: payload[k] for k in _MODEL_PAYLOAD_KEYS if k in payload}
+    # Keep the newest handles only; older ones rarely matter for the next step.
+    handles = compact.get("available_handles")
+    while isinstance(handles, list) and len(handles) > 3 and len(_dumps(compact)) > max_chars:
+        handles = handles[-3:]
+        compact["available_handles"] = handles
+    text = _dumps(compact)
+    if len(text) <= max_chars:
+        return text
+
+    compact.pop("handle_aliases", None)
+    text = _dumps(compact)
+    return text if len(text) <= max_chars else text[:max_chars]
 
 
 def build_dynamic_prompt(
@@ -1186,10 +1308,17 @@ def shutil_copyfileobj(src, dst, length: int = 1 << 20) -> None:
 class LlamaBrain:
     """Adapter around ``llama_cpp.Llama`` exposing a single ``chat`` method."""
 
-    def __init__(self, llm: Any, max_tokens: int = MAX_TOKENS, temperature: float = TEMPERATURE):
+    def __init__(
+        self,
+        llm: Any,
+        max_tokens: int = MAX_TOKENS,
+        temperature: float = TEMPERATURE,
+        n_ctx: int = N_CTX,
+    ):
         self._llm = llm
         self._max_tokens = max_tokens
         self._temperature = temperature
+        self._n_ctx = n_ctx
 
     def chat(
         self,
@@ -1197,6 +1326,18 @@ class LlamaBrain:
         tools: list[dict[str, Any]] | None,
         max_tokens: int | None = None,
     ) -> dict[str, Any]:
+        # One line per call so an over-full window is visible before the model
+        # returns an empty answer, not after.
+        system = next(
+            (m.get("content", "") for m in messages if m.get("role") == "system"), ""
+        )
+        budget = prompt_budget(system or "", list(tools or []), self._n_ctx)
+        print(
+            f"[PROMPT BUDGET] system={budget['system_chars']}ch "
+            f"schemas={budget['schemas_chars']}ch tools={budget['tools']} "
+            f"est_tokens={budget['est_tokens']} / {budget['n_ctx']}",
+            flush=True,
+        )
         response = self._llm.create_chat_completion(
             messages=messages,
             tools=tools,
@@ -1272,18 +1413,45 @@ def load_brain(
     layers = _resolve_gpu_layers(n_gpu_layers)
     if verbose:
         print(f"[agent] loading {path} (n_gpu_layers={layers}, n_ctx={n_ctx}) ...", flush=True)
-    try:
-        llm = Llama(
+
+    def _try_load(ctx: int) -> Any:
+        return Llama(
             model_path=str(path),
-            n_ctx=n_ctx,
+            n_ctx=ctx,
             n_gpu_layers=layers,
             n_batch=N_BATCH,
             n_threads=max(1, (os.cpu_count() or 4)),
             verbose=verbose,
         )
+
+    try:
+        llm = _try_load(n_ctx)
     except Exception as exc:
-        return _error("model_load_failed", f"llama.cpp refused {path}: {exc}", path=str(path))
-    return LlamaBrain(llm)
+        # A 16384 context is the target, but on a tight GPU llama.cpp can refuse
+        # to allocate it. Step down to 12288 once rather than fall over; the
+        # schema diet already keeps the live prompt far under either window.
+        if n_ctx > N_CTX_FALLBACK:
+            if verbose:
+                print(
+                    f"[agent] n_ctx={n_ctx} failed ({type(exc).__name__}); "
+                    f"retrying with {N_CTX_FALLBACK}",
+                    flush=True,
+                )
+            try:
+                llm = _try_load(N_CTX_FALLBACK)
+                n_ctx = N_CTX_FALLBACK
+            except Exception as exc2:
+                return _error(
+                    "model_load_failed",
+                    f"llama.cpp refused {path}: {exc2}",
+                    path=str(path),
+                    n_ctx=N_CTX_FALLBACK,
+                )
+        else:
+            return _error(
+                "model_load_failed", f"llama.cpp refused {path}: {exc}", path=str(path), n_ctx=n_ctx
+            )
+    return LlamaBrain(llm, n_ctx=n_ctx)
 
 
 # --------------------------------------------------------------------------- #
@@ -3512,10 +3680,17 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
 
     slot = store.derive_name(descriptor or "raw", "derived")
     store.put(slot, result)
-    summary = _summarise_frame(result, store, slot)
-    summary["metric"] = metric
-    summary["physics_column"] = _PHYSICS_COLUMNS.get(metric, [])
-    return summary, _physics_note(metric, result, slot)
+    note = _physics_note(metric, result, slot)
+    # No column dump: the metric plus its headline number is all the model needs
+    # to quote, and the derived handle lets it plot or chain the next formula.
+    payload = {
+        "ok": True,
+        "metric": metric,
+        "frame_handle": slot,
+        "available_handles": store.names(),
+        "result": note,
+    }
+    return payload, note
 
 
 #: The column each metric adds, for the summary and the model's benefit.
@@ -3823,7 +3998,10 @@ def run_agent(
         return _error("invalid_brain", "brain must expose a .chat(messages, tools) method")
 
     prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
-    schemas = tools if tools is not None else TOOL_SCHEMAS
+    # Never hand a small model all 21 schemas: a free-form question gets the
+    # few tools its intent needs. Planner subtasks pass an explicit, already
+    # narrow list; the free-form path narrows by query here.
+    schemas = tools if tools is not None else select_tools_for_query(user_query)
     store = store or FrameStore()
     plots: list[str] = []
     log: list[dict[str, Any]] = []
@@ -4064,7 +4242,7 @@ def run_agent(
                     "stop_reason": "matrix_completed_short_circuit",
                 }
 
-            messages.append({"role": "tool", "content": _dumps(payload)})
+            messages.append({"role": "tool", "content": _compact_tool_message(payload)})
 
     return {
         "ok": stop_reason != "no_tool_calls",

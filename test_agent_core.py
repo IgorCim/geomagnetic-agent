@@ -151,7 +151,7 @@ def test_system_prompt_enforces_the_massive_task_algorithm():
     assert "НЕ вызывай больше никаких инструментов" in sp
     assert "экспорт делается автоматически" in sp
     assert "process_matrix_batch" in sp
-    assert len(sp) <= 4500, f"prompt grew to {len(sp)} chars"
+    assert len(sp) <= 3200, f"prompt grew to {len(sp)} chars"
 
 
 def test_slot_ordering_is_left_to_the_code_not_the_prompt():
@@ -1546,11 +1546,13 @@ def test_system_prompt_stays_within_its_budget():
 
     Phase 3 rewrote the prompt into a tighter voice to advertise the geomagnetic
     tools (geomag coords, MLT, LT, overlay) without new rules, and the ceiling was
-    pulled down from 5200 to 4500. It stays pinned at the measured value so the
-    next addition has to be argued for rather than drifted into.
+    pulled down from 5200 to 4500. Phase 5's context diet cut the schema prose and
+    pressed the ceiling down to 3200, so the window can hold the prompt, the tool
+    schemas and room to answer. It stays pinned at the measured value so the next
+    addition has to be argued for rather than drifted into.
     """
     sp = ac.SYSTEM_PROMPT
-    assert len(sp) <= 4500, f"prompt grew to {len(sp)} chars"
+    assert len(sp) <= 3200, f"prompt grew to {len(sp)} chars"
     # what must survive a trim
     assert "4a." in sp, "the tool-selection table is the point of the prompt"
     assert "'nT'" in sp, "the checker and recovery filter both key on the unit"
@@ -1563,6 +1565,20 @@ def test_system_prompt_stays_within_its_budget():
     # no numbered rule was added: 1..11 must still be the whole rule set
     numbers = set(re.findall(r"(?:^|\n)(\d{1,2})\. ", sp))
     assert numbers <= {str(n) for n in range(1, 12)}, f"new rule numbers: {numbers}"
+
+
+def test_total_prompt_budget_including_schemas():
+    """The prompt alone is not the whole prompt: schemas ride with it.
+
+    The field failure was a context overflow -- the system prompt and the 21
+    tool schemas were both counted by the model but only the prompt was counted
+    by the budget test, so the window blew silently. This asserts the WORST case
+    (every schema, no dynamic selection) still fits in half of n_ctx, leaving the
+    other half for the conversation, the tool results and the answer.
+    """
+    budget = ac.prompt_budget(ac.SYSTEM_PROMPT, ac.TOOL_SCHEMAS, ac.N_CTX)
+    assert budget["est_tokens"] <= ac.N_CTX // 2, budget
+    assert budget["n_ctx"] == ac.N_CTX >= 16384
 
 
 # --------------------------------------------------------------------------- #
