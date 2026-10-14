@@ -143,15 +143,16 @@ HANDLE_CASE_RULE = (
 BASE_PROMPT_COMPACT = (
     "Ты — профессиональный геофизический ИИ-ассистент. Не выдумывай цифры — "
     "вызывай инструменты.\n\n"
-    "ЖЁСТКО (физика): любые физические расчёты — Sq-базовая линия, дельты, "
-    "GIC/dH_dt, Dst-прокси, Ey-связь, SSC — делай ТОЛЬКО через apply_physics_formula "
-    "с параметром metric. calculate_dst_proxy НЕ существует. calculate_derived_math "
-    "и detect_anomalies — только статистика, для физики ЗАПРЕЩЕНЫ. Физику в матрицу "
-    "не сваливай.\n\n"
+    "ЖЁСТКО (физика): любые расчёты — Sq-базовая линия, дельты, GIC/dH_dt, "
+    "Dst-прокси, Ey-связь, SSC — только через apply_physics_formula с metric. "
+    "calculate_dst_proxy НЕ существует. calculate_derived_math и detect_anomalies — "
+    "только статистика, для физики ЗАПРЕЩЕНЫ. При unknown_tool НЕМЕДЛЕННО вызывай "
+    "apply_physics_formula с нужным metric: НЕ другие инструменты, НЕ графики на "
+    "пустых данных.\n\n"
     "Правила:\n"
     "1. Отвечай на русском, кратко, как коллега-геофизик.\n"
     "2. Любое число в ответе — только из результата инструмента.\n"
-    "3. Данные бери fetch_observatory_data, код станции — трёхбуквенный IAGA. "
+    "3. Данные бери fetch_observatory_data, код станции — 3-буквенный IAGA. "
     f"Известны: {STATION_HINT}.\n"
     "4. График: fetch_observatory_data → calculate_derived_components → "
     "plot_components / plot_comparison / plot_overlay.\n"
@@ -166,12 +167,12 @@ BASE_PROMPT_COMPACT = (
     "detect_anomalies (выбросы), calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
     "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (baseline_value), "
     "evaluate_custom_formula (не исполняется как код), apply_physics_formula (вся физика).\n"
-    "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt (магнитное "
-    "время), calculate_local_time (гражданское время), group_stations_by_mlt.\n"
+    "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt (MLT), "
+    "calculate_local_time (LT), group_stations_by_mlt.\n"
     "    • Графики: plot_components, plot_comparison, plot_overlay.\n"
     "6. Вместо DataFrame передавай хэндл: \"raw:irt:2024-09-10\" / "
     "\"derived:irt:2024-09-10\" либо \"raw\" / \"derived\" / \"anomalies\".\n"
-    "7. Ошибку инструмента перескажи и предложи, что делать; свои цифры не подставляй.\n"
+    "7. Ошибку перескажи и предложи, что делать; свои цифры не подставляй.\n"
     "8. Перечисли графики и файлы. Единицы — 'nT'.\n"
     "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
     "10. ФОРМАТ ОТВЕТА: (а) вызов — только теги, без слов:\n"
@@ -184,8 +185,8 @@ BASE_PROMPT_COMPACT = (
     "1) создай create_task_matrix (events, stations, actions, project_name);\n"
     "2) ОДИН вызов process_matrix_batch с run_until_complete=True — все станции и "
     "даты за раз;\n"
-    "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' (успешные/частичные/пустые + путь к "
-    "архиву; экспорт делается автоматически);\n"
+    "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' (+ путь к архиву; экспорт "
+    "делается автоматически);\n"
     "4) оформи сводку. НЕ вызывай больше никаких инструментов, в т.ч. export_project.\n"
     "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
     "create_task_matrix повторно, если матрица уже создана."
@@ -1176,10 +1177,19 @@ class Scratchpad:
 
     def _next_step(self) -> str:
         """A short, state-derived hint about what to do next."""
-        if self.errors and self.current_handle:
+        if self.errors:
+            if self.current_handle:
+                return (
+                    f"the last call failed -- retry it with the Active handle "
+                    f"{self.current_handle!r} (do not reuse the rejected name)."
+                )
+            # No handle yet: the call was refused before it produced one (an
+            # invented tool name, a malformed call). Point at the fix instead of
+            # "call the data source", which sent the model off to plot whatever
+            # it happened to have instead of correcting the rejected call.
             return (
-                f"the last call failed -- retry it with the Active handle "
-                f"{self.current_handle!r} (do not reuse the rejected name)."
+                "the last call failed -- apply the fix in Errors above before "
+                "calling anything else."
             )
         if not self.completed_steps:
             return "call the data source first, then analyse and plot."
@@ -1241,20 +1251,15 @@ _PHYSICS_TOOL_TO_METRIC: dict[str, str] = {
 def _self_correction_hint(tool_name: Any) -> str:
     """The [SELF-CORRECTION] line the Scratchpad shows after a bad tool name.
 
-    Physics-looking names get pointed at ``apply_physics_formula`` with the exact
-    ``metric`` to pass; anything else gets the generic "pick a real tool" nudge.
+    Kept to one short line: a 7B model scans rather than reads, and a long hint
+    competes with the Scratchpad's own NEXT STEP line for its attention. A
+    physics-looking name is answered with the exact ``metric`` to pass next.
     """
     name = str(tool_name or "").strip()
     metric = _PHYSICS_TOOL_TO_METRIC.get(name) or _PHYSICS_TOOL_TO_METRIC.get(name.lower())
     if metric:
-        return (
-            f"[SELF-CORRECTION]: Инструмент '{name}' не существует. Для этой задачи "
-            f"используй apply_physics_formula с metric='{metric}'."
-        )
-    return (
-        f"[SELF-CORRECTION]: Инструмент '{name}' не существует. Выбери доступный "
-        f"инструмент из списка available и не выдумывай имена."
-    )
+        return f"[SELF-CORRECTION]: Используй apply_physics_formula с metric='{metric}'."
+    return f"[SELF-CORRECTION]: Инструмент '{name}' не существует. Выбери доступный."
 
 
 def _compact_tool_message(payload: Any, max_chars: int = FRAME_SUMMARY_MAX_CHARS) -> str:
@@ -4207,7 +4212,12 @@ def run_agent(
         # Rebuilt from the immutable base prompt each round, so the dynamic hint
         # replaces the previous one instead of accumulating and growing the
         # context window (the schema diet exists precisely to keep it small).
-        messages[0] = {"role": "system", "content": f"{prompt}\n\n{scratchpad.to_prompt_injection()}"}
+        injection = scratchpad.to_prompt_injection()
+        messages[0] = {"role": "system", "content": f"{prompt}\n\n{injection}"}
+        # Unconditional: the field log showed the model ignoring a self-correction
+        # we believed was injected, so the exact injected text is printed to tell
+        # "not injected" apart from "injected and ignored".
+        print(f"\n[DEBUG] SCRATCHPAD INJECTION:\n{injection}\n")
         if verbose:
             print(
                 f"[SCRATCHPAD] Step {round_no}/{max_rounds}. "
