@@ -134,16 +134,20 @@ STATION_HINT = (
 #: cases every key, and this rule tells the model to do the same so that the
 #: handles it prints match the handles it reads back out of the tool results.
 HANDLE_CASE_RULE = (
-    "ВАЖНО: хэндл фрейма всегда пиши строчными буквами. Например, если инструмент "
-    "вернул frame_handle='raw:IRT:2024-09-10', передавай его в следующий вызов как "
-    "'raw:irt:2024-09-10' — код станции в хэндле всегда в нижнем регистре. "
-    "Сравнение двух дней требует два РАЗНЫХ хэндла, например "
+    "ВАЖНО: хэндл фрейма всегда пиши строчными буквами: вернув "
+    "frame_handle='raw:IRT:2024-09-10', передавай его как 'raw:irt:2024-09-10' "
+    "(код станции в нижнем регистре). Два дня — два РАЗНЫХ хэндла: "
     "'raw:irt:2024-09-10' и 'raw:irt:2024-09-11'."
 )
 
 BASE_PROMPT_COMPACT = (
-    "Ты — профессиональный геофизический ИИ-ассистент. Никогда не выдумывай цифры — "
+    "Ты — профессиональный геофизический ИИ-ассистент. Не выдумывай цифры — "
     "вызывай инструменты.\n\n"
+    "ЖЁСТКО (физика): любые физические расчёты — Sq-базовая линия, дельты, "
+    "GIC/dH_dt, Dst-прокси, Ey-связь, SSC — делай ТОЛЬКО через apply_physics_formula "
+    "с параметром metric. calculate_dst_proxy НЕ существует. calculate_derived_math "
+    "и detect_anomalies — только статистика, для физики ЗАПРЕЩЕНЫ. Физику в матрицу "
+    "не сваливай.\n\n"
     "Правила:\n"
     "1. Отвечай на русском, кратко, как коллега-геофизик.\n"
     "2. Любое число в ответе — только из результата инструмента.\n"
@@ -156,20 +160,18 @@ BASE_PROMPT_COMPACT = (
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
     "create_project, export_project.\n"
-    "    • Пакетно: create_task_matrix (события×станции, ОДНА задача на станцию с "
-    "её датами), process_matrix_batch (run_until_complete=True — все станции за "
-    "один вызов).\n"
+    "    • Пакетно: create_task_matrix (события×станции, ОДНА задача на станцию), "
+    "process_matrix_batch (run_until_complete=True — все станции за один вызов).\n"
     "    • Математика: calculate_derived_components (H, D, I), get_statistics, "
-    "detect_anomalies, calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
+    "detect_anomalies (выбросы), calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
     "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (baseline_value), "
-    "evaluate_custom_formula (не исполняется как код), apply_physics_formula.\n"
+    "evaluate_custom_formula (не исполняется как код), apply_physics_formula (вся физика).\n"
     "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt (магнитное "
     "время), calculate_local_time (гражданское время), group_stations_by_mlt.\n"
     "    • Графики: plot_components, plot_comparison, plot_overlay.\n"
     "6. Вместо DataFrame передавай хэндл: \"raw:irt:2024-09-10\" / "
     "\"derived:irt:2024-09-10\" либо \"raw\" / \"derived\" / \"anomalies\".\n"
-    "7. Ошибку инструмента перескажи и предложи, что делать; свои цифры не "
-    "подставляй.\n"
+    "7. Ошибку инструмента перескажи и предложи, что делать; свои цифры не подставляй.\n"
     "8. Перечисли графики и файлы. Единицы — 'nT'.\n"
     "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
     "10. ФОРМАТ ОТВЕТА: (а) вызов — только теги, без слов:\n"
@@ -179,14 +181,12 @@ BASE_PROMPT_COMPACT = (
     "    (б) данных достаточно — обычный текст без тегов.\n"
     f"11. {HANDLE_CASE_RULE}\n\n"
     "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
-    "Если просят обработать множество станций и дат:\n"
     "1) создай create_task_matrix (events, stations, actions, project_name);\n"
-    "2) затем ОДИН вызов process_matrix_batch с run_until_complete=True — он "
-    "обработает все станции и даты за раз;\n"
-    "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' — там разбивка успешных / "
-    "частичных / пустых и путь к архиву (экспорт делается автоматически);\n"
-    "4) красиво оформи эту сводку. НЕ вызывай больше никаких инструментов, в т.ч. "
-    "export_project.\n"
+    "2) ОДИН вызов process_matrix_batch с run_until_complete=True — все станции и "
+    "даты за раз;\n"
+    "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' (успешные/частичные/пустые + путь к "
+    "архиву; экспорт делается автоматически);\n"
+    "4) оформи сводку. НЕ вызывай больше никаких инструментов, в т.ч. export_project.\n"
     "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
     "create_task_matrix повторно, если матрица уже создана."
 )
@@ -784,9 +784,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "apply_physics_formula",
             "description": (
-                "Apply ONE physical formula to a frame and store the result as a new "
-                "derived, plottable series. metric must be exactly one of the enum "
-                "values; 'ey_coupling' also needs external_params (V, Bz)."
+                "Этот инструмент выполняет ВСЕ научные расчёты над фреймом данных. "
+                "Для физики вызывай ТОЛЬКО его, а не выдуманные имена вроде "
+                "calculate_dst_proxy. Аргумент metric ДОЛЖЕН быть строго одной из "
+                "строк ниже, по запросу пользователя:\n"
+                "  • 'sq_baseline' — если просят базовую линию или спокойный уровень (Sq);\n"
+                "  • 'deltas' — если просят возмущения или дельты поля;\n"
+                "  • 'gic' (или 'dH_dt') — если просят скорость изменения поля или GIC;\n"
+                "  • 'dst_proxy' — если просят кольцевой ток или Dst;\n"
+                "  • 'detect_ssc' — если просят внезапное commencement (SSC) или скачок;\n"
+                "  • 'ey_coupling' — связь с солнечным ветром (нужен external_params {V, Bz}).\n"
+                "Аргумент df_descriptor ДОЛЖЕН быть точной строкой, возвращённой "
+                "предыдущим инструментом (например, 'raw:irt:2024-09-10'); не "
+                "придумывай её — бери из frame_handle предыдущего результата."
             ),
             "parameters": {
                 "type": "object",
@@ -794,8 +804,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "df_descriptor": _FRAME_ARG,
                     "metric": {
                         "type": "string",
-                        "enum": ["sq_baseline", "deltas", "gic", "dst_proxy", "ey_coupling", "detect_ssc"],
-                        "description": "Which physical formula to apply. 'ey_coupling' also needs external_params.",
+                        "enum": ["sq_baseline", "deltas", "gic", "dH_dt", "dst_proxy", "ey_coupling", "detect_ssc"],
+                        "description": (
+                            "Ровно одна строка: 'sq_baseline' (базовая линия/Sq), "
+                            "'deltas' (возмущения), 'gic'/'dH_dt' (скорость/GIC), "
+                            "'dst_proxy' (Dst), 'detect_ssc' (SSC), "
+                            "'ey_coupling' (+external_params)."
+                        ),
                     },
                     "external_params": {
                         "type": "object",
@@ -1192,6 +1207,54 @@ _SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
     "create_project": "create_project",
     "export_project": "export_project",
 }
+
+#: Hallucinated physics tool names -> the metric that actually serves the request.
+#: A small model invents "calculate_dst_proxy" and friends; instead of a bare
+#: "unknown_tool" it gets told the one correct call to make next.
+_PHYSICS_TOOL_TO_METRIC: dict[str, str] = {
+    "calculate_dst_proxy": "dst_proxy",
+    "calculate_dst": "dst_proxy",
+    "compute_dst": "dst_proxy",
+    "dst_proxy": "dst_proxy",
+    "calculate_gic": "gic",
+    "calculate_gic_proxy": "gic",
+    "compute_gic": "gic",
+    "gic": "gic",
+    "dH_dt": "gic",
+    "calculate_dh_dt": "gic",
+    "calculate_ssc": "detect_ssc",
+    "detect_ssc": "detect_ssc",
+    "ssc": "detect_ssc",
+    "calculate_ssc_detection": "detect_ssc",
+    "calculate_sq_baseline": "sq_baseline",
+    "sq_baseline": "sq_baseline",
+    "calculate_baseline_sq": "sq_baseline",
+    "calculate_deltas": "deltas",
+    "compute_deltas": "deltas",
+    "deltas": "deltas",
+    "calculate_coupling": "ey_coupling",
+    "calculate_ey": "ey_coupling",
+    "ey_coupling": "ey_coupling",
+}
+
+
+def _self_correction_hint(tool_name: Any) -> str:
+    """The [SELF-CORRECTION] line the Scratchpad shows after a bad tool name.
+
+    Physics-looking names get pointed at ``apply_physics_formula`` with the exact
+    ``metric`` to pass; anything else gets the generic "pick a real tool" nudge.
+    """
+    name = str(tool_name or "").strip()
+    metric = _PHYSICS_TOOL_TO_METRIC.get(name) or _PHYSICS_TOOL_TO_METRIC.get(name.lower())
+    if metric:
+        return (
+            f"[SELF-CORRECTION]: Инструмент '{name}' не существует. Для этой задачи "
+            f"используй apply_physics_formula с metric='{metric}'."
+        )
+    return (
+        f"[SELF-CORRECTION]: Инструмент '{name}' не существует. Выбери доступный "
+        f"инструмент из списка available и не выдумывай имена."
+    )
 
 
 def _compact_tool_message(payload: Any, max_chars: int = FRAME_SUMMARY_MAX_CHARS) -> str:
@@ -3753,6 +3816,20 @@ _PHYSICS_METRICS: dict[str, Any] = {
     "detect_ssc": pengine.detect_ssc,
 }
 
+#: Spellings a model reaches for that mean the same metric. 'dH_dt' is the
+#: physical name of the GIC proxy, so it is accepted and folded onto 'gic'
+#: rather than refused as an unknown metric.
+_PHYSICS_METRIC_ALIASES: dict[str, str] = {
+    "dh_dt": "gic",
+    "dh/dt": "gic",
+    "gic_proxy": "gic",
+    "sq": "sq_baseline",
+    "delta": "deltas",
+    "ssc": "detect_ssc",
+    "dst": "dst_proxy",
+    "ey": "ey_coupling",
+}
+
 
 def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Run one physical formula and store the enriched frame as a derived slot.
@@ -3764,6 +3841,7 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
     """
     descriptor = args.get("df_descriptor") or args.get("df") or ""
     metric = str(args.get("metric") or "").strip().lower()
+    metric = _PHYSICS_METRIC_ALIASES.get(metric, metric)
     external = args.get("external_params")
     external = external if isinstance(external, dict) else None
 
@@ -4278,6 +4356,9 @@ def run_agent(
                     "unknown_tool",
                     f"No tool named {name!r}.",
                     available=sorted(TOOLS_BY_NAME),
+                    # Turns "unknown_tool" into an actionable next call: a
+                    # hallucinated physics name is answered with the exact metric.
+                    hint=_self_correction_hint(name),
                 )
                 entry["error"] = payload["error"]
             else:
