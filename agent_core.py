@@ -69,6 +69,7 @@ PARSER_VERSION = "bulletproof-3"
 __all__ = [
     "SYSTEM_PROMPT",
     "TOOL_SCHEMAS",
+    "Scratchpad",
     "FrameStore",
     "LlamaBrain",
     "ScriptedBrain",
@@ -1085,6 +1086,112 @@ _MODEL_PAYLOAD_KEYS = (
     "available_handles", "handle_aliases", "path", "plot", "metric", "result",
     "station", "date", "computed", "offline", "publication_state", "source",
 )
+
+
+class Scratchpad:
+    """Persistent working memory for the agent during a single user query.
+
+    Tracks active handle, completed steps, encountered errors (with hints),
+    and an optional plan. Injected into the context before each LLM call
+    to prevent losing state between rounds and to enable lightweight self-learning.
+    """
+
+    def __init__(self) -> None:
+        self.current_handle: str = ""
+        self.completed_steps: list[str] = []
+        self.errors: list[dict] = []
+        self.plan: list[str] = []
+
+    def reset(self) -> None:
+        self.current_handle = ""
+        self.completed_steps.clear()
+        self.errors.clear()
+        self.plan.clear()
+
+    def update_handle(self, new_handle: str) -> None:
+        if not isinstance(new_handle, str):
+            return
+        new_handle = new_handle.strip()
+        if new_handle:
+            self.current_handle = new_handle
+
+    def add_completed_step(self, step: str) -> None:
+        if not isinstance(step, str):
+            return
+        step = step.strip()
+        if not step:
+            return
+        if step not in self.completed_steps:
+            self.completed_steps.append(step)
+
+    def add_error(self, tool: str, error: str, hint: str = "") -> None:
+        entry: dict[str, Any] = {
+            "tool": str(tool) if tool is not None else "",
+            "error": str(error) if error is not None else "",
+        }
+        if hint:
+            entry["hint"] = str(hint)
+        self.errors.append(entry)
+
+    def to_prompt_injection(self) -> str:
+        """One compact line injected into the system prompt before every LLM call.
+
+        Built only from fields that carry information, so an untouched scratchpad
+        adds a single short line rather than a block of empties -- the schema diet
+        keeps the window small and this must not eat into it.
+        """
+        parts: list[str] = []
+        if self.current_handle:
+            parts.append(f"Active handle: {self.current_handle}")
+        if self.completed_steps:
+            parts.append(f"Completed: {', '.join(self.completed_steps)}")
+        if self.errors:
+            recent: list[str] = []
+            for err in self.errors[-3:]:  # only the freshest mistakes matter
+                line = f"{err.get('tool', '?')}: {err.get('error', '')}"
+                if err.get("hint"):
+                    line += f" ({err['hint']})"
+                recent.append(line)
+            parts.append(f"Errors: {'; '.join(recent)}")
+        if self.plan:
+            parts.append(f"Plan: {', '.join(self.plan)}")
+
+        body = ". ".join(parts) if parts else "No state yet"
+        return f"[SCRATCHPAD] {body}. NEXT STEP: {self._next_step()}"
+
+    def _next_step(self) -> str:
+        """A short, state-derived hint about what to do next."""
+        if self.errors and self.current_handle:
+            return (
+                f"the last call failed -- retry it with the Active handle "
+                f"{self.current_handle!r} (do not reuse the rejected name)."
+            )
+        if not self.completed_steps:
+            return "call the data source first, then analyse and plot."
+        if "plot" not in self.completed_steps and not any(
+            s.startswith("plot") for s in self.completed_steps
+        ):
+            return "continue towards the requested result (analyse / plot)."
+        return "summarise the result for the user; do not repeat completed steps."
+
+
+#: Friendly progress label recorded on the scratchpad for each successful tool.
+#: Keeps the "Completed:" line short and readable instead of echoing tool names.
+_SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
+    "fetch_observatory_data": "fetch",
+    "fetch_many": "fetch_many",
+    "calculate_derived_components": "calc_hdi",
+    "get_statistics": "stats",
+    "detect_anomalies": "anomalies",
+    "calculate_derived_math": "derived_math",
+    "calculate_baseline": "baseline",
+    "evaluate_custom_formula": "formula",
+    "plot_components": "plot",
+    "plot_comparison": "plot_comparison",
+    "plot_overlay": "plot_overlay",
+    "create_project": "create_project",
+    "export_project": "export_project",
+}
 
 
 def _compact_tool_message(payload: Any, max_chars: int = FRAME_SUMMARY_MAX_CHARS) -> str:
@@ -4005,6 +4112,9 @@ def run_agent(
     store = store or FrameStore()
     plots: list[str] = []
     log: list[dict[str, Any]] = []
+    scratchpad = Scratchpad()
+    scratchpad.reset()
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompt},
         {"role": "user", "content": user_query},
@@ -4015,6 +4125,17 @@ def run_agent(
     format_retries = 0
 
     for round_no in range(1, max_rounds + 1):
+        # Inject the scratchpad into the system message before every LLM call.
+        # Rebuilt from the immutable base prompt each round, so the dynamic hint
+        # replaces the previous one instead of accumulating and growing the
+        # context window (the schema diet exists precisely to keep it small).
+        messages[0] = {"role": "system", "content": f"{prompt}\n\n{scratchpad.to_prompt_injection()}"}
+        if verbose:
+            print(
+                f"[SCRATCHPAD] Step {round_no}/{max_rounds}. "
+                f"Handle: {scratchpad.current_handle or 'none'}. "
+                f"Completed: {', '.join(scratchpad.completed_steps) or 'none'}."
+            )
         try:
             reply = brain.chat(messages, schemas)
         except Exception as exc:
@@ -4199,17 +4320,44 @@ def run_agent(
             ):
                 entry["frame_handle"] = payload["frame_handle"]
                 entry["available"] = payload.get("available")
+                # The newest handle becomes the active one, so the model always
+                # sees where the pipeline currently stands (raw -> derived -> ...).
+                scratchpad.update_handle(payload["frame_handle"])
+
             if entry["ok"] and name in PLOT_TOOLS and isinstance(payload.get("path"), str):
                 plots.append(payload["path"])
                 entry["plot"] = payload["path"]
-            if is_error(payload):
+
+            # Track completed actions and any failure so the next round sees the
+            # progress and can self-correct instead of repeating a dead handle.
+            if entry["ok"]:
+                step = _SCRATCHPAD_STEP_BY_TOOL.get(name)
+                if step:
+                    scratchpad.add_completed_step(step)
+                elif name == "apply_physics_formula":
+                    metric = str(args.get("metric") or "").strip()
+                    if metric:
+                        scratchpad.add_completed_step(f"physics_{metric}")
+            else:
                 entry["error"] = payload.get("error")
                 entry["message"] = payload.get("message")
+                # Repair the error hint with the concrete active handle, so a
+                # "derived:" hallucination is answered with the real "raw:" name.
+                hint = payload.get("hint") or ""
+                if payload.get("error") == "unknown_frame" and scratchpad.current_handle:
+                    hint = f"Использовал неверный handle, актуальный: {scratchpad.current_handle}"
+                scratchpad.add_error(name, payload.get("error", ""), hint)
 
             log.append(entry)
             if verbose:
                 status = "ok" if entry["ok"] else f"FAILED ({entry.get('error')})"
                 print(f"[agent] round {round_no}: {name}({_short(args)}) -> {status}")
+                print(
+                    f"[SCRATCHPAD] Step {round_no}/{max_rounds}. "
+                    f"Handle: {scratchpad.current_handle or 'none'}. "
+                    f"Completed: {', '.join(scratchpad.completed_steps) or 'none'}. "
+                    f"Errors: {len(scratchpad.errors)}."
+                )
 
             # Short-circuit: a finished matrix run already carries the final
             # human-readable summary and the archive path. Feeding that long
