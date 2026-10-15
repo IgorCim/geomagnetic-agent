@@ -54,6 +54,7 @@ import geomag_analyzer as analyzer
 import geomag_math as geomath
 import geomag_plotter as plotter
 import intermagnet_loader as loader
+import space_weather_loader as space_weather
 import project_store as projects
 import geomag_coords as gcoords
 import physics_engine as pengine
@@ -134,24 +135,23 @@ STATION_HINT = (
 #: cases every key, and this rule tells the model to do the same so that the
 #: handles it prints match the handles it reads back out of the tool results.
 HANDLE_CASE_RULE = (
-    "ВАЖНО: хэндл фрейма всегда пиши строчными буквами: вернув "
-    "frame_handle='raw:IRT:2024-09-10', передавай его как 'raw:irt:2024-09-10' "
-    "(код станции в нижнем регистре). Два дня — два РАЗНЫХ хэндла: "
-    "'raw:irt:2024-09-10' и 'raw:irt:2024-09-11'."
+    "Хэндлы пиши строчными буквами (в нижнем регистре): "
+    "frame_handle='raw:IRT:2024-09-10' передавай как 'raw:irt:2024-09-10'. "
+    "Два дня — два РАЗНЫХ хэндла."
 )
 
 BASE_PROMPT_COMPACT = (
     "Ты — профессиональный геофизический ИИ-ассистент. Не выдумывай цифры — "
     "вызывай инструменты.\n\n"
-    "ЖЁСТКО (физика): любые расчёты — Sq-базовая линия, дельты, GIC/dH_dt, "
-    "Dst-прокси, Ey-связь, SSC — только через apply_physics_formula с metric. "
-    "calculate_dst_proxy НЕ существует. calculate_derived_math и detect_anomalies — "
-    "только статистика, для физики ЗАПРЕЩЕНЫ. При unknown_tool НЕМЕДЛЕННО вызывай "
-    "apply_physics_formula с нужным metric: НЕ другие инструменты, НЕ графики на "
-    "пустых данных.\n\n"
+    "ЖЁСТКО: физику (Sq, дельты, GIC, Dst, Ey, SSC) — ТОЛЬКО через "
+    "apply_physics_formula с metric. calculate_dst_proxy НЕ существует. "
+    "calculate_derived_math и detect_anomalies — только статистика. При unknown_tool "
+    "сразу вызывай apply_physics_formula. Ey: metric='ey_coupling', "
+    "external_params={'solar_wind': 'sw:omni:<дата>'}. Эталон бури — 2024-09-12 или "
+    "2024-10-10 (НЕ 2024-09-10).\n\n"
     "Правила:\n"
     "1. Отвечай на русском, кратко, как коллега-геофизик.\n"
-    "2. Любое число в ответе — только из результата инструмента.\n"
+    "2. Числа в ответе — только из результата инструмента.\n"
     "3. Данные бери fetch_observatory_data, код станции — 3-буквенный IAGA. "
     f"Известны: {STATION_HINT}.\n"
     "4. График: fetch_observatory_data → calculate_derived_components → "
@@ -160,18 +160,19 @@ BASE_PROMPT_COMPACT = (
     "графики ответят unknown_frame. Хэндл бери из frame_handle.\n"
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
-    "create_project, export_project.\n"
+    "create_project, export_project, fetch_solar_wind (L1: V, Bz), "
+    "fetch_geomagnetic_indices (Dst, Kp).\n"
     "    • Пакетно: create_task_matrix (события×станции, ОДНА задача на станцию), "
     "process_matrix_batch (run_until_complete=True — все станции за один вызов).\n"
     "    • Математика: calculate_derived_components (H, D, I), get_statistics, "
     "detect_anomalies (выбросы), calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
     "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (baseline_value), "
     "evaluate_custom_formula (не исполняется как код), apply_physics_formula (вся физика).\n"
-    "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt (MLT), "
-    "calculate_local_time (LT), group_stations_by_mlt.\n"
+    "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt, "
+    "calculate_local_time, group_stations_by_mlt.\n"
     "    • Графики: plot_components, plot_comparison, plot_overlay.\n"
     "6. Вместо DataFrame передавай хэндл: \"raw:irt:2024-09-10\" / "
-    "\"derived:irt:2024-09-10\" либо \"raw\" / \"derived\" / \"anomalies\".\n"
+    "\"derived:irt:2024-09-10\" либо \"raw\" / \"derived\" / \"anomalies\" / \"sw\".\n"
     "7. Ошибку перескажи и предложи, что делать; свои цифры не подставляй.\n"
     "8. Перечисли графики и файлы. Единицы — 'nT'.\n"
     "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
@@ -185,8 +186,7 @@ BASE_PROMPT_COMPACT = (
     "1) создай create_task_matrix (events, stations, actions, project_name);\n"
     "2) ОДИН вызов process_matrix_batch с run_until_complete=True — все станции и "
     "даты за раз;\n"
-    "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' (+ путь к архиву; экспорт "
-    "делается автоматически);\n"
+    "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' (экспорт делается автоматически);\n"
     "4) оформи сводку. НЕ вызывай больше никаких инструментов, в т.ч. export_project.\n"
     "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
     "create_task_matrix повторно, если матрица уже создана."
@@ -794,7 +794,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "  • 'gic' (или 'dH_dt') — если просят скорость изменения поля или GIC;\n"
                 "  • 'dst_proxy' — если просят кольцевой ток или Dst;\n"
                 "  • 'detect_ssc' — если просят внезапное commencement (SSC) или скачок;\n"
-                "  • 'ey_coupling' — связь с солнечным ветром (нужен external_params {V, Bz}).\n"
+                "  • 'ey_coupling' — связь с солнечным ветром (нужен external_params).\n"
                 "Аргумент df_descriptor ДОЛЖЕН быть точной строкой, возвращённой "
                 "предыдущим инструментом (например, 'raw:irt:2024-09-10'); не "
                 "придумывай её — бери из frame_handle предыдущего результата."
@@ -816,8 +816,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "external_params": {
                         "type": "object",
                         "description": (
-                            "Solar-wind inputs for 'ey_coupling' only: {'V': <km/s>, 'Bz': <nT>} "
-                            "from L1/OMNIWeb. Ignored by the other metrics."
+                            "Solar-wind inputs for 'ey_coupling' only. Either scalars "
+                            "{'V': <km/s>, 'Bz': <nT>}, or a handle to a fetch_solar_wind "
+                            "frame: {'solar_wind': 'sw:omni:<date>'} (aligned to the "
+                            "observatory timestamps automatically). Ignored by other metrics."
                         ),
                     },
                 },
@@ -860,6 +862,47 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "filename": {"type": "string", "description": "Output file name, .html."}
                 },
                 "required": ["stations", "dates", "component"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_solar_wind",
+            "description": (
+                "Download L1 solar-wind data (NASA/OMNI, 1-minute: speed V, density Np, "
+                "temperature T, IMF Bx/By/Bz in GSM) for a date range. USE this to find "
+                "the CAUSE of a geomagnetic storm (southward Bz + fast V). Returns "
+                "frame_handle 'sw:omni:<START_DATE>' to pass to apply_physics_formula "
+                "(metric='ey_coupling'). DO NOT USE for observatory data."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD (UTC)."},
+                    "end_date": {"type": "string", "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."}
+                },
+                "required": ["start_date"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_geomagnetic_indices",
+            "description": (
+                "Download geomagnetic activity indices (Kyoto WDC: hourly Dst, 3-hourly "
+                "Kp) for a date range -- the storm SEVERITY record. USE alongside "
+                "fetch_solar_wind to describe a storm. Returns frame_handle "
+                "'idx:kyoto:<START_DATE>'. DO NOT USE for observatory magnetograms."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD (UTC)."},
+                    "end_date": {"type": "string", "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."}
+                },
+                "required": ["start_date"]
             }
         }
     },
@@ -917,7 +960,14 @@ TOOL_SELECTION: dict[str, list[str]] = {
     "plot_components": ["fetch_observatory_data", "calculate_derived_components", "plot_components"],
     "plot_comparison": ["fetch_observatory_data", "calculate_derived_components", "plot_comparison"],
     "plot_overlay": ["fetch_observatory_data", "calculate_derived_components", "plot_overlay"],
-    "apply_physics_formula": ["fetch_observatory_data", "apply_physics_formula"],
+    "apply_physics_formula": [
+        "fetch_observatory_data",
+        "fetch_solar_wind",
+        "fetch_geomagnetic_indices",
+        "apply_physics_formula",
+    ],
+    "fetch_solar_wind": ["fetch_solar_wind", "fetch_geomagnetic_indices", "apply_physics_formula"],
+    "fetch_geomagnetic_indices": ["fetch_geomagnetic_indices", "apply_physics_formula"],
     "get_statistics": ["fetch_observatory_data", "get_statistics"],
     "calculate_derived_math": ["fetch_observatory_data", "calculate_derived_math"],
     "detect_anomalies": ["fetch_observatory_data", "detect_anomalies"],
@@ -1000,8 +1050,9 @@ _QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         ("sq", "gic", "dst", "coupling", "ssc", "физик", "индекс", "ey", "bz", "связи",
-         "спокойн", "базис", "космической погод", "solar"),
-        ("apply_physics_formula",),
+         "спокойн", "базис", "космической погод", "solar", "буря", "storm", "kp",
+         "omni", "солнечн"),
+        ("apply_physics_formula", "fetch_solar_wind", "fetch_geomagnetic_indices"),
     ),
     (
         ("mlt", "магнитное время", "локальн", "гражданск", "местное время", "координ",
@@ -1205,6 +1256,8 @@ class Scratchpad:
 _SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
     "fetch_observatory_data": "fetch",
     "fetch_many": "fetch_many",
+    "fetch_solar_wind": "solar_wind",
+    "fetch_geomagnetic_indices": "indices",
     "calculate_derived_components": "calc_hdi",
     "get_statistics": "stats",
     "detect_anomalies": "anomalies",
@@ -1217,6 +1270,10 @@ _SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
     "create_project": "create_project",
     "export_project": "export_project",
 }
+
+#: Frame families that are auxiliary inputs (space weather) rather than the
+#: working magnetometer frame. Kept out of the Scratchpad's "Active handle".
+_AUX_FRAME_FAMILIES = {"sw", "idx"}
 
 #: Hallucinated physics tool names -> the metric that actually serves the request.
 #: A small model invents "calculate_dst_proxy" and friends; instead of a bare
@@ -1244,6 +1301,9 @@ _PHYSICS_TOOL_TO_METRIC: dict[str, str] = {
     "deltas": "deltas",
     "calculate_coupling": "ey_coupling",
     "calculate_ey": "ey_coupling",
+    "calculate_coupling_function": "ey_coupling",
+    "coupling_function": "ey_coupling",
+    "solar_wind_coupling": "ey_coupling",
     "ey_coupling": "ey_coupling",
 }
 
@@ -2414,6 +2474,119 @@ def _handle_fetch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     summary["publication_state"] = (result.attrs or {}).get("publication_state")
     summary["source"] = (result.attrs or {}).get("source")
     return summary, f"Fetched {len(result)} rows for {station or args.get('station_code')} -> handle {slot!r}."
+
+
+def _offline_solar_wind(start: str) -> pd.DataFrame:
+    """A deterministic storm driver for offline runs (no network at all).
+
+    Reproduces the shape that matters physically: a fast stream carrying a
+    southward IMF through the middle of the day, so the coupling tool returns a
+    strong positive Ey.
+    """
+    try:
+        day = pd.Timestamp(str(start))
+        if pd.isna(day):
+            raise ValueError(start)
+    except (TypeError, ValueError):
+        day = pd.Timestamp("2024-09-12")
+    stamps = pd.date_range(day.normalize(), periods=1440, freq="min", tz="UTC")
+    t = np.linspace(0.0, 1.0, len(stamps))
+    bump = np.exp(-((t - 0.5) ** 2) / (2 * 0.05 ** 2))
+    frame = pd.DataFrame({
+        "timestamp": stamps,
+        "V": 380.0 + 320.0 * bump,
+        "Np": 4.0 + 12.0 * bump,
+        "T": 8.0e4 + 9.0e5 * bump,
+        "Bx": 1.0,
+        "By": -2.0,
+        "Bz": 3.0 - 21.0 * bump,
+    })
+    frame.attrs = {"dataset": "offline-synthetic (OMNI shape)", "offline": True}
+    return frame
+
+
+def _offline_indices(start: str) -> pd.DataFrame:
+    """A deterministic Dst/Kp day with a storm-time depression around 12:00 UT."""
+    try:
+        day = pd.Timestamp(str(start))
+        if pd.isna(day):
+            raise ValueError(start)
+    except (TypeError, ValueError):
+        day = pd.Timestamp("2024-09-12")
+    stamps = pd.date_range(day.normalize(), periods=24, freq="h", tz="UTC")
+    t = np.linspace(0.0, 1.0, len(stamps))
+    bump = np.exp(-((t - 0.5) ** 2) / (2 * 0.08 ** 2))
+    frame = pd.DataFrame({
+        "timestamp": stamps,
+        "Dst": 5.0 - 130.0 * bump,
+        "Kp": 1.0 + 6.0 * bump,
+    })
+    frame.attrs = {"source": "offline-synthetic (Kyoto shape)", "offline": True}
+    return frame
+
+
+def _handle_fetch_solar_wind(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Fetch OMNI L1 solar wind and store it under a ``sw:omni:<day>`` handle.
+
+    Solar wind is the *cause* half of a storm: the coupling function needs V and
+    Bz on the observatory clock, and the handle is what carries those columns to
+    ``apply_physics_formula`` without a DataFrame ever entering the JSON channel.
+    """
+    start = str(args.get("start_date") or "").strip()
+    end = str(args.get("end_date") or start).strip()
+    if not start:
+        return _error("invalid_input", "start_date is required (YYYY-MM-DD)."), "missing start_date"
+
+    slot = f"sw:omni:{start}"
+    if OFFLINE:
+        frame = _offline_solar_wind(start)
+        store.put(slot, frame)
+        summary = _summarise_frame(frame, store, slot)
+        summary["offline"] = True
+        summary["source"] = "OMNI (offline synthetic)"
+        return summary, f"Offline: солнечный ветер синтезирован, {len(frame)} строк -> {slot!r}."
+
+    result = space_weather.fetch_solar_wind(start, end)
+    if space_weather.is_error(result):
+        return result, f"fetch_solar_wind failed: {result.get('error')}"
+    store.put(slot, result)
+    summary = _summarise_frame(result, store, slot)
+    summary["source"] = (result.attrs or {}).get("dataset") or "OMNI (L1)"
+    summary["start_date"] = start
+    summary["end_date"] = end
+    return summary, f"OMNI солнечный ветер: {len(result)} строк ({start}..{end}) -> {slot!r}."
+
+
+def _handle_fetch_geomagnetic_indices(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Fetch Kyoto Dst/Kp and store them under an ``idx:kyoto:<day>`` handle.
+
+    Indices are the *severity* half of a storm: Dst quantifies the ring-current
+    depression and Kp the planetary activity, so they answer "how strong was it"
+    while the solar wind answers "why".
+    """
+    start = str(args.get("start_date") or "").strip()
+    end = str(args.get("end_date") or start).strip()
+    if not start:
+        return _error("invalid_input", "start_date is required (YYYY-MM-DD)."), "missing start_date"
+
+    slot = f"idx:kyoto:{start}"
+    if OFFLINE:
+        frame = _offline_indices(start)
+        store.put(slot, frame)
+        summary = _summarise_frame(frame, store, slot)
+        summary["offline"] = True
+        summary["source"] = "Kyoto WDC (offline synthetic)"
+        return summary, f"Offline: индексы Dst/Kp синтезированы, {len(frame)} строк -> {slot!r}."
+
+    result = space_weather.fetch_geomagnetic_indices(start, end)
+    if space_weather.is_error(result):
+        return result, f"fetch_geomagnetic_indices failed: {result.get('error')}"
+    store.put(slot, result)
+    summary = _summarise_frame(result, store, slot)
+    summary["source"] = "Kyoto WDC (Dst hourly, Kp 3-hourly)"
+    summary["start_date"] = start
+    summary["end_date"] = end
+    return summary, f"Индексы Dst/Kp: {len(result)} строк ({start}..{end}) -> {slot!r}."
 
 
 def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -3836,6 +4009,54 @@ _PHYSICS_METRIC_ALIASES: dict[str, str] = {
 }
 
 
+#: Keys under ``external_params`` that name a stored solar-wind frame instead of
+#: carrying numbers. The model gets one obvious spelling plus a few synonyms.
+_SOLAR_WIND_HANDLE_KEYS = (
+    "solar_wind", "solar_wind_handle", "solar_wind_frame", "sw", "sw_handle",
+)
+
+
+def _resolve_coupling_external(
+    args: dict[str, Any],
+    external: dict[str, Any] | None,
+    frame: pd.DataFrame,
+    store: FrameStore,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Turn the many shapes of ``external_params`` into aligned V/Bz arrays.
+
+    Accepts (in priority order):
+
+    * a handle to a stored ``fetch_solar_wind`` frame, either as a top-level
+      ``solar_wind``/``solar_wind_handle`` argument or under one of
+      :data:`_SOLAR_WIND_HANDLE_KEYS` inside ``external_params`` -- the frame is
+      resolved and aligned to the observatory clock with
+      :func:`physics_engine.align_solar_wind`;
+    * plain scalars or arrays already keyed ``V``/``Bz`` -- passed straight to
+      the engine, which broadcasts a scalar and multiplies vectors elementwise.
+
+    Returns ``(external_params, None)`` on success, or ``(None, error_dict)`` when
+    a referenced handle cannot be resolved or aligned.
+    """
+    handle = args.get("solar_wind_handle") or args.get("solar_wind")
+    if not (isinstance(handle, str) and handle.strip()) and isinstance(external, dict):
+        for key in _SOLAR_WIND_HANDLE_KEYS:
+            candidate = external.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                handle = candidate
+                break
+
+    if not (isinstance(handle, str) and handle.strip()):
+        return external, None
+
+    sw_frame, sw_err = store.resolve(handle)
+    if sw_err:
+        return None, sw_err
+    aligned = pengine.align_solar_wind(frame, sw_frame)
+    if pengine.is_error(aligned):
+        return None, aligned
+    return {"V": aligned["V"], "Bz": aligned["Bz"]}, None
+
+
 def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Run one physical formula and store the enriched frame as a derived slot.
 
@@ -3863,8 +4084,15 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
     if err:
         return err, f"apply_physics_formula failed: {err.get('error')}"
 
-    # ey_coupling is the only metric with a second, required argument.
-    result = func(frame, external) if metric == "ey_coupling" else func(frame)
+    # ey_coupling is the only metric with a second, required argument. It accepts
+    # scalars, a stored solar-wind handle, or already-aligned V/Bz arrays.
+    if metric == "ey_coupling":
+        external, sw_err = _resolve_coupling_external(args, external, frame, store)
+        if sw_err is not None:
+            return sw_err, f"apply_physics_formula failed: {sw_err.get('error')}"
+        result = func(frame, external)
+    else:
+        result = func(frame)
     if pengine.is_error(result):
         return result, f"apply_physics_formula failed: {result.get('error')}"
 
@@ -3921,8 +4149,15 @@ def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
             f"{low} нТ -> хэндл {slot!r}."
         )
     if metric == "ey_coupling":
-        ey = attrs.get("ey_coupling", {}).get("E_y_mV_m")
-        return f"✅ Функция связи Ey рассчитана: E_y = {ey} мВ/м -> хэндл {slot!r}."
+        info = attrs.get("ey_coupling", {})
+        if info.get("mode") == "vector":
+            return (
+                f"✅ Ey по выровненному солнечному ветру: пик |E_y|="
+                f"{info.get('E_y_mV_m_peak_abs')} мВ/м, среднее E_y="
+                f"{info.get('E_y_mV_m_mean')} мВ/м (N={info.get('n_finite')}) "
+                f"-> хэндл {slot!r}."
+            )
+        return f"✅ Функция связи Ey рассчитана: E_y = {attrs.get('ey_coupling', {}).get('E_y_mV_m')} мВ/м -> хэндл {slot!r}."
     if metric == "detect_ssc":
         return (
             f"✅ Детектирование SSC выполнено. Найдено событий: "
@@ -4118,6 +4353,8 @@ def _overlay_time_shift(code: str, frame: pd.DataFrame, time_system: str) -> flo
 
 HANDLERS: dict[str, Handler] = {
     "fetch_observatory_data": _handle_fetch,
+    "fetch_solar_wind": _handle_fetch_solar_wind,
+    "fetch_geomagnetic_indices": _handle_fetch_geomagnetic_indices,
     "create_project": _handle_create_project,
     "list_projects": _handle_list_projects,
     "fetch_many": _handle_fetch_many,
@@ -4413,7 +4650,12 @@ def run_agent(
                 entry["available"] = payload.get("available")
                 # The newest handle becomes the active one, so the model always
                 # sees where the pipeline currently stands (raw -> derived -> ...).
-                scratchpad.update_handle(payload["frame_handle"])
+                # Space-weather frames (sw:/idx:) are auxiliary *inputs*, not the
+                # working magnetometer frame, so they must not hijack the slot a
+                # follow-up sq_baseline/plot call will reach for.
+                family = payload["frame_handle"].split(":", 1)[0]
+                if family not in _AUX_FRAME_FAMILIES:
+                    scratchpad.update_handle(payload["frame_handle"])
 
             if entry["ok"] and name in PLOT_TOOLS and isinstance(payload.get("path"), str):
                 plots.append(payload["path"])
