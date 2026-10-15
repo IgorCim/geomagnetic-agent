@@ -238,6 +238,19 @@ def _dumps(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
+def _args_signature(args: Any) -> str:
+    """A stable fingerprint of a tool call's arguments.
+
+    Two calls with the same signature are the *same* call however the model
+    ordered its keys; the loop breaker in :class:`Scratchpad` uses this to tell
+    "retrying a broken call" apart from "making progress with new arguments".
+    """
+    try:
+        return json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(args)
+
+
 # --------------------------------------------------------------------------- #
 # tool registry -- OpenAI function-calling schemas understood by Qwen 2.5
 # --------------------------------------------------------------------------- #
@@ -832,11 +845,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "plot_overlay",
             "description": (
-                "Draw one component from SEVERAL stations on ONE chart, each shifted by a "
+                "Draw ONE component from SEVERAL stations on ONE chart, each shifted by a "
                 "per-station nT offset; x axis in UT, LT or MLT; stations ordered "
-                "north-first. Auto-fetches and derives any missing station/day. USE to "
-                "compare observatories; DO NOT USE for two days of one station "
-                "(use plot_comparison)."
+                "north-first. Auto-fetches and derives any missing station/day. "
+                "REQUIRED arguments: 'stations' = LIST of IAGA codes, e.g. ['IRT'] "
+                "(this is NOT a frame handle); 'dates' = list of YYYY-MM-DD shared by "
+                "all stations, e.g. ['2024-09-12']. Give the component as "
+                "'component' = one string, e.g. 'H' ('components' = ['H'] also works). "
+                "This tool does NOT accept 'df1'/'df2'. Correct call: "
+                "{\"stations\": [\"IRT\"], \"dates\": [\"2024-09-12\"], "
+                "\"component\": \"H\", \"title\": \"Сравнение\"}. "
+                "DO NOT USE for two days of one station (use plot_comparison) or to "
+                "plot solar-wind Bz (align it with apply_physics_formula first)."
             ),
             "parameters": {
                 "type": "object",
@@ -844,14 +864,31 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "stations": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "IAGA station codes to overlay, e.g. ['IRT','API','BSL']"
+                        "description": (
+                            "REQUIRED. List of IAGA station codes to overlay, "
+                            "e.g. ['IRT'] or ['IRT','API','BSL']. A list of codes, "
+                            "never a df1/df2 frame handle."
+                        )
                     },
                     "dates": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Dates as YYYY-MM-DD; one date shared by all stations."
+                        "description": "Dates as YYYY-MM-DD; one date shared by all stations, e.g. ['2024-09-12']."
                     },
-                    "component": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
+                    "component": {
+                        "type": "string",
+                        "enum": ["X", "Y", "Z", "F", "H", "D", "I"],
+                        "description": "Single component to overlay, e.g. 'H'. Default 'H'."
+                    },
+                    "components": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Alias for 'component': a list, e.g. ['H']. The first "
+                            "entry is drawn; the name must be a column of the "
+                            "fetched frame (X/Y/Z/F/H/D/I)."
+                        )
+                    },
                     "offsets": {
                         "type": "object",
                         "additionalProperties": {"type": "number"},
@@ -861,7 +898,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "title": {"type": "string", "description": "Chart title."},
                     "filename": {"type": "string", "description": "Output file name, .html."}
                 },
-                "required": ["stations", "dates", "component"]
+                "required": ["stations", "dates"]
             }
         }
     },
@@ -1155,6 +1192,32 @@ _MODEL_PAYLOAD_KEYS = (
 )
 
 
+#: An identical failing call repeated this many times in a row is a loop, not
+#: progress. The third identical failure is what triggers the warning.
+LOOP_THRESHOLD = 3
+
+#: How many recent failures the Scratchpad keeps for the loop check.
+LOOP_WINDOW = 8
+
+#: Tool-specific "what to fix" advice shown when a loop is detected. A model
+#: that re-sends a broken call needs the concrete argument, not "try again".
+_LOOP_FIX_HINT: dict[str, str] = {
+    "plot_overlay": (
+        "plot_overlay requires 'stations' (a list of IAGA codes, e.g. ['IRT']) "
+        "and a component (e.g. \"component\": \"H\"); it does NOT take 'df1'/'df2'."
+    ),
+    "plot_comparison": (
+        "plot_comparison requires 'df1' and 'df2' (two frame handles) plus "
+        "'component'; it does NOT take 'stations'."
+    ),
+}
+
+_LOOP_FIX_HINT_DEFAULT = (
+    "the argument names or values are wrong -- re-read the tool description, "
+    "fix the arguments, then call it once."
+)
+
+
 class Scratchpad:
     """Persistent working memory for the agent during a single user query.
 
@@ -1168,12 +1231,17 @@ class Scratchpad:
         self.completed_steps: list[str] = []
         self.errors: list[dict] = []
         self.plan: list[str] = []
+        #: ``(tool, args_signature, error)`` for every failed call, newest last.
+        #: The loop breaker reads the tail to catch an identical failing call
+        #: repeated round after round.
+        self.failed_calls: list[tuple[str, str, str]] = []
 
     def reset(self) -> None:
         self.current_handle = ""
         self.completed_steps.clear()
         self.errors.clear()
         self.plan.clear()
+        self.failed_calls.clear()
 
     def update_handle(self, new_handle: str) -> None:
         if not isinstance(new_handle, str):
@@ -1200,6 +1268,36 @@ class Scratchpad:
             entry["hint"] = str(hint)
         self.errors.append(entry)
 
+    def add_failure(self, tool: str, signature: str, error: str) -> None:
+        """Record one failed call as ``(tool, argument fingerprint, error)``.
+
+        Only the tail matters to the loop breaker, so the list is trimmed to the
+        last :data:`LOOP_WINDOW` entries instead of growing for the whole run.
+        """
+        self.failed_calls.append(
+            (
+                str(tool) if tool is not None else "",
+                str(signature) if signature is not None else "",
+                str(error) if error is not None else "",
+            )
+        )
+        if len(self.failed_calls) > LOOP_WINDOW:
+            del self.failed_calls[:-LOOP_WINDOW]
+
+    def repeated_failure(self) -> tuple[str, str] | None:
+        """The identical failing call seen :data:`LOOP_THRESHOLD` times in a row.
+
+        Returns ``(tool, error)`` when the last ``LOOP_THRESHOLD`` entries share
+        the same tool, argument fingerprint and error -- the signature of a model
+        stuck re-emitting one broken call -- and ``None`` otherwise.
+        """
+        if len(self.failed_calls) < LOOP_THRESHOLD:
+            return None
+        tail = self.failed_calls[-LOOP_THRESHOLD:]
+        if any(entry != tail[0] for entry in tail):
+            return None
+        return tail[0][0], tail[0][2]
+
     def to_prompt_injection(self) -> str:
         """One compact line injected into the system prompt before every LLM call.
 
@@ -1224,10 +1322,28 @@ class Scratchpad:
             parts.append(f"Plan: {', '.join(self.plan)}")
 
         body = ". ".join(parts) if parts else "No state yet"
+        loop = self.repeated_failure()
+        if loop:
+            tool, error = loop
+            fix = _LOOP_FIX_HINT.get(tool, _LOOP_FIX_HINT_DEFAULT)
+            return (
+                f"[SCRATCHPAD] {body}. "
+                f"[CRITICAL LOOP DETECTED]: Вы вызвали '{tool}' {LOOP_THRESHOLD} раза "
+                f"подряд с теми же аргументами и той же ошибкой ({error}). Остановитесь. "
+                f"Прочитайте описание инструмента: {fix} "
+                f"NEXT STEP: change the arguments before calling {tool} again."
+            )
         return f"[SCRATCHPAD] {body}. NEXT STEP: {self._next_step()}"
 
     def _next_step(self) -> str:
         """A short, state-derived hint about what to do next."""
+        loop = self.repeated_failure()
+        if loop:
+            return (
+                f"STOP calling {loop[0]} with the same arguments -- the identical "
+                "call has failed repeatedly. Fix the arguments from its schema, "
+                "then call it once."
+            )
         if self.errors:
             if self.current_handle:
                 return (
@@ -4166,18 +4282,114 @@ def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
     return f"✅ {metric} рассчитан -> хэндл {slot!r}."
 
 
+#: Components plot_overlay can draw straight from an observatory frame (H/D/I
+#: are derived on demand). Used to pick the usable entry out of a mixed list.
+_OVERLAY_COMPONENTS = ("X", "Y", "Z", "F", "H", "D", "I")
+
+
+def _overlay_component(args: dict) -> str:
+    """The single component to overlay, from 'component' or the 'components' alias.
+
+    The field log showed a model sending ``components: ['Bz_south','H']`` (the
+    plot_comparison/plot_components shape). Accept the list and prefer the first
+    name this tool can actually draw, so a stray solar-wind label next to a real
+    component (``['Bz_south','H']`` -> ``H``) is not a dead end.
+    """
+    candidates: list[Any] = []
+    raw = args.get('component')
+    if isinstance(raw, (list, tuple)):
+        candidates.extend(raw)
+    elif raw not in (None, ""):
+        candidates.append(raw)
+    alias = args.get('components')
+    if isinstance(alias, str):
+        candidates.append(alias)
+    elif isinstance(alias, (list, tuple)):
+        candidates.extend(alias)
+    for candidate in candidates:
+        text = str(candidate or '').strip().upper()
+        if text in _OVERLAY_COMPONENTS:
+            return text
+    for candidate in candidates:
+        text = str(candidate or '').strip().upper()
+        if text:
+            return text
+    return 'H'
+
+
 def _handle_plot_overlay(args, store):
-    stations = [str(s).strip().upper() for s in (args.get('stations') or []) if str(s).strip()]
+    raw_stations = args.get('stations')
+    if isinstance(raw_stations, str):  # a lone code, not a list
+        raw_stations = [raw_stations]
+    stations = [
+        str(s).strip().upper() for s in (raw_stations or []) if str(s).strip()
+    ]
     dates = args.get('dates') or ([args['date']] if args.get('date') else [])
     if isinstance(dates, str):
         dates = [dates]
     dates = [str(d).strip() for d in dates if str(d).strip()]
-    component = str(args.get('component') or 'H').strip().upper()
+    component = _overlay_component(args)
     time_system = str(args.get('time_system') or 'UT').strip().upper()
     if not stations:
-        return _error('invalid_input', 'stations must list at least one IAGA code'), 'missing stations'
+        # A model that copied plot_comparison's signature passes df1/df2 here.
+        # Say so explicitly, or it re-sends the same broken call until the
+        # budget runs out -- exactly the loop seen in the field log.
+        wrong = [
+            key
+            for key in ('df1', 'df2', 'df', 'handle', 'frame_handle')
+            if args.get(key) not in (None, "", [], {})
+        ]
+        example = {
+            "stations": ["IRT"],
+            "dates": ["2024-09-12"],
+            "component": "H",
+            "title": "Сравнение",
+        }
+        if wrong:
+            message = (
+                "ОШИБКА: Отсутствует или неверен аргумент 'stations'. Вы передали "
+                f"{'/'.join(wrong)}, но этот инструмент принимает 'stations' "
+                "(список кодов станций, например ['IRT']) и компонент "
+                "('component', например 'H'; 'components' = ['H'] тоже "
+                "принимается). Пожалуйста, исправь аргументы и вызови инструмент "
+                "снова."
+            )
+        else:
+            message = (
+                "ОШИБКА: Аргумент 'stations' обязателен. Это должен быть список "
+                "кодов станций, например ['IRT']. Пример вызова: "
+                "{\"stations\": [\"IRT\"], \"dates\": [\"2024-09-12\"], "
+                "\"component\": \"H\"}."
+            )
+        return (
+            _error(
+                'invalid_input',
+                message,
+                received={
+                    key: args.get(key)
+                    for key in ('stations', 'dates', 'df1', 'df2', 'components')
+                    if key in args
+                },
+                required=['stations', 'dates'],
+                example=example,
+                hint=(
+                    "plot_overlay takes 'stations' (a list of IAGA codes) and "
+                    "'component'; it does NOT take 'df1'/'df2'."
+                ),
+            ),
+            'missing stations',
+        )
     if not dates:
-        return _error('invalid_input', 'dates must list at least one YYYY-MM-DD date'), 'missing dates'
+        return (
+            _error(
+                'invalid_input',
+                "ОШИБКА: Аргумент 'dates' обязателен. Это должен быть список дат "
+                "YYYY-MM-DD, например ['2024-09-12'].",
+                required=['stations', 'dates'],
+                hint="Pass 'dates': ['2024-09-12'] (or 'date': '2024-09-12').",
+            ),
+            'missing dates',
+        )
     if time_system not in ('UT', 'LT', 'MLT'):
         return _error('invalid_input', "time_system must be 'UT', 'LT' or 'MLT'"), 'bad time_system'
 
@@ -4680,6 +4892,9 @@ def run_agent(
                 if payload.get("error") == "unknown_frame" and scratchpad.current_handle:
                     hint = f"Использовал неверный handle, актуальный: {scratchpad.current_handle}"
                 scratchpad.add_error(name, payload.get("error", ""), hint)
+                # Feed the loop breaker: an identical failing call repeated on
+                # the next rounds trips the [CRITICAL LOOP DETECTED] warning.
+                scratchpad.add_failure(name, _args_signature(args), entry["error"])
 
             log.append(entry)
             if verbose:
