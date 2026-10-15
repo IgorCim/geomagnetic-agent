@@ -119,43 +119,130 @@ def _check_frame(df: Any, label: str) -> dict[str, Any] | None:
     return None
 
 
+#: Units of the physics columns :mod:`physics_engine` appends to a frame. Kept
+#: beside the standard components so a delta is still labelled ("dH (nT)") when
+#: it is plotted straight from an enriched frame instead of becoming a nameless
+#: trace.
+_PHYSICS_COMPONENTS: dict[str, str] = {
+    "X_sq": "nT",
+    "Y_sq": "nT",
+    "Z_sq": "nT",
+    "H_sq": "nT",
+    "F_sq": "nT",
+    "dX": "nT",
+    "dY": "nT",
+    "dZ": "nT",
+    "dH": "nT",
+    "F_delta": "nT",
+    "dH_dt": "nT/min",
+    "dst_proxy": "nT",
+    "E_y": "mV/m",
+    "ssc_flag": "",
+}
+
+#: Every named column and its unit. Standard components win on conflict; the
+#: physics names never collide with them.
+_PLOT_UNITS: dict[str, str] = {**COMPONENT_UNITS, **_PHYSICS_COMPONENTS}
+
+
+def _column_unit(name: Any) -> str:
+    """Unit for *name*, case-insensitively, covering physics-derived columns."""
+    text = str(name)
+    if text in _PLOT_UNITS:
+        return _PLOT_UNITS[text]
+    target = text.lower()
+    for column, unit in _PLOT_UNITS.items():
+        if column.lower() == target:
+            return unit
+    return ""
+
+
+def _resolve_column(df: pd.DataFrame, name: Any) -> str | None:
+    """The exact column in *df* matching *name* ignoring case, else ``None``.
+
+    ``plot_components`` used to upper-case every request, so the physics columns
+    (``dX``, ``dst_proxy``, ``H_sq``, ...) never matched their own frame and came
+    back as ``unknown_component``. Matching the real column lets a request for
+    "dx" draw the "dX" series.
+    """
+    if name in df.columns:
+        return str(name)
+    target = str(name).lower()
+    for column in df.columns:
+        if str(column).lower() == target:
+            return str(column)
+    return None
+
+
+def _resolve_columns(
+    df: pd.DataFrame, components: Sequence[str]
+) -> tuple[list[str], list[str]]:
+    """Split requests into ``(resolved_exact_names, missing_requested_names)``."""
+    resolved: list[str] = []
+    missing: list[str] = []
+    for raw in components:
+        name = str(raw).strip()
+        if not name:
+            continue
+        column = _resolve_column(df, name)
+        if column is not None:
+            resolved.append(column)
+        else:
+            missing.append(name)
+    return resolved, missing
+
+
+def _has_cartesian(df: pd.DataFrame) -> bool:
+    """True when X/Y/Z are present under any casing (they are derivable then)."""
+    return all(_resolve_column(df, c) is not None for c in ("X", "Y", "Z"))
+
+
 def _prepare(
     df: pd.DataFrame, components: Sequence[str], label: str
-) -> pd.DataFrame | dict[str, Any]:
-    """Ensure every requested component is present, deriving H/D/I if needed."""
-    names = [str(c).strip().upper() for c in components]
-    if not names:
+) -> tuple[pd.DataFrame, list[str]] | dict[str, Any]:
+    """Ensure every requested component is present, deriving H/D/I if needed.
+
+    Returns ``(frame, resolved)`` where *resolved* is the exact list of column
+    names to draw, or an error payload. Matching is case-insensitive against the
+    frame's real columns, so a request for ``'dx'`` draws the ``'dX'`` series
+    that :func:`physics_engine.calculate_deltas` stored.
+    """
+    requested = [str(c).strip() for c in components if str(c).strip()]
+    if not requested:
         return _error("invalid_input", f"No components requested for {label}.")
 
-    missing = [n for n in names if n not in df.columns]
+    resolved, missing = _resolve_columns(df, requested)
     if missing:
-        derivable = [n for n in missing if n in DERIVED and {"X", "Y", "Z"} <= set(df.columns)]
+        derivable = [
+            name for name in missing if name.upper() in DERIVED and _has_cartesian(df)
+        ]
         if derivable:
             out = calculate_derived_components(df)
             if is_error(out):
                 return _error(
                     "unknown_component",
                     f"Cannot derive {derivable} for {label}: {out['message']}",
-                    requested=names,
+                    requested=requested,
                     available=[str(c) for c in df.columns],
                     missing=missing,
                 )
             df = out
-            missing = [n for n in names if n not in df.columns]
+            resolved, missing = _resolve_columns(df, requested)
     if missing:
+        available = [str(c) for c in df.columns]
         return _error(
             "unknown_component",
             f"{label} is missing component(s) {missing} and they cannot be derived.",
-            requested=names,
-            available=[str(c) for c in df.columns],
+            requested=requested,
+            available=available,
             missing=missing,
             hint="Available columns: "
-            + ", ".join(map(str, df.columns))
+            + ", ".join(available)
             + ". Known components: "
-            + ", ".join(COMPONENT_UNITS)
+            + ", ".join([*COMPONENT_UNITS, *_PHYSICS_COMPONENTS])
             + ". H, D and I are derived automatically when X, Y and Z exist.",
         )
-    return df
+    return df, resolved
 
 
 def _slug(text: str, fallback: str = "plot") -> str:
@@ -211,7 +298,7 @@ def _write(fig: go.Figure, path: Path, include_plotlyjs: Any) -> str:
 
 
 def _unit_label(components: Sequence[str]) -> str:
-    units = {COMPONENT_UNITS.get(c) for c in components}
+    units = {_column_unit(c) for c in components}
     if len(units) == 1:
         return units.pop() or "value"
     return "value"
@@ -269,12 +356,10 @@ def plot_components(
     if problem is not None:
         return problem
 
-    names = [str(c).strip().upper() for c in components]
-    prepared = _prepare(df, names, "df")
+    prepared = _prepare(df, components, "df")
     if isinstance(prepared, dict):
         return prepared
-    df = prepared
-
+    df, names = prepared
     stamps = pd.to_datetime(df["timestamp"], errors="coerce")
     total = int(stamps.notna().sum())
     heavy = total > GL_THRESHOLD or len(names) * total > 4 * GL_THRESHOLD
@@ -286,7 +371,7 @@ def plot_components(
         values = pd.to_numeric(df[name], errors="coerce")
         xs, ys, sampled = _downsample(stamps, values, max_points)
         sampled_any = sampled_any or sampled
-        unit = COMPONENT_UNITS.get(name, "")
+        unit = _column_unit(name)
         fig.add_trace(
             trace_cls(
                 x=xs,
@@ -384,25 +469,30 @@ def plot_comparison(
         if problem is not None:
             return problem
 
-    name = str(component).strip().upper()
-    prepared1 = _prepare(df1, [name], "df1")
+    prepared1 = _prepare(df1, [component], "df1")
     if isinstance(prepared1, dict):
         return prepared1
-    prepared2 = _prepare(df2, [name], "df2")
+    prepared2 = _prepare(df2, [component], "df2")
     if isinstance(prepared2, dict):
         return prepared2
+    df1, names1 = prepared1
+    df2, names2 = prepared2
+    # Each frame reads its own resolved name ("dX" vs "DX"); label and unit use
+    # the first frame's spelling.
+    name = names1[0]
+    columns = (names1[0], names2[0])
 
-    unit = COMPONENT_UNITS.get(name, "value")
+    unit = _column_unit(name) or "value"
     total = 0
     fig = go.Figure()
     labels: list[str] = []
 
-    for idx, (frame, color) in enumerate(
-        zip((prepared1, prepared2), _COMPARISON_COLORS)
+    for idx, (frame, column, color) in enumerate(
+        zip((df1, df2), columns, _COMPARISON_COLORS)
     ):
         stamps = pd.to_datetime(frame["timestamp"], errors="coerce")
         total += int(stamps.notna().sum())
-        values = pd.to_numeric(frame[name], errors="coerce")
+        values = pd.to_numeric(frame[column], errors="coerce")
         xs, ys, sampled = _downsample(_time_of_day(stamps), values, max_points)
         if sampled:
             log.warning("df%s longer than max_points=%s; stride-sampled.", idx + 1, max_points)
@@ -546,7 +636,7 @@ def plot_overlay(
             f"time_system must be one of UT/LT/MLT, got {time_system!r}.",
         )
 
-    name = str(component).strip().upper()
+    name = str(component).strip()
     offsets = offsets or {}
     time_shifts = time_shifts or {}
 
@@ -561,6 +651,8 @@ def plot_overlay(
         prepared = _prepare(frame, [name], code)
         if isinstance(prepared, dict):
             return prepared
+        frame, resolved = prepared
+        column = resolved[0]
 
         try:
             offset = float(offsets.get(station, offsets.get(code, 0.0)))
@@ -571,15 +663,15 @@ def plot_overlay(
         except (TypeError, ValueError):
             return _error("invalid_input", f"time shift for {code} is not a number.")
 
-        stamps = pd.to_datetime(prepared["timestamp"], errors="coerce")
+        stamps = pd.to_datetime(frame["timestamp"], errors="coerce")
         total += int(stamps.notna().sum())
-        values = pd.to_numeric(prepared[name], errors="coerce") + offset
+        values = pd.to_numeric(frame[column], errors="coerce") + offset
         xs = _time_of_day(stamps) + pd.to_timedelta(shift, unit="h")
         xs, ys, sampled = _downsample(xs, values, max_points)
         if sampled:
             log.warning("%s longer than max_points=%s; stride-sampled.", code, max_points)
 
-        unit = COMPONENT_UNITS.get(name, "")
+        unit = _column_unit(name)
         suffix = f" ({offset:+g} nT)" if offset else ""
         ordered.append(code)
         fig.add_trace(
@@ -649,6 +741,10 @@ def plot_magnetogram(
     prepared = _prepare(df, ("X", "Y", "Z", "F"), "df")
     if isinstance(prepared, dict):
         return prepared
+    prepared, resolved = prepared
+    # Panels are always X/Y/Z/F, but the frame may spell them differently;
+    # index the exact resolved column so a casing slip cannot KeyError.
+    column_of = {str(c).upper(): c for c in resolved}
 
     stamps = pd.to_datetime(prepared["timestamp"], errors="coerce")
     total = int(stamps.notna().sum())
@@ -675,7 +771,7 @@ def plot_magnetogram(
 
     fig = go.Figure()
     for name, ref in zip(panels, axis_refs):
-        values = pd.to_numeric(prepared[name], errors="coerce")
+        values = pd.to_numeric(prepared[column_of[name]], errors="coerce")
         xs, ys, _ = _downsample(stamps, values, max_points)
         fig.add_trace(
             trace_cls(
