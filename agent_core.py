@@ -155,20 +155,21 @@ BASE_PROMPT_COMPACT = (
     "3. Данные бери fetch_observatory_data, код станции — 3-буквенный IAGA. "
     f"Известны: {STATION_HINT}.\n"
     "4. График: fetch_observatory_data → calculate_derived_components → "
-    "plot_components / plot_comparison / plot_overlay. Земля+космос (H vs Bz/V) — "
-    "ТОЛЬКО plot_space_weather_comparison.\n"
+    "plot_components / plot_comparison / plot_overlay. Земля vs космос (H и Bz): "
+    "ТОЛЬКО plot_space_weather_comparison(ground_df_descriptor='...', "
+    "solar_wind_df_descriptor='sw:omni:...', ground_component='H', "
+    "solar_wind_components=['Bz','V']).\n"
     "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла raw математика и "
     "графики ответят unknown_frame. Хэндл бери из frame_handle.\n"
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
-    "create_project, export_project, fetch_solar_wind (L1: V, Bz), "
-    "fetch_geomagnetic_indices (Dst, Kp).\n"
+    "create_project, export_project, fetch_solar_wind, fetch_geomagnetic_indices.\n"
     "    • Пакетно: create_task_matrix (события×станции, ОДНА задача на станцию), "
     "process_matrix_batch (run_until_complete=True — все станции за один вызов).\n"
-    "    • Математика: calculate_derived_components (H, D, I), get_statistics, "
-    "detect_anomalies (выбросы), calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
+    "    • Математика: calculate_derived_components, get_statistics, "
+    "detect_anomalies, calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
     "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (baseline_value), "
-    "evaluate_custom_formula (не исполняется как код), apply_physics_formula (вся физика).\n"
+    "evaluate_custom_formula (не исполняется как код), apply_physics_formula.\n"
     "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt, "
     "calculate_local_time, group_stations_by_mlt.\n"
     "    • Графики: plot_components, plot_comparison, plot_overlay.\n"
@@ -184,9 +185,8 @@ BASE_PROMPT_COMPACT = (
     "    (б) данных достаточно — обычный текст без тегов.\n"
     f"11. {HANDLE_CASE_RULE}\n\n"
     "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
-    "1) создай create_task_matrix (events, stations, actions, project_name);\n"
-    "2) ОДИН вызов process_matrix_batch с run_until_complete=True — все станции и "
-    "даты за раз;\n"
+    "1) создай create_task_matrix;\n"
+    "2) ОДИН вызов process_matrix_batch с run_until_complete=True;\n"
     "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' (экспорт делается автоматически);\n"
     "4) оформи сводку. НЕ вызывай больше никаких инструментов, в т.ч. export_project.\n"
     "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
@@ -689,7 +689,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "plot_comparison",
             "description": (
                 "Overlay two different days of one component on a shared time-of-day "
-                "axis. Use it to compare, for example, a storm day against a quiet day."
+                "axis. Use it to compare, for example, a storm day against a quiet day. "
+                "ЗАПРЕЩЕНО использовать для сравнения данных солнечного ветра и "
+                "магнитного поля Земли: инструмент умеет только две даты одной "
+                "компоненты одного типа данных. Для Земли vs космоса используй "
+                "ТОЛЬКО plot_space_weather_comparison."
             ),
             "parameters": {
                 "type": "object",
@@ -857,7 +861,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "{\"stations\": [\"IRT\"], \"dates\": [\"2024-09-12\"], "
                 "\"component\": \"H\", \"title\": \"Сравнение\"}. "
                 "DO NOT USE for two days of one station (use plot_comparison) or to "
-                "plot solar-wind Bz (align it with apply_physics_formula first)."
+                "plot solar-wind Bz (align it with apply_physics_formula first). "
+                "ЗАПРЕЩЕНО использовать для сравнения данных солнечного ветра и "
+                "магнитного поля Земли -- для космической погоды есть ТОЛЬКО "
+                "plot_space_weather_comparison. Этот инструмент принимает аргументы "
+                "'stations' (список кодов) и 'dates'; аргументы 'df1'/'df2' НЕ "
+                "СУЩЕСТВУЮТ и вызовут ошибку."
             ),
             "parameters": {
                 "type": "object",
@@ -908,13 +917,16 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "plot_space_weather_comparison",
             "description": (
-                "Dual-axis chart comparing a GROUND magnetometer component (left "
-                "axis, e.g. H or dst_proxy) with SOLAR-WIND components (right axis, "
-                "e.g. Bz and V). Aligns the L1 data to the observatory clock itself. "
-                "USE this for 'Земля vs космос' / cause-effect charts (does the "
-                "southward field drive the storm). DO NOT USE plot_overlay (several "
-                "stations) or plot_comparison (two days of one station) -- they "
-                "cannot mix ground and solar-wind columns."
+                "КРИТИЧЕСКИ ВАЖНО: ИСПОЛЬЗУЙ ЭТОТ ИНСТРУМЕНТ, если нужно сравнить "
+                "данные Земли и космоса, то есть компоненты Земли (H, D, I, "
+                "dst_proxy) с данными солнечного ветра (Bz, V, By, Np). Например: "
+                "'построй график сравнения компоненты H и Bz' или 'сравни данные "
+                "Земли и космоса'. Dual-axis chart: a GROUND magnetometer component "
+                "(left axis, e.g. H or dst_proxy) vs SOLAR-WIND components (right "
+                "axis, e.g. Bz and V); the L1 data is aligned to the observatory "
+                "clock. DO NOT substitute it with plot_overlay (several stations) or "
+                "plot_comparison (two days of one station) -- they cannot mix ground "
+                "and solar-wind columns."
             ),
             "parameters": {
                 "type": "object",
