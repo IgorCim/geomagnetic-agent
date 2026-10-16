@@ -50,6 +50,7 @@ __all__ = [
     "plot_components",
     "plot_comparison",
     "plot_overlay",
+    "plot_space_weather_comparison",
     "plot_magnetogram",
     "is_error",
     "DEFAULT_OUTPUT_DIR",
@@ -140,9 +141,28 @@ _PHYSICS_COMPONENTS: dict[str, str] = {
     "ssc_flag": "",
 }
 
+#: Units of the L1 solar-wind columns :mod:`space_weather_loader` publishes and
+#: :func:`physics_engine.align_solar_wind` carries onto the observatory clock.
+#: Kept here so a ground-vs-space chart can label the right-hand axis ("Bz (nT)",
+#: "V (km/s)") instead of printing a bare number.
+_SOLAR_WIND_UNITS: dict[str, str] = {
+    "V": "km/s",
+    "Np": "cm^-3",
+    "T": "K",
+    "Bx": "nT",
+    "By": "nT",
+    "Bz": "nT",
+    "Bz_gsm": "nT",
+}
+
 #: Every named column and its unit. Standard components win on conflict; the
-#: physics names never collide with them.
-_PLOT_UNITS: dict[str, str] = {**COMPONENT_UNITS, **_PHYSICS_COMPONENTS}
+#: physics and solar-wind names never collide with them.
+_PLOT_UNITS: dict[str, str] = {
+    **COMPONENT_UNITS,
+    **_PHYSICS_COMPONENTS,
+    **_SOLAR_WIND_UNITS,
+}
+
 
 
 def _column_unit(name: Any) -> str:
@@ -714,6 +734,193 @@ def plot_overlay(
         out_name += ".html"
     path = _write(fig, target / out_name, include_plotlyjs)
     log.info("Overlay plotted: %s stations, %s points", len(ordered), total)
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# 2c. ground magnetometer vs solar wind (dual axis)
+# --------------------------------------------------------------------------- #
+#: The ground trace is red and the solar-wind traces cool colours, so the eye
+#: can keep "what the field did" apart from "what drove it" at a glance.
+_GROUND_TRACE_COLOR = "#d62728"
+_SOLAR_WIND_COLORS = ("#1f77b4", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "#17becf")
+
+
+def plot_space_weather_comparison(
+    df: pd.DataFrame,
+    ground_component: str = "H",
+    solar_wind_components: Sequence[str] = ("Bz", "V"),
+    title: str = "Earth vs space weather",
+    output_dir: str | Path | None = None,
+    filename: str | None = None,
+    max_points: int = GL_THRESHOLD,
+    include_plotlyjs: Any = True,
+) -> str | dict[str, Any]:
+    """Draw a ground component and the solar wind on one dual-axis chart.
+
+    The two feeds have nothing in common to overlay: the magnetometer carries
+    ``X/Y/Z/F`` (nT) while the solar wind carries speed and the IMF in km/s and
+    nT, and OMNI is bow-shock shifted onto a different clock. ``plot_comparison``
+    can only compare the *same* component of two days, so a "did the southward
+    field drive the storm" chart had no tool that could draw it. This one is that
+    tool: the caller passes a frame already aligned onto the observatory clock by
+    :func:`physics_engine.align_solar_wind`, the ground component goes on the
+    left axis, and every solar-wind component goes on the right axis so the two
+    amplitude scales never flatten each other.
+
+    Parameters
+    ----------
+    df:
+        The aligned frame: ``timestamp`` plus the ground components and the
+        solar-wind columns (``V``, ``Bz``, ...). ``H``/``D``/``I`` are derived on
+        demand from ``X``/``Y``/``Z``.
+    ground_component:
+        Single ground component for the left axis, default ``'H'``. Physics
+        columns such as ``'dst_proxy'`` are accepted when they are in the frame.
+    solar_wind_components:
+        Solar-wind components for the right axis, default ``('Bz', 'V')``.
+        ``Bz``/``V`` are what :func:`physics_engine.align_solar_wind` produces;
+        other columns already present in *df* (``By``, ``Np``, ...) are drawn too.
+    title, output_dir, filename, max_points, include_plotlyjs:
+        As for :func:`plot_components`.
+
+    Returns
+    -------
+    str
+        Absolute path to the written HTML file.
+    dict
+        Error payload on failure.
+    """
+    problem = _check_frame(df, "aligned frame")
+    if problem is not None:
+        return problem
+
+    requested = [str(c).strip() for c in solar_wind_components if str(c).strip()]
+    if not requested:
+        return _error("invalid_input", "At least one solar-wind component is required.")
+
+    prepared = _prepare(df, [ground_component], "ground")
+    if isinstance(prepared, dict):
+        return prepared
+    df, ground_names = prepared
+    ground_name = ground_names[0]
+
+    sw_names, sw_missing = _resolve_columns(df, requested)
+    if not sw_names:
+        available = [str(c) for c in df.columns]
+        return _error(
+            "unknown_component",
+            f"No solar-wind component(s) {sw_missing} found in the aligned frame.",
+            requested=requested,
+            available=available,
+            missing=sw_missing,
+            hint=(
+                "Pass a frame aligned to the observatory clock (Bz and V are added "
+                "by physics_engine.align_solar_wind). Known solar-wind columns: "
+                + ", ".join(_SOLAR_WIND_UNITS)
+                + "."
+            ),
+        )
+    if sw_missing:
+        log.warning("solar-wind component(s) not present and skipped: %s", sw_missing)
+
+    stamps = pd.to_datetime(df["timestamp"], errors="coerce")
+    total = int(stamps.notna().sum())
+
+    fig = go.Figure()
+
+    ground_values = pd.to_numeric(df[ground_name], errors="coerce")
+    ground_unit = _column_unit(ground_name) or "value"
+    gx, gy, sampled = _downsample(stamps, ground_values, max_points)
+    if sampled:
+        log.warning("ground series longer than max_points=%s; stride-sampled.", max_points)
+    fig.add_trace(
+        go.Scatter(
+            x=gx,
+            y=gy,
+            name=f"{ground_name} ({ground_unit})",
+            mode="lines",
+            line={"width": 1.4, "color": _GROUND_TRACE_COLOR},
+            connectgaps=False,
+            yaxis="y",
+            hovertemplate=(
+                f"<b>{ground_name}</b><br>%{{x|%H:%M}}<br>"
+                f"{ground_unit}: %{{y:.2f}}<extra></extra>"
+            ),
+        )
+    )
+
+    for index, name in enumerate(sw_names):
+        values = pd.to_numeric(df[name], errors="coerce")
+        xs, ys, sampled = _downsample(stamps, values, max_points)
+        if sampled:
+            log.warning("%s longer than max_points=%s; stride-sampled.", name, max_points)
+        unit = _column_unit(name) or "value"
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                name=f"{name} ({unit})",
+                mode="lines",
+                line={
+                    "width": 1.2,
+                    "color": _SOLAR_WIND_COLORS[index % len(_SOLAR_WIND_COLORS)],
+                    "dash": "dot",
+                },
+                connectgaps=False,
+                yaxis="y2",
+                hovertemplate=(
+                    f"<b>{name}</b><br>%{{x|%H:%M}}<br>"
+                    f"{unit}: %{{y:.2f}}<extra></extra>"
+                ),
+            )
+        )
+
+    units: list[str] = []
+    for name in sw_names:
+        unit = _column_unit(name)
+        if unit and unit not in units:
+            units.append(unit)
+    right_title = "Solar wind (" + ", ".join(units) + ")" if units else "Solar wind"
+
+    fig.update_layout(
+        title={"text": title, "x": 0.01, "xanchor": "left"},
+        xaxis={
+            "title": "Time (UTC)",
+            "type": "date",
+            "tickformat": "%H:%M",
+            "rangeslider": {"visible": True, "thickness": 0.06},
+            "gridcolor": "rgba(128,128,128,0.2)",
+        },
+        yaxis={
+            "title": {"text": f"{ground_name} ({ground_unit})", "font": {"color": _GROUND_TRACE_COLOR}},
+            "tickfont": {"color": _GROUND_TRACE_COLOR},
+            "gridcolor": "rgba(128,128,128,0.2)",
+        },
+        yaxis2={
+            "title": {"text": "Solar wind (" + ", ".join(units) + ")" if units else "Solar wind"},
+            "overlaying": "y",
+            "side": "right",
+            "showgrid": False,
+        },
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        template="plotly_white",
+        margin={"t": 90, "b": 70},
+    )
+
+    target = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
+    stem = _slug(f"{ground_name}_vs_{'_'.join(sw_names)}", "space_weather")
+    out_name = filename or f"space_{stem}.html"
+    if not out_name.endswith(".html"):
+        out_name += ".html"
+    path = _write(fig, target / out_name, include_plotlyjs)
+    log.info(
+        "Space-weather comparison plotted: %s vs %s, %s points",
+        ground_name,
+        ", ".join(sw_names),
+        total,
+    )
     return path
 
 

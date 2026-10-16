@@ -155,7 +155,8 @@ BASE_PROMPT_COMPACT = (
     "3. Данные бери fetch_observatory_data, код станции — 3-буквенный IAGA. "
     f"Известны: {STATION_HINT}.\n"
     "4. График: fetch_observatory_data → calculate_derived_components → "
-    "plot_components / plot_comparison / plot_overlay.\n"
+    "plot_components / plot_comparison / plot_overlay. Земля+космос (H vs Bz/V) — "
+    "ТОЛЬКО plot_space_weather_comparison.\n"
     "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла raw математика и "
     "графики ответят unknown_frame. Хэндл бери из frame_handle.\n"
     "5. Инструменты:\n"
@@ -905,6 +906,60 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "plot_space_weather_comparison",
+            "description": (
+                "Dual-axis chart comparing a GROUND magnetometer component (left "
+                "axis, e.g. H or dst_proxy) with SOLAR-WIND components (right axis, "
+                "e.g. Bz and V). Aligns the L1 data to the observatory clock itself. "
+                "USE this for 'Земля vs космос' / cause-effect charts (does the "
+                "southward field drive the storm). DO NOT USE plot_overlay (several "
+                "stations) or plot_comparison (two days of one station) -- they "
+                "cannot mix ground and solar-wind columns."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ground_df_descriptor": {
+                        **_FRAME_ARG,
+                        "description": (
+                            "Ground frame handle, e.g. 'raw:irt:2024-09-12' or a "
+                            "'derived:irt:2024-09-12' frame carrying 'dst_proxy'."
+                        ),
+                    },
+                    "solar_wind_df_descriptor": {
+                        **_FRAME_ARG,
+                        "description": (
+                            "Solar-wind frame handle returned by fetch_solar_wind, "
+                            "e.g. 'sw:omni:2024-09-12'."
+                        ),
+                    },
+                    "ground_component": {
+                        "type": "string",
+                        "description": "Ground component on the LEFT axis, e.g. 'H', 'X' or 'dst_proxy'."
+                    },
+                    "solar_wind_components": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Solar-wind components on the RIGHT axis, e.g. ['Bz','V'] "
+                            "(also Bx, By, Np)."
+                        ),
+                    },
+                    "title": {"type": "string", "description": "Chart title."},
+                    "filename": {"type": "string", "description": "Output file name, .html."}
+                },
+                "required": [
+                    "ground_df_descriptor",
+                    "solar_wind_df_descriptor",
+                    "ground_component",
+                    "solar_wind_components"
+                ]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "fetch_solar_wind",
             "description": (
                 "Download L1 solar-wind data (NASA/OMNI, 1-minute: speed V, density Np, "
@@ -946,7 +1001,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 TOOLS_BY_NAME = {t["function"]["name"] for t in TOOL_SCHEMAS}
-PLOT_TOOLS = {"plot_components", "plot_comparison", "plot_overlay"}
+PLOT_TOOLS = {
+    "plot_components",
+    "plot_comparison",
+    "plot_overlay",
+    "plot_space_weather_comparison",
+}
 
 # Generator-Executor batch jobs. A 10-events x 26-stations request is 260 units
 # of work; asking the model to enumerate them in one JSON reply overflows its
@@ -997,6 +1057,12 @@ TOOL_SELECTION: dict[str, list[str]] = {
     "plot_components": ["fetch_observatory_data", "calculate_derived_components", "plot_components"],
     "plot_comparison": ["fetch_observatory_data", "calculate_derived_components", "plot_comparison"],
     "plot_overlay": ["fetch_observatory_data", "calculate_derived_components", "plot_overlay"],
+    "plot_space_weather_comparison": [
+        "fetch_observatory_data",
+        "fetch_solar_wind",
+        "apply_physics_formula",
+        "plot_space_weather_comparison",
+    ],
     "apply_physics_formula": [
         "fetch_observatory_data",
         "fetch_solar_wind",
@@ -1058,6 +1124,14 @@ FRAME_SUMMARY_MAX_CHARS = 400
 #: unions every match, always keeps the data source, and caps the result so the
 #: full schema list can never be sent by accident.
 _QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        # "Земля vs космос" charts come first: the generic plot keywords below
+        # would otherwise fill the cap with plot_comparison/plot_overlay, which
+        # cannot mix a magnetometer frame with solar-wind columns.
+        ("земля", "космос", "space weather", "солнечный ветер", "космическ",
+         "причина бури", "причина магнитной бури", "earth vs", "vs space"),
+        ("fetch_solar_wind", "plot_space_weather_comparison", "apply_physics_formula"),
+    ),
     (
         ("график", "построй", "нарисуй", "chart", "plot", "визуализ", "наложи", "overlay",
          "сравни", "comparison"),
@@ -1209,6 +1283,11 @@ _LOOP_FIX_HINT: dict[str, str] = {
     "plot_comparison": (
         "plot_comparison requires 'df1' and 'df2' (two frame handles) plus "
         "'component'; it does NOT take 'stations'."
+    ),
+    "plot_space_weather_comparison": (
+        "plot_space_weather_comparison requires 'ground_df_descriptor' (e.g. "
+        "'raw:irt:2024-09-12') and 'solar_wind_df_descriptor' (e.g. "
+        "'sw:omni:2024-09-12'); it does NOT take 'stations'/'df1'/'df2'."
     ),
 }
 
@@ -1374,6 +1453,7 @@ _SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
     "fetch_many": "fetch_many",
     "fetch_solar_wind": "solar_wind",
     "fetch_geomagnetic_indices": "indices",
+    "plot_space_weather_comparison": "space_weather_plot",
     "calculate_derived_components": "calc_hdi",
     "get_statistics": "stats",
     "detect_anomalies": "anomalies",
@@ -4520,6 +4600,196 @@ def _handle_plot_overlay(args, store):
     return payload, " ".join(summary)
 
 
+def _resolve_column_name(df: pd.DataFrame, name: Any) -> str | None:
+    """The exact column in *df* matching *name* ignoring case, else ``None``."""
+    if name in df.columns:
+        return str(name)
+    target = str(name).lower()
+    for column in df.columns:
+        if str(column).lower() == target:
+            return str(column)
+    return None
+
+
+def _merge_solar_wind_columns(
+    aligned: pd.DataFrame, sw_frame: pd.DataFrame, wanted: Sequence[str]
+) -> pd.DataFrame:
+    """Carry extra solar-wind columns onto the aligned observatory clock.
+
+    :func:`physics_engine.align_solar_wind` aligns the coupling pair (``V`` and
+    ``Bz``) and nothing else, because that pair is all ``E_y`` needs. A comparison
+    chart may also want ``By``, ``Bx`` or ``Np``, so those columns are resampled
+    with the same rule the engine uses -- linear in time, never extrapolated past
+    the solar-wind coverage -- purely for drawing.
+    """
+    stamps = pd.to_datetime(aligned["timestamp"], errors="coerce", utc=True)
+    valid = stamps.dropna()
+    if valid.empty:
+        return aligned
+    target = pd.DatetimeIndex(stamps)
+    unique = pd.DatetimeIndex(sorted(set(valid)))
+    out = aligned.copy()
+    for raw in wanted:
+        column = _resolve_column_name(sw_frame, raw)
+        if column is None or _resolve_column_name(out, column) is not None:
+            continue
+        series = pd.Series(
+            pd.to_numeric(sw_frame[column], errors="coerce").to_numpy(dtype="float64"),
+            index=pd.DatetimeIndex(
+                pd.to_datetime(sw_frame["timestamp"], errors="coerce", utc=True)
+            ),
+        )
+        series = series[series.index.notna()]
+        if series.empty:
+            continue
+        series = series.groupby(level=0).last()
+        union = unique.union(series.index).sort_values()
+        filled = series.reindex(union).interpolate(
+            method="time", limit=30, limit_area="inside"
+        )
+        out[column] = filled.reindex(target).to_numpy(dtype="float64")
+    return out
+
+
+def _handle_plot_space_weather_comparison(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Compare a ground magnetometer component with the solar wind on one chart.
+
+    This is the tool the field log was missing: the agent tried to pass two
+    different frames (ground and OMNI) to ``plot_overlay``, which only knows
+    stations, and looped. Here the two handles are resolved, the L1 data is
+    aligned to the observatory clock by :func:`physics_engine.align_solar_wind`,
+    and the aligned frame is handed to the dual-axis plotter.
+    """
+    ground_desc = (
+        args.get("ground_df_descriptor")
+        or args.get("ground_df")
+        or args.get("ground_handle")
+        or args.get("df1")
+    )
+    sw_desc = (
+        args.get("solar_wind_df_descriptor")
+        or args.get("solar_wind_df")
+        or args.get("solar_wind_handle")
+        or args.get("solar_wind")
+        or args.get("df2")
+    )
+    ground_component = str(
+        args.get("ground_component") or args.get("component") or "H"
+    ).strip() or "H"
+    raw_sw = (
+        args.get("solar_wind_components")
+        or args.get("sw_components")
+        or args.get("components")
+    )
+    if isinstance(raw_sw, str):
+        raw_sw = [raw_sw]
+    sw_components = [str(c).strip() for c in (raw_sw or ["Bz", "V"]) if str(c).strip()]
+    if not sw_components:
+        sw_components = ["Bz", "V"]
+
+    if not ground_desc or not sw_desc:
+        example = {
+            "ground_df_descriptor": "derived:irt:2024-09-12",
+            "solar_wind_df_descriptor": "sw:omni:2024-09-12",
+            "ground_component": "H",
+            "solar_wind_components": ["Bz", "V"],
+            "title": "Земля vs космос",
+        }
+        return (
+            _error(
+                "invalid_input",
+                "ОШИБКА: plot_space_weather_comparison требует "
+                "'ground_df_descriptor' (данные Земли) и 'solar_wind_df_descriptor' "
+                "(данные космоса, sw:omni:<дата>). Пример: " + _dumps(example),
+                received={
+                    key: args.get(key)
+                    for key in (
+                        "ground_df_descriptor",
+                        "solar_wind_df_descriptor",
+                        "df1",
+                        "df2",
+                        "stations",
+                    )
+                    if key in args
+                },
+                required=[
+                    "ground_df_descriptor",
+                    "solar_wind_df_descriptor",
+                    "ground_component",
+                    "solar_wind_components",
+                ],
+                example=example,
+                hint=(
+                    "Pass the ground frame (e.g. 'derived:irt:2024-09-12') and the "
+                    "solar-wind frame ('sw:omni:2024-09-12'); this tool aligns them "
+                    "itself. It does NOT take 'stations'/'df1'/'df2'."
+                ),
+            ),
+            "missing descriptors",
+        )
+
+    if ground_desc == sw_desc:
+        return (
+            _error(
+                "same_dataframe",
+                "The ground and solar-wind handles are the same frame; a comparison "
+                "needs a magnetometer frame and a separate solar-wind frame.",
+                requested={"ground": ground_desc, "solar_wind": sw_desc},
+                available=store.names(),
+            ),
+            "plot_space_weather_comparison refused: both handles are the same frame.",
+        )
+
+    notes: list[str] = []
+    ground, err = _resolve_plottable(store, ground_desc, [ground_component], notes)
+    if err:
+        return err, f"plot_space_weather_comparison failed (ground): {err.get('error')}"
+    sw_frame, err = store.resolve(sw_desc)
+    if err:
+        return err, f"plot_space_weather_comparison failed (solar wind): {err.get('error')}"
+
+    # align_solar_wind puts V and Bz on the observatory clock; anything else the
+    # chart was asked for is resampled the same way for display.
+    aligned = pengine.align_solar_wind(ground, sw_frame)
+    if pengine.is_error(aligned):
+        return aligned, f"plot_space_weather_comparison failed: {aligned.get('error')}"
+    aligned = _merge_solar_wind_columns(aligned, sw_frame, sw_components)
+
+    result = plotter.plot_space_weather_comparison(
+        aligned,
+        ground_component=ground_component,
+        solar_wind_components=sw_components,
+        title=args.get("title") or f"{ground_component} vs {'/'.join(sw_components)}",
+        filename=args.get("filename"),
+    )
+    if plotter.is_error(result):
+        return result, f"plot_space_weather_comparison failed: {result.get('error')}"
+
+    filed = _file_into_project(store, result, [ground_desc, sw_desc], "space_weather")
+    payload = {
+        "ok": True,
+        "path": result,
+        "plot_path": result,
+        "ground_component": ground_component,
+        "solar_wind_components": sw_components,
+        "ground_handle": ground_desc,
+        "solar_wind_handle": sw_desc,
+        "aligned_rows": int(len(aligned)),
+    }
+    visible = [c for c in sw_components if _resolve_column_name(aligned, c) is not None]
+    if visible:
+        payload["solar_wind_drawn"] = visible
+    if notes:
+        payload["auto"] = notes
+    if filed:
+        payload["filed_into_project"] = filed
+    summary = notes + [
+        f"Earth-vs-solar-wind chart ({ground_component} vs {', '.join(sw_components)}) "
+        f"saved to {result}"
+    ]
+    return payload, " ".join(summary)
+
+
 def _sort_stations_north_first(codes: list[str]) -> list[str]:
     """Order stations by geomagnetic latitude, northern first."""
     scored: list[tuple[float, str]] = []
@@ -4586,6 +4856,7 @@ HANDLERS: dict[str, Handler] = {
     "group_stations_by_mlt": _handle_group_stations_by_mlt,
     "calculate_local_time": _handle_calculate_local_time,
     "plot_overlay": _handle_plot_overlay,
+    "plot_space_weather_comparison": _handle_plot_space_weather_comparison,
     "apply_physics_formula": _handle_apply_physics_formula,
 }
 
