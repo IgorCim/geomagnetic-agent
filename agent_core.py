@@ -145,9 +145,9 @@ BASE_PROMPT_COMPACT = (
     "вызывай инструменты.\n\n"
     "ЖЁСТКО: физику (Sq, дельты, GIC, Dst, Ey, SSC) — ТОЛЬКО через "
     "apply_physics_formula с metric. calculate_dst_proxy НЕ существует. "
-    "calculate_derived_math и detect_anomalies — только статистика. При unknown_tool "
-    "сразу вызывай apply_physics_formula. Ey: metric='ey_coupling', "
-    "external_params={'solar_wind': 'sw:omni:<дата>'}. Эталон бури — 2024-09-12 или "
+    "calculate_derived_math и detect_anomalies — только статистика. "
+    "Ey: metric='ey_coupling', external_params={'solar_wind': 'sw:omni:<дата>'}. "
+    "Эталон бури — 2024-09-12 или "
     "2024-10-10 (НЕ 2024-09-10).\n\n"
     "Правила:\n"
     "1. Отвечай на русском, кратко, как коллега-геофизик.\n"
@@ -159,13 +159,16 @@ BASE_PROMPT_COMPACT = (
     "ТОЛЬКО plot_space_weather_comparison(ground_df_descriptor='...', "
     "solar_wind_df_descriptor='sw:omni:...', ground_component='H', "
     "solar_wind_components=['Bz','V']).\n"
-    "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла raw математика и "
-    "графики ответят unknown_frame. Хэндл бери из frame_handle.\n"
+    "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла — unknown_frame. "
+    "Хэндл бери из frame_handle.\n"
+    "4b. ДЛЯ ВАЛИДАЦИИ: локальные возмущения (dst_proxy, dH_dt) сравнивай с "
+    "официальными Dst и Kp — fetch_geomagnetic_indices('idx:kyoto:<дата>'), затем "
+    "plot_components(['Dst','Kp']).\n"
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
     "create_project, export_project, fetch_solar_wind, fetch_geomagnetic_indices.\n"
-    "    • Пакетно: create_task_matrix (события×станции, ОДНА задача на станцию), "
-    "process_matrix_batch (run_until_complete=True — все станции за один вызов).\n"
+    "    • Пакетно: create_task_matrix, process_matrix_batch "
+    "(run_until_complete=True).\n"
     "    • Математика: calculate_derived_components, get_statistics, "
     "detect_anomalies, calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
     "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (baseline_value), "
@@ -174,7 +177,7 @@ BASE_PROMPT_COMPACT = (
     "calculate_local_time, group_stations_by_mlt.\n"
     "    • Графики: plot_components, plot_comparison, plot_overlay.\n"
     "6. Вместо DataFrame передавай хэндл: \"raw:irt:2024-09-10\" / "
-    "\"derived:irt:2024-09-10\" либо \"raw\" / \"derived\" / \"anomalies\" / \"sw\".\n"
+    "\"derived:irt:2024-09-10\" или raw/derived/anomalies/sw.\n"
     "7. Ошибку перескажи и предложи, что делать; свои цифры не подставляй.\n"
     "8. Перечисли графики и файлы. Единицы — 'nT'.\n"
     "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
@@ -665,7 +668,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "plot_components",
             "description": (
                 "Plot one or more components of a single time series as an interactive "
-                "Plotly HTML chart. Returns the absolute path of the saved file."
+                "Plotly HTML chart. Any real column is accepted, case-insensitively: "
+                "the standard X/Y/Z/F/H/D/I, derived columns such as 'dst_proxy', and "
+                "the Kyoto indices 'Dst'/'Kp' (frame 'idx:kyoto:<дата>'). Returns the "
+                "absolute path of the saved file."
             ),
             "parameters": {
                 "type": "object",
@@ -673,8 +679,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "df": _FRAME_ARG,
                     "components": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
-                        "description": "Components to plot.",
+                        "items": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I", "dst_proxy", "Dst", "Kp"]},
+                        "description": (
+                            "Components/columns to plot, e.g. ['Dst','Kp'] for the "
+                            "Kyoto indices frame or ['H','dst_proxy'] for a derived "
+                            "observatory frame."
+                        ),
                     },
                     "title": {"type": "string", "description": "Chart title."},
                     "filename": {"type": "string", "description": "Output file name, .html."},
@@ -712,7 +722,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "e.g. 'raw:irt:2024-09-11'."
                         ),
                     },
-                    "component": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
+                    "component": {
+                        "type": "string",
+                        "enum": ["X", "Y", "Z", "F", "H", "D", "I", "dst_proxy", "Dst", "Kp"],
+                        "description": (
+                            "Component to compare across the two frames; any real "
+                            "column, including the Kyoto indices 'Dst'/'Kp'."
+                        ),
+                    },
                     "title": {"type": "string", "description": "Chart title."},
                     "filename": {"type": "string", "description": "Output file name, .html."},
                 },
@@ -996,9 +1013,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "fetch_geomagnetic_indices",
             "description": (
                 "Download geomagnetic activity indices (Kyoto WDC: hourly Dst, 3-hourly "
-                "Kp) for a date range -- the storm SEVERITY record. USE alongside "
-                "fetch_solar_wind to describe a storm. Returns frame_handle "
-                "'idx:kyoto:<START_DATE>'. DO NOT USE for observatory magnetograms."
+                "Kp) for a date range -- the storm SEVERITY record. USE this to VALIDATE "
+                "a local proxy: compare the station's 'dst_proxy'/'dH_dt' against the "
+                "official Dst and Kp. USE alongside fetch_solar_wind to describe a storm. "
+                "Returns frame_handle 'idx:kyoto:<START_DATE>' whose plottable columns "
+                "are 'Dst' (nT) and 'Kp' (0-9); draw them with plot_components. DO NOT "
+                "USE for observatory magnetograms."
             ),
             "parameters": {
                 "type": "object",
@@ -1136,6 +1156,13 @@ FRAME_SUMMARY_MAX_CHARS = 400
 #: unions every match, always keeps the data source, and caps the result so the
 #: full schema list can never be sent by accident.
 _QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        # Kyoto indices / scientific validation come first as well: "compare the
+        # station's dst_proxy with the official Dst" would otherwise fill the cap
+        # with the generic plot keywords and drop the index downloader.
+        ("dst", "kp", "kyoto", "индекс", "index", "валидац"),
+        ("fetch_geomagnetic_indices", "plot_components", "apply_physics_formula"),
+    ),
     (
         # "Земля vs космос" charts come first: the generic plot keywords below
         # would otherwise fill the cap with plot_comparison/plot_overlay, which
