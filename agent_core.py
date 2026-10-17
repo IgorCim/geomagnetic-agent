@@ -943,7 +943,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "axis, e.g. Bz and V); the L1 data is aligned to the observatory "
                 "clock. DO NOT substitute it with plot_overlay (several stations) or "
                 "plot_comparison (two days of one station) -- they cannot mix ground "
-                "and solar-wind columns."
+                "and solar-wind columns. ВАЖНО, перед вызовом убедитесь, что вы: "
+                "(1) скачали обсерваторию fetch_observatory_data (raw:<station>:<дата>); "
+                "(2) посчитали локальный Dst-прокси apply_physics_formula("
+                "metric='dst_proxy') (derived:<station>:<дата>); "
+                "(3) скачали солнечный ветер fetch_solar_wind (sw:omni:<дата>). "
+                "ground_component должен быть одним из: H, dst_proxy, dH_dt. "
+                "НЕ используйте 'Dst' -- это глобальный индекс Kyoto WDC, а не "
+                "локальный компонент."
             ),
             "parameters": {
                 "type": "object",
@@ -964,7 +971,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     "ground_component": {
                         "type": "string",
-                        "description": "Ground component on the LEFT axis, e.g. 'H', 'X' or 'dst_proxy'."
+                        "description": (
+                            "Ground component on the LEFT axis: one of 'H', "
+                            "'dst_proxy', 'dH_dt'. Do NOT pass 'Dst' -- that is the "
+                            "global Kyoto index; use the local 'dst_proxy'."
+                        ),
                     },
                     "solar_wind_components": {
                         "type": "array",
@@ -1324,9 +1335,11 @@ _LOOP_FIX_HINT: dict[str, str] = {
         "'component'; it does NOT take 'stations'."
     ),
     "plot_space_weather_comparison": (
-        "plot_space_weather_comparison requires 'ground_df_descriptor' (e.g. "
-        "'raw:irt:2024-09-12') and 'solar_wind_df_descriptor' (e.g. "
-        "'sw:omni:2024-09-12'); it does NOT take 'stations'/'df1'/'df2'."
+        "call fetch_solar_wind FIRST (this tool needs a 'sw:omni:<date>' frame); "
+        "then pass 'ground_df_descriptor' (e.g. 'raw:irt:2024-09-12', or a derived "
+        "frame carrying 'dst_proxy') and 'solar_wind_df_descriptor' (e.g. "
+        "'sw:omni:2024-09-12'). ground_component must be H/dst_proxy/dH_dt, NOT "
+        "'Dst' (global Kyoto index). It does NOT take 'stations'/'df1'/'df2'."
     ),
 }
 
@@ -4725,6 +4738,44 @@ def _handle_plot_space_weather_comparison(args: dict[str, Any], store: FrameStor
     sw_components = [str(c).strip() for c in (raw_sw or ["Bz", "V"]) if str(c).strip()]
     if not sw_components:
         sw_components = ["Bz", "V"]
+
+    # Dst is the *global* Kyoto ring-current index, not a station component; a
+    # silent substitution would give a correct-looking but physically wrong chart.
+    if ground_component.strip().lower() == "dst":
+        return (
+            _error(
+                "invalid_input",
+                "ОШИБКА: Dst — это глобальный индекс Kyoto WDC. Для локального "
+                "сравнения используйте dst_proxy (рассчитывается через "
+                "apply_physics_formula(metric='dst_proxy')).",
+                requested=ground_component,
+                allowed=["H", "dst_proxy", "dH_dt"],
+                hint=(
+                    "fetch_observatory_data -> apply_physics_formula("
+                    "metric='dst_proxy'), then call this tool with "
+                    "ground_component='dst_proxy' and the derived handle."
+                ),
+            ),
+            "ground_component='Dst' is the global index, not a local component.",
+        )
+
+    # The solar wind must be downloaded BEFORE this tool can align anything; the
+    # field log showed the model calling the plot first and inventing a handle.
+    if not any(name.startswith("sw:") for name in store.names()):
+        return (
+            _error(
+                "missing_dependency",
+                "ОШИБКА: Для построения графика сравнения с солнечным ветром "
+                "необходимо сначала скачать данные через fetch_solar_wind. "
+                "Вызовите этот инструмент перед plot_space_weather_comparison.",
+                hint=(
+                    "fetch_solar_wind(start_date='2024-09-12') returns the "
+                    "'sw:omni:2024-09-12' handle this tool expects."
+                ),
+                available=store.names(),
+            ),
+            "no solar-wind frame in the store; call fetch_solar_wind first.",
+        )
 
     if not ground_desc or not sw_desc:
         example = {
