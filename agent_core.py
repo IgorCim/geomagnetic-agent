@@ -834,7 +834,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "  • 'ey_coupling' — связь с солнечным ветром (нужен external_params).\n"
                 "Аргумент df_descriptor ДОЛЖЕН быть точной строкой, возвращённой "
                 "предыдущим инструментом (например, 'raw:irt:2024-09-10'); не "
-                "придумывай её — бери из frame_handle предыдущего результата."
+                "придумывай её — бери из frame_handle предыдущего результата.\n\n"
+                "EXAMPLE FOR EY_COUPLING:\n"
+                "If you need to calculate Ey coupling, you MUST use this exact structure:\n"
+                "{\n"
+                "  \"name\": \"apply_physics_formula\",\n"
+                "  \"arguments\": {\n"
+                "    \"df_descriptor\": \"raw:irt:2024-09-12\", \n"
+                "    \"metric\": \"ey_coupling\",\n"
+                "    \"external_params\": {\"solar_wind\": \"sw:omni:2024-09-12\"}\n"
+                "  }\n"
+                "}\n"
+                "WARNING: Do NOT use 'formula', 'ground_component', or 'stations' as arguments. "
+                "They DO NOT EXIST."
             ),
             "parameters": {
                 "type": "object",
@@ -954,7 +966,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "(3) скачали солнечный ветер fetch_solar_wind (sw:omni:<дата>). "
                 "ground_component должен быть одним из: H, dst_proxy, dH_dt. "
                 "НЕ используйте 'Dst' -- это глобальный индекс Kyoto WDC, а не "
-                "локальный компонент."
+                "локальный компонент.\n\n"
+                "EXAMPLE FOR PLOTTING:\n"
+                "To plot the comparison, you MUST use this exact structure:\n"
+                "{\n"
+                "  \"name\": \"plot_space_weather_comparison\",\n"
+                "  \"arguments\": {\n"
+                "    \"ground_df_descriptor\": \"derived:irt:2024-09-12\",\n"
+                "    \"solar_wind_df_descriptor\": \"sw:omni:2024-09-12\",\n"
+                "    \"ground_component\": \"H\",\n"
+                "    \"solar_wind_components\": [\"Bz\", \"V\"],\n"
+                "    \"title\": \"Earth vs Space: IRT 2024-09-12\"\n"
+                "  }\n"
+                "}\n"
+                "WARNING: Do NOT use 'df1', 'df2', or 'stations'. They DO NOT EXIST for this tool."
             ),
             "parameters": {
                 "type": "object",
