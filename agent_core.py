@@ -853,10 +853,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "external_params": {
                         "type": "object",
                         "description": (
-                            "Solar-wind inputs for 'ey_coupling' only. Either scalars "
-                            "{'V': <km/s>, 'Bz': <nT>}, or a handle to a fetch_solar_wind "
-                            "frame: {'solar_wind': 'sw:omni:<date>'} (aligned to the "
-                            "observatory timestamps automatically). Ignored by other metrics."
+                            "Solar-wind inputs for 'ey_coupling' only. external_params "
+                            "accepts ONLY a dict like {'solar_wind': 'sw:omni:<date>'} or "
+                            "scalar values, e.g. {'V': <km/s>, 'Bz': <nT>} (aligned to the "
+                            "observatory timestamps automatically). DO NOT put "
+                            "'ground_component' or 'stations' inside external_params. "
+                            "Ignored by other metrics."
                         ),
                     },
                 },
@@ -4489,6 +4491,65 @@ def _resolve_coupling_external(
     return {"V": aligned["V"], "Bz": aligned["Bz"]}, None
 
 
+def _strict_argument_check(
+    tool: str,
+    args: dict[str, Any],
+    allowed: tuple[str, ...],
+    required: tuple[str, ...],
+    *,
+    handle_example: str = "raw:irt:2024-09-12",
+) -> dict[str, Any] | None:
+    """Refuse hallucinated or missing arguments before a handler reads them.
+
+    A small model invents argument names (``formula``, ``ground_component``,
+    ``df1``) for these two tools and then loops: the resulting generic
+    ``unknown_frame`` never names the offending key, so the next attempt repeats
+    the mistake. This is an allow-list gate, run first:
+
+    * any key not in the tool's schema -> ``unknown_arguments`` listing the keys
+      that ARE valid, which is the one hint that lets the model repair the call;
+    * a frame descriptor that is missing/empty -> ``missing_required_argument``
+      naming it and showing a concrete handle, instead of a downstream
+      ``unknown_frame`` from ``store.resolve("")``.
+
+    Returns ``None`` when the call is well-formed enough to proceed.
+    """
+    unknown = sorted(k for k in args if k not in allowed)
+    if unknown:
+        shown = ", ".join(repr(u) for u in unknown)
+        return _error(
+            "unknown_arguments",
+            f"ОШИБКА: инструмент {tool} не принимает аргументы: {shown}.",
+            received={k: args.get(k) for k in unknown},
+            allowed=list(allowed),
+            hint=(
+                f"CRITICAL: Arguments like {shown} DO NOT EXIST for this tool. "
+                f"The ONLY allowed arguments are: {list(allowed)}. Remove the invalid "
+                f"arguments and provide the required '{required[0]}'."
+            ),
+        )
+
+    missing = [
+        k for k in required
+        if not (isinstance(args.get(k), str) and args.get(k).strip())
+    ]
+    if missing:
+        named = " / ".join(f"'{k}'" for k in missing)
+        return _error(
+            "missing_required_argument",
+            f"CRITICAL: You forgot the mandatory argument {named}.",
+            missing=missing,
+            required=list(required),
+            allowed=list(allowed),
+            hint=(
+                f"CRITICAL: You forgot the mandatory argument {named}. It MUST be a "
+                f"valid frame handle like '{handle_example}'. Copy it EXACTLY from the "
+                "'frame_handle' field of the previous tool result; never invent one."
+            ),
+        )
+    return None
+
+
 def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Run one physical formula and store the enriched frame as a derived slot.
 
@@ -4497,7 +4558,16 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
     a new schema in the prompt budget. The result is always a frame with the new
     physical columns, so it is plottable and can feed the next tool.
     """
-    descriptor = args.get("df_descriptor") or args.get("df") or ""
+    strict = _strict_argument_check(
+        "apply_physics_formula",
+        args,
+        allowed=("df_descriptor", "metric", "external_params"),
+        required=("df_descriptor",),
+    )
+    if strict is not None:
+        return strict, f"apply_physics_formula refused: {strict['error']}"
+
+    descriptor = str(args.get("df_descriptor") or "").strip()
     metric = str(args.get("metric") or "").strip().lower()
     metric = _PHYSICS_METRIC_ALIASES.get(metric, metric)
     external = args.get("external_params")
@@ -4896,27 +4966,26 @@ def _handle_plot_space_weather_comparison(args: dict[str, Any], store: FrameStor
     aligned to the observatory clock by :func:`physics_engine.align_solar_wind`,
     and the aligned frame is handed to the dual-axis plotter.
     """
-    ground_desc = (
-        args.get("ground_df_descriptor")
-        or args.get("ground_df")
-        or args.get("ground_handle")
-        or args.get("df1")
+    strict = _strict_argument_check(
+        "plot_space_weather_comparison",
+        args,
+        allowed=(
+            "ground_df_descriptor",
+            "solar_wind_df_descriptor",
+            "ground_component",
+            "solar_wind_components",
+            "title",
+            "filename",
+        ),
+        required=("ground_df_descriptor", "solar_wind_df_descriptor"),
     )
-    sw_desc = (
-        args.get("solar_wind_df_descriptor")
-        or args.get("solar_wind_df")
-        or args.get("solar_wind_handle")
-        or args.get("solar_wind")
-        or args.get("df2")
-    )
-    ground_component = str(
-        args.get("ground_component") or args.get("component") or "H"
-    ).strip() or "H"
-    raw_sw = (
-        args.get("solar_wind_components")
-        or args.get("sw_components")
-        or args.get("components")
-    )
+    if strict is not None:
+        return strict, f"plot_space_weather_comparison refused: {strict['error']}"
+
+    ground_desc = str(args.get("ground_df_descriptor") or "").strip()
+    sw_desc = str(args.get("solar_wind_df_descriptor") or "").strip()
+    ground_component = str(args.get("ground_component") or "H").strip() or "H"
+    raw_sw = args.get("solar_wind_components")
     if isinstance(raw_sw, str):
         raw_sw = [raw_sw]
     sw_components = [str(c).strip() for c in (raw_sw or ["Bz", "V"]) if str(c).strip()]
@@ -4959,47 +5028,6 @@ def _handle_plot_space_weather_comparison(args: dict[str, Any], store: FrameStor
                 available=store.names(),
             ),
             "no solar-wind frame in the store; call fetch_solar_wind first.",
-        )
-
-    if not ground_desc or not sw_desc:
-        example = {
-            "ground_df_descriptor": "derived:irt:2024-09-12",
-            "solar_wind_df_descriptor": "sw:omni:2024-09-12",
-            "ground_component": "H",
-            "solar_wind_components": ["Bz", "V"],
-            "title": "Земля vs космос",
-        }
-        return (
-            _error(
-                "invalid_input",
-                "ОШИБКА: plot_space_weather_comparison требует "
-                "'ground_df_descriptor' (данные Земли) и 'solar_wind_df_descriptor' "
-                "(данные космоса, sw:omni:<дата>). Пример: " + _dumps(example),
-                received={
-                    key: args.get(key)
-                    for key in (
-                        "ground_df_descriptor",
-                        "solar_wind_df_descriptor",
-                        "df1",
-                        "df2",
-                        "stations",
-                    )
-                    if key in args
-                },
-                required=[
-                    "ground_df_descriptor",
-                    "solar_wind_df_descriptor",
-                    "ground_component",
-                    "solar_wind_components",
-                ],
-                example=example,
-                hint=(
-                    "Pass the ground frame (e.g. 'derived:irt:2024-09-12') and the "
-                    "solar-wind frame ('sw:omni:2024-09-12'); this tool aligns them "
-                    "itself. It does NOT take 'stations'/'df1'/'df2'."
-                ),
-            ),
-            "missing descriptors",
         )
 
     if ground_desc == sw_desc:

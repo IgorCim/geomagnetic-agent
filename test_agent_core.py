@@ -2577,3 +2577,94 @@ def test_apply_physics_formula_unknown_metric_is_refused():
     )
     assert ac.is_error(payload)
     assert payload["error"] == "unknown_metric"
+
+
+# --------------------------------------------------------------------------- #
+# strict argument validation: the anti-hallucination gate
+# --------------------------------------------------------------------------- #
+def test_apply_physics_formula_missing_df_descriptor_is_refused():
+    """No df_descriptor -> missing_required_argument, not a downstream unknown_frame."""
+    store = _physics_store()
+    payload, note = ac.HANDLERS["apply_physics_formula"]({"metric": "dst_proxy"}, store)
+    assert ac.is_error(payload)
+    assert payload["error"] == "missing_required_argument"
+    assert "df_descriptor" in payload["hint"]
+    assert "raw:irt:2024-09-12" in payload["hint"]
+    assert payload["missing"] == ["df_descriptor"]
+
+
+def test_apply_physics_formula_rejects_hallucinated_arguments():
+    """`formula`/`ground_component` are not schema args; the model is told so."""
+    store = _physics_store()
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {"formula": "X + Y", "ground_component": "H"}, store
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "unknown_arguments"
+    assert set(payload["received"]) == {"formula", "ground_component"}
+    assert "df_descriptor" in payload["allowed"]
+    assert "external_params" in payload["allowed"]
+    assert "df_descriptor" in payload["hint"]  # tells the model what is required
+
+
+def test_apply_physics_formula_rejects_extra_arguments_even_with_valid_descriptor():
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "dst_proxy",
+         "formula": "X + Y"},
+        store,
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "unknown_arguments"
+    assert "'formula'" in payload["hint"]
+
+
+def test_apply_physics_formula_valid_call_still_computes():
+    """The gate must not block a well-formed call."""
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "dst_proxy"}, store
+    )
+    assert payload["ok"], payload
+
+
+def test_plot_space_weather_comparison_missing_descriptors_is_refused():
+    store = _physics_store()
+    payload, note = ac.HANDLERS["plot_space_weather_comparison"](
+        {"ground_component": "H", "solar_wind_components": ["Bz", "V"]}, store
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "missing_required_argument"
+    assert set(payload["missing"]) == {
+        "ground_df_descriptor",
+        "solar_wind_df_descriptor",
+    }
+    assert "ground_df_descriptor" in payload["hint"]
+
+
+def test_plot_space_weather_comparison_rejects_df1_df2_and_stations():
+    """The classic hallucination: plot_overlay args passed to the space-weather plot."""
+    store = _physics_store()
+    payload, note = ac.HANDLERS["plot_space_weather_comparison"](
+        {"df1": "raw:irt:2024-09-10", "df2": "sw:omni:2024-09-10",
+         "stations": ["IRT"]},
+        store,
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "unknown_arguments"
+    assert set(payload["received"]) == {"df1", "df2", "stations"}
+    assert "ground_df_descriptor" in payload["allowed"]
+    assert "'df1'" in payload["hint"]
+
+
+def test_plot_space_weather_comparison_valid_args_pass_the_gate():
+    """With real descriptors the gate yields, and the missing sw: frame is reported."""
+    store = _physics_store()
+    payload, note = ac.HANDLERS["plot_space_weather_comparison"](
+        {"ground_df_descriptor": "raw:irt:2024-09-10",
+         "solar_wind_df_descriptor": "sw:omni:2024-09-10",
+         "ground_component": "H", "solar_wind_components": ["Bz", "V"]},
+        store,
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "missing_dependency"
