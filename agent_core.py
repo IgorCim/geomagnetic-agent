@@ -55,6 +55,7 @@ import geomag_math as geomath
 import geomag_plotter as plotter
 import intermagnet_loader as loader
 import space_weather_loader as space_weather
+import noaa_swpc_loader as noaa
 import project_store as projects
 import geomag_coords as gcoords
 import physics_engine as pengine
@@ -155,18 +156,21 @@ BASE_PROMPT_COMPACT = (
     "3. Данные бери fetch_observatory_data, код станции — 3-буквенный IAGA. "
     f"Известны: {STATION_HINT}.\n"
     "4. График: fetch_observatory_data → calculate_derived_components → "
-    "plot_components / plot_comparison / plot_overlay. Земля vs космос (H и Bz): "
-    "ТОЛЬКО plot_space_weather_comparison(ground_df_descriptor='...', "
-    "solar_wind_df_descriptor='sw:omni:...', ground_component='H', "
+    "plot_components / plot_comparison / plot_overlay. Земля vs космос: ТОЛЬКО "
+    "plot_space_weather_comparison(ground_component='H', "
     "solar_wind_components=['Bz','V']).\n"
     "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла — unknown_frame. "
     "Хэндл бери из frame_handle.\n"
-    "4b. ДЛЯ ВАЛИДАЦИИ: локальные возмущения (dst_proxy, dH_dt) сравнивай с "
-    "официальными Dst и Kp — fetch_geomagnetic_indices('idx:kyoto:<дата>'), затем "
-    "plot_components(['Dst','Kp']).\n"
+    "4b. ВАЛИДАЦИЯ: dst_proxy/dH_dt сравнивай с Dst/Kp — "
+    "fetch_geomagnetic_indices('idx:kyoto:<дата>'), затем plot_components"
+    "(['Dst','Kp']).\n"
+    "4c. О текущей космической погоде, предупреждениях, вероятности бурь и "
+    "вспышках — get_noaa_space_weather_context (query_type 'alerts'|'forecast'|"
+    "'solar_events'). Сопоставляй NOAA с локальными данными.\n"
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
-    "create_project, export_project, fetch_solar_wind, fetch_geomagnetic_indices.\n"
+    "create_project, export_project, fetch_solar_wind, fetch_geomagnetic_indices, "
+    "get_noaa_space_weather_context.\n"
     "    • Пакетно: create_task_matrix, process_matrix_batch "
     "(run_until_complete=True).\n"
     "    • Математика: calculate_derived_components, get_statistics, "
@@ -175,9 +179,7 @@ BASE_PROMPT_COMPACT = (
     "evaluate_custom_formula (не исполняется как код), apply_physics_formula.\n"
     "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt, "
     "calculate_local_time, group_stations_by_mlt.\n"
-    "    • Графики: plot_components, plot_comparison, plot_overlay.\n"
-    "6. Вместо DataFrame передавай хэндл: \"raw:irt:2024-09-10\" / "
-    "\"derived:irt:2024-09-10\" или raw/derived/anomalies/sw.\n"
+    "6. Хэндл бери только из frame_handle, не выдумывай его.\n"
     "7. Ошибку перескажи и предложи, что делать; свои цифры не подставляй.\n"
     "8. Перечисли графики и файлы. Единицы — 'nT'.\n"
     "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
@@ -1041,6 +1043,42 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_noaa_space_weather_context",
+            "description": (
+                "Official NOAA SWPC space-weather context -- the operational "
+                "alert/forecast/catalogue layer. USE for current geomagnetic "
+                "warnings, storm probability and solar flares. query_type='alerts' "
+                "returns active ALERT/WARNING/WATCH messages with the K-index and "
+                "the NOAA G1-G5 storm scale; query_type='forecast' returns the "
+                "3-day planetary Kp forecast (predicted disturbance level and its "
+                "G-scale); query_type='solar_events' returns the GOES X-ray flare "
+                "catalogue (C/M/X class) for [start_date, end_date]. Correlate "
+                "these official figures with local observatory data and Kyoto "
+                "indices. DO NOT USE for raw solar-wind measurements (V, Bz, ...): "
+                "that is fetch_solar_wind."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query_type": {
+                        "type": "string",
+                        "enum": ["alerts", "forecast", "solar_events"],
+                        "description": (
+                            "'alerts' = active geomagnetic alerts/warnings (G1-G5); "
+                            "'forecast' = 3-day Kp/G-scale forecast; "
+                            "'solar_events' = X-ray flare catalogue for a date range."
+                        )
+                    },
+                    "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD (UTC). Used by 'solar_events'."},
+                    "end_date": {"type": "string", "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."}
+                },
+                "required": ["query_type"]
+            }
+        }
+    },
 ]
 
 TOOLS_BY_NAME = {t["function"]["name"] for t in TOOL_SCHEMAS}
@@ -1114,6 +1152,7 @@ TOOL_SELECTION: dict[str, list[str]] = {
     ],
     "fetch_solar_wind": ["fetch_solar_wind", "fetch_geomagnetic_indices", "apply_physics_formula"],
     "fetch_geomagnetic_indices": ["fetch_geomagnetic_indices", "apply_physics_formula"],
+    "get_noaa_space_weather_context": ["get_noaa_space_weather_context"],
     "get_statistics": ["fetch_observatory_data", "get_statistics"],
     "calculate_derived_math": ["fetch_observatory_data", "calculate_derived_math"],
     "detect_anomalies": ["fetch_observatory_data", "detect_anomalies"],
@@ -1167,6 +1206,14 @@ FRAME_SUMMARY_MAX_CHARS = 400
 #: unions every match, always keeps the data source, and caps the result so the
 #: full schema list can never be sent by accident.
 _QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        # Official NOAA SWPC context first: a question about warnings/flares must
+        # not have the tool squeezed out by the generic "bur/storm/kp" physics
+        # keywords below, which also match it.
+        ("noaa", "swpc", "алерт", "alert", "предупрежд", "warning", "вспышк",
+         "flare", "прогноз", "forecast", "шкал", "g1", "g2", "g3", "g4", "g5"),
+        ("get_noaa_space_weather_context",),
+    ),
     (
         # Kyoto indices / scientific validation come first as well: "compare the
         # station's dst_proxy with the official Dst" would otherwise fill the cap
@@ -1313,6 +1360,7 @@ _MODEL_PAYLOAD_KEYS = (
     "ok", "error", "message", "hint", "rows", "n_missing", "frame_handle",
     "available_handles", "handle_aliases", "path", "plot", "metric", "result",
     "station", "date", "computed", "offline", "publication_state", "source",
+    "query_type", "count", "summary", "max_kp", "max_scale", "max_scale_time",
 )
 
 
@@ -1505,6 +1553,7 @@ _SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
     "fetch_many": "fetch_many",
     "fetch_solar_wind": "solar_wind",
     "fetch_geomagnetic_indices": "indices",
+    "get_noaa_space_weather_context": "noaa_context",
     "plot_space_weather_comparison": "space_weather_plot",
     "calculate_derived_components": "calc_hdi",
     "get_statistics": "stats",
@@ -2773,6 +2822,48 @@ def _offline_indices(start: str) -> pd.DataFrame:
     return frame
 
 
+def _offline_noaa(query_type: str) -> dict[str, Any]:
+    """Deterministic NOAA SWPC context for offline runs (no network at all).
+
+    Mirrors the live loader payload so the handler and the model see the same
+    fields: a single K5/G1 alert, a 3-day Kp forecast peaking at G1, and two
+    X-ray flares. Values are the documented 2026-10-10 G3 / quiet-day picture.
+    """
+    if query_type == "alerts":
+        data = [{
+            "product_id": "K05A", "kind": "ALERT", "k_index": 5.0, "g_scale": "G1",
+            "severity": "Minor", "issue_time": "2026-10-10T21:45:00+00:00",
+            "start_time": "2026-10-10T21:45:00+00:00", "end_time": None,
+            "active_warning": True,
+            "summary": "ALERT: Geomagnetic K-index of 5 (G1 - Minor)",
+        }]
+        return {"ok": True, "data": data, "count": len(data),
+                "source": "NOAA SWPC (offline synthetic)"}
+    if query_type == "forecast":
+        data = [
+            {"time_tag": "2026-10-16T18:00:00+00:00", "kp": 2.0,
+             "status": "observed", "g_scale": None},
+            {"time_tag": "2026-10-17T06:00:00+00:00", "kp": 5.0,
+             "status": "predicted", "g_scale": "G1"},
+            {"time_tag": "2026-10-17T12:00:00+00:00", "kp": 3.7,
+             "status": "predicted", "g_scale": None},
+        ]
+        return {"ok": True, "data": data, "count": len(data),
+                "source": "NOAA SWPC (offline synthetic)",
+                "max_kp": 5.0, "max_scale": "G1",
+                "max_scale_time": "2026-10-17T06:00:00+00:00"}
+    data = [
+        {"begin_time": "2026-10-17T06:22:00+00:00", "max_time": "2026-10-17T06:30:00+00:00",
+         "end_time": "2026-10-17T06:40:00+00:00", "begin_class": "B6.7",
+         "max_class": "C1.2", "class_letter": "C", "satellite": 18},
+        {"begin_time": "2026-10-10T13:18:00+00:00", "max_time": "2026-10-10T13:25:00+00:00",
+         "end_time": "2026-10-10T13:30:00+00:00", "begin_class": "B9.5",
+         "max_class": "M2.7", "class_letter": "M", "satellite": 18},
+    ]
+    return {"ok": True, "data": data, "count": len(data),
+            "source": "NOAA SWPC (offline synthetic) (GOES X-ray flare catalogue)"}
+
+
 def _handle_fetch_solar_wind(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Fetch OMNI L1 solar wind and store it under a ``sw:omni:<day>`` handle.
 
@@ -2835,6 +2926,99 @@ def _handle_fetch_geomagnetic_indices(args: dict[str, Any], store: FrameStore) -
     summary["start_date"] = start
     summary["end_date"] = end
     return summary, f"Индексы Dst/Kp: {len(result)} строк ({start}..{end}) -> {slot!r}."
+
+
+#: How many NOAA records the model sees before only the digest survives the cap.
+_NOAA_MAX_ROWS = 8
+
+#: Flare class letter -> rank, for "strongest flare" comparisons.
+_NOAA_FLARE_RANK = {"A": 0, "B": 1, "C": 2, "M": 3, "X": 4}
+
+
+def _summarize_noaa(query_type: str, result: dict[str, Any]) -> str:
+    """One-line, quotable digest of a NOAA payload.
+
+    The handler payload is capped by ``_compact_tool_message``, so this line must
+    carry the facts a storm report needs even when the raw rows are dropped.
+    """
+    data = result.get("data") or []
+    if query_type == "alerts":
+        if not data:
+            return "Активных геомагнитных алертов NOAA нет."
+        scales = [a.get("g_scale") for a in data if a.get("g_scale")]
+        worst = max(scales, key=lambda g: int(str(g)[1:])) if scales else None
+        top = data[0]
+        parts = [f"Алертов NOAA: {len(data)}"]
+        if worst:
+            parts.append(f"максимум {worst}")
+        parts.append(f"последний {top.get('summary')} ({top.get('issue_time')})")
+        return "; ".join(parts) + "."
+    if query_type == "forecast":
+        if not data:
+            return "Прогноз Kp NOAA недоступен."
+        tail = f" = {result['max_scale']}" if result.get("max_scale") else ""
+        if result.get("max_scale_time"):
+            tail += f" к {result['max_scale_time']}"
+        return (
+            f"Прогноз Kp (3 дня): максимум Kp {result.get('max_kp')}{tail}; "
+            f"строк {len(data)}."
+        )
+    if not data:
+        return "Вспышек в выбранном окне NOAA не зарегистрировано."
+    strongest = max(
+        data, key=lambda f: _NOAA_FLARE_RANK.get(str(f.get("class_letter") or ""), -1)
+    )
+    cmx = sum(1 for f in data if str(f.get("class_letter") or "") in ("C", "M", "X"))
+    return (
+        f"Вспышек NOAA: {len(data)} (C/M/X: {cmx}); "
+        f"сильнейшая {strongest.get('max_class')} в {strongest.get('max_time')}."
+    )
+
+
+def _handle_noaa_context(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Return official NOAA SWPC context (alerts / forecast / flare catalogue).
+
+    This is the *forecast and warning* layer: unlike the magnetogram and solar
+    wind loaders it does not produce a frame handle, because what NOAA publishes
+    is already a digested list of warnings, predicted Kp values and flares. The
+    payload is trimmed so a large catalogue cannot be silently compacted away.
+    """
+    query_type = str(args.get("query_type") or args.get("type") or "").strip().lower()
+    if query_type not in ("alerts", "forecast", "solar_events"):
+        return _error(
+            "invalid_input",
+            "query_type must be one of 'alerts', 'forecast', 'solar_events'.",
+            allowed=["alerts", "forecast", "solar_events"],
+        ), "bad query_type"
+
+    start = str(args.get("start_date") or "").strip()
+    end = str(args.get("end_date") or start).strip()
+
+    if OFFLINE:
+        result = _offline_noaa(query_type)
+    elif query_type == "alerts":
+        result = noaa.fetch_geomagnetic_alerts()
+    elif query_type == "forecast":
+        result = noaa.fetch_solar_wind_forecast()
+    else:
+        result = noaa.fetch_solar_events(start or None, end or None)
+
+    if noaa.is_error(result):
+        return result, f"get_noaa_space_weather_context failed: {result.get('error')}"
+
+    data = list(result.get("data") or [])
+    payload: dict[str, Any] = {
+        "ok": True,
+        "query_type": query_type,
+        "source": result.get("source"),
+        "count": len(data),
+        "summary": _summarize_noaa(query_type, result),
+        "data": data[:_NOAA_MAX_ROWS],
+    }
+    for key in ("max_kp", "max_scale", "max_scale_time", "message"):
+        if result.get(key) is not None:
+            payload[key] = result[key]
+    return payload, f"NOAA {query_type}: {len(data)} записей ({payload['summary']})"
 
 
 def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -4927,6 +5111,7 @@ HANDLERS: dict[str, Handler] = {
     "fetch_observatory_data": _handle_fetch,
     "fetch_solar_wind": _handle_fetch_solar_wind,
     "fetch_geomagnetic_indices": _handle_fetch_geomagnetic_indices,
+    "get_noaa_space_weather_context": _handle_noaa_context,
     "create_project": _handle_create_project,
     "list_projects": _handle_list_projects,
     "fetch_many": _handle_fetch_many,
