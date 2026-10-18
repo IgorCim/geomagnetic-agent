@@ -56,6 +56,7 @@ import geomag_plotter as plotter
 import intermagnet_loader as loader
 import space_weather_loader as space_weather
 import noaa_swpc_loader as noaa
+import supermag_loader as supermag
 import project_store as projects
 import geomag_coords as gcoords
 import physics_engine as pengine
@@ -159,14 +160,15 @@ BASE_PROMPT_COMPACT = (
     "plot_components / plot_comparison / plot_overlay. Земля vs космос: ТОЛЬКО "
     "plot_space_weather_comparison(ground_component='H', "
     "solar_wind_components=['Bz','V']).\n"
-    "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла — unknown_frame. "
-    "Хэндл бери из frame_handle.\n"
+    "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла — unknown_frame.\n"
     "4b. ВАЛИДАЦИЯ: dst_proxy/dH_dt сравнивай с Dst/Kp — "
     "fetch_geomagnetic_indices('idx:kyoto:<дата>'), затем plot_components"
     "(['Dst','Kp']).\n"
-    "4c. О текущей космической погоде, предупреждениях, вероятности бурь и "
-    "вспышках — get_noaa_space_weather_context (query_type 'alerts'|'forecast'|"
-    "'solar_events'). Сопоставляй NOAA с локальными данными.\n"
+    "4c. Космическая погода, предупреждения, бури, вспышки — "
+    "get_noaa_space_weather_context (query_type 'alerts'|'forecast'|"
+    "'solar_events').\n"
+    "4d. Суббури: fetch_supermag_data — 'indices' (SME/SML/SMU) или "
+    "'sites' (dX,dY,dZ).\n"
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
     "create_project, export_project, fetch_solar_wind, fetch_geomagnetic_indices, "
@@ -1075,17 +1077,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "get_noaa_space_weather_context",
             "description": (
-                "Official NOAA SWPC space-weather context -- the operational "
-                "alert/forecast/catalogue layer. USE for current geomagnetic "
-                "warnings, storm probability and solar flares. query_type='alerts' "
-                "returns active ALERT/WARNING/WATCH messages with the K-index and "
-                "the NOAA G1-G5 storm scale; query_type='forecast' returns the "
-                "3-day planetary Kp forecast (predicted disturbance level and its "
-                "G-scale); query_type='solar_events' returns the GOES X-ray flare "
-                "catalogue (C/M/X class) for [start_date, end_date]. Correlate "
-                "these official figures with local observatory data and Kyoto "
-                "indices. DO NOT USE for raw solar-wind measurements (V, Bz, ...): "
-                "that is fetch_solar_wind."
+                "Official NOAA SWPC layer: current geomagnetic alerts (G1-G5), "
+                "the 3-day planetary Kp outlook, the GOES X-ray flare catalogue. "
+                "Correlate these official figures with local observatory data and "
+                "Kyoto indices. NOT for raw solar-wind measurements (V, Bz, ...): "
+                "that is fetch_solar_wind. query_type picks one of 'alerts' | "
+                "'forecast' | 'solar_events'."
             ),
             "parameters": {
                 "type": "object",
@@ -1105,6 +1102,41 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "required": ["query_type"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_supermag_data",
+            "description": (
+                "Скачивает данные с базы SuperMAG. Используйте это для получения "
+                "возмущенных компонент (dX, dY, dZ) с уже удаленной базовой линией, "
+                "или для получения глобальных индексов суббурь (SME, SML, SMU), "
+                "указав data_type='indices'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "station_code": {
+                        "type": "string",
+                        "description": "Код станции SuperMAG, напр. 'IRT'. Нужен только при data_type='sites'.",
+                    },
+                    "start_date": {"type": "string", "description": "Начальная дата, YYYY-MM-DD (UTC)."},
+                    "end_date": {
+                        "type": "string",
+                        "description": "Конечная дата, YYYY-MM-DD (UTC), включительно. Максимум 32 дня.",
+                    },
+                    "data_type": {
+                        "type": "string",
+                        "enum": ["sites", "indices"],
+                        "description": (
+                            "'sites' = минутные данные станции dX/dY/dZ (базовая линия уже "
+                            "удалена); 'indices' = глобальные SME/SML/SMU, станция не нужна."
+                        ),
+                    },
+                },
+                "required": ["start_date"],
+            },
+        },
     },
 ]
 
@@ -1180,6 +1212,11 @@ TOOL_SELECTION: dict[str, list[str]] = {
     "fetch_solar_wind": ["fetch_solar_wind", "fetch_geomagnetic_indices", "apply_physics_formula"],
     "fetch_geomagnetic_indices": ["fetch_geomagnetic_indices", "apply_physics_formula"],
     "get_noaa_space_weather_context": ["get_noaa_space_weather_context"],
+    "fetch_supermag_data": [
+        "fetch_supermag_data",
+        "detect_anomalies",
+        "plot_components",
+    ],
     "get_statistics": ["fetch_observatory_data", "get_statistics"],
     "calculate_derived_math": ["fetch_observatory_data", "calculate_derived_math"],
     "detect_anomalies": ["fetch_observatory_data", "detect_anomalies"],
@@ -1240,6 +1277,15 @@ _QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         ("noaa", "swpc", "алерт", "alert", "предупрежд", "warning", "вспышк",
          "flare", "прогноз", "forecast", "шкал", "g1", "g2", "g3", "g4", "g5"),
         ("get_noaa_space_weather_context",),
+    ),
+    (
+        # Substorm questions are SuperMAG's own product, so they rank with the
+        # other specialised sources: the Kyoto keywords below also match ("индекс")
+        # and would otherwise offer only Dst/Kp for what is really an SME/SML/SMU
+        # question about the auroral electrojet.
+        ("суббур", "substorm", "sme", "sml", "smu", "аврор", "auror",
+         "электроджет", "electrojet", "supermag"),
+        ("fetch_supermag_data",),
     ),
     (
         # Kyoto indices / scientific validation come first as well: "compare the
@@ -1581,6 +1627,7 @@ _SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
     "fetch_solar_wind": "solar_wind",
     "fetch_geomagnetic_indices": "indices",
     "get_noaa_space_weather_context": "noaa_context",
+    "fetch_supermag_data": "supermag",
     "plot_space_weather_comparison": "space_weather_plot",
     "calculate_derived_components": "calc_hdi",
     "get_statistics": "stats",
@@ -3046,6 +3093,129 @@ def _handle_noaa_context(args: dict[str, Any], store: FrameStore) -> tuple[Any, 
         if result.get(key) is not None:
             payload[key] = result[key]
     return payload, f"NOAA {query_type}: {len(data)} записей ({payload['summary']})"
+
+
+def _offline_supermag(kind: str, station: str, start: str) -> pd.DataFrame:
+    """A deterministic substorm for offline runs (no network at all).
+
+    Reproduces the shape that matters physically: an electrojet enhancement
+    around 12:00 UT, so SMU rises while SML drops sharply and the station sees
+    a negative bay -- the signature a substorm study asks about.
+    """
+    try:
+        day = pd.Timestamp(str(start))
+        if pd.isna(day):
+            raise ValueError(start)
+    except (TypeError, ValueError):
+        day = pd.Timestamp("2024-09-12")
+    stamps = pd.date_range(day.normalize(), periods=1440, freq="min", tz="UTC")
+    t = np.linspace(0.0, 1.0, len(stamps))
+    bump = np.exp(-((t - 0.5) ** 2) / (2 * 0.04 ** 2))
+    if kind == "indices":
+        frame = pd.DataFrame({
+            "timestamp": stamps,
+            "SME": 20.0 + 640.0 * bump,
+            "SML": -15.0 - 520.0 * bump,
+            "SMU": 15.0 + 90.0 * bump,
+        })
+        frame.attrs = {
+            "source": "SuperMAG (offline synthetic)",
+            "data_type": "indices",
+            "units": "nT",
+        }
+        return frame
+    frame = pd.DataFrame({
+        "timestamp": stamps,
+        "dX": 4.0 - 120.0 * bump,
+        "dY": 2.0 - 35.0 * bump,
+        "dZ": 1.0 + 12.0 * bump,
+        "X_geo": 4.0 - 118.0 * bump,
+        "Y_geo": 2.0 - 33.0 * bump,
+        "Z_geo": 1.0 + 12.0 * bump,
+    })
+    frame.attrs = {
+        "source": "SuperMAG (offline synthetic)",
+        "station": station,
+        "data_type": "sites",
+        "units": "nT",
+    }
+    return frame
+
+
+def _handle_fetch_supermag(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Fetch SuperMAG minute data and store it under its own handle family.
+
+    Two products, one tool, because a substorm study needs both halves: the
+    station frame (``dX/dY/dZ``, main field already removed) says what the
+    ground saw, and the global SME/SML/SMU indices say when the auroral
+    electrojet broke loose -- which is what dates the onset.
+
+    ``data_type='indices'`` lands in the auxiliary ``idx:`` family, so the
+    global product cannot hijack the Active handle a follow-up plot call
+    reaches for; the station frame lands in ``smag:`` and becomes active, like
+    any other working magnetometer frame.
+    """
+    strict = _strict_argument_check(
+        "fetch_supermag_data",
+        args,
+        allowed=("station_code", "start_date", "end_date", "data_type"),
+        required=("start_date",),
+        missing_hint=(
+            "CRITICAL: The mandatory argument is 'start_date', a YYYY-MM-DD string "
+            "(e.g. '2024-09-12'). 'end_date' is optional and defaults to start_date. "
+            "With data_type='sites' also pass station_code, e.g. 'IRT'; with "
+            "data_type='indices' the station is ignored."
+        ),
+    )
+    if strict is not None:
+        return strict, f"fetch_supermag_data refused: {strict['error']}"
+
+    station = str(args.get("station_code") or "").strip().upper()
+    start = str(args.get("start_date") or "").strip()
+    end = str(args.get("end_date") or start).strip()
+    kind = str(args.get("data_type") or "sites").strip().lower()
+    if kind not in supermag.DATA_TYPES:
+        return _error(
+            "invalid_input",
+            "data_type must be 'sites' (станция) or 'indices' (SME/SML/SMU).",
+            allowed=list(supermag.DATA_TYPES),
+        ), "bad data_type"
+    if kind == "sites" and not station:
+        return _error(
+            "invalid_input",
+            "station_code is required when data_type='sites' (напр. 'IRT').",
+        ), "missing station_code"
+
+    slot = (
+        f"idx:supermag:{start}" if kind == "indices" else f"smag:{station.lower()}:{start}"
+    )
+    slot = FrameStore._normalise(slot)
+
+    if OFFLINE:
+        frame = _offline_supermag(kind, station, start)
+        store.put(slot, frame)
+        summary = _summarise_frame(frame, store, slot)
+        summary["offline"] = True
+        summary["source"] = "SuperMAG (offline synthetic)"
+        summary["data_type"] = kind
+        if station:
+            summary["station"] = station
+        return summary, (
+            f"Offline: SuperMAG {kind} синтезированы, {len(frame)} строк -> {slot!r}."
+        )
+
+    result = supermag.fetch_supermag_data(station or None, start, end, data_type=kind)
+    if supermag.is_error(result):
+        return result, f"fetch_supermag_data failed: {result.get('error')}"
+    store.put(slot, result)
+    summary = _summarise_frame(result, store, slot)
+    summary["source"] = (result.attrs or {}).get("source")
+    summary["data_type"] = kind
+    summary["start_date"] = start
+    summary["end_date"] = end
+    if station:
+        summary["station"] = station
+    return summary, f"SuperMAG {kind}: {len(result)} строк ({start}..{end}) -> {slot!r}."
 
 
 def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -4523,6 +4693,7 @@ def _strict_argument_check(
     required: tuple[str, ...],
     *,
     handle_example: str = "raw:irt:2024-09-12",
+    missing_hint: str | None = None,
 ) -> dict[str, Any] | None:
     """Refuse hallucinated or missing arguments before a handler reads them.
 
@@ -4536,6 +4707,11 @@ def _strict_argument_check(
     * a frame descriptor that is missing/empty -> ``missing_required_argument``
       naming it and showing a concrete handle, instead of a downstream
       ``unknown_frame`` from ``store.resolve("")``.
+
+    ``missing_hint`` swaps that second message for a tool whose mandatory
+    argument is not a handle at all (a date, say): the generic "copy it from
+    frame_handle" wording would send the model looking for a slot that never
+    existed.
 
     Returns ``None`` when the call is well-formed enough to proceed.
     """
@@ -4566,7 +4742,8 @@ def _strict_argument_check(
             missing=missing,
             required=list(required),
             allowed=list(allowed),
-            hint=(
+            hint=missing_hint
+            or (
                 f"CRITICAL: You forgot the mandatory argument {named}. It MUST be a "
                 f"valid frame handle like '{handle_example}'. Copy it EXACTLY from the "
                 "'frame_handle' field of the previous tool result; never invent one."
@@ -5165,6 +5342,7 @@ HANDLERS: dict[str, Handler] = {
     "fetch_solar_wind": _handle_fetch_solar_wind,
     "fetch_geomagnetic_indices": _handle_fetch_geomagnetic_indices,
     "get_noaa_space_weather_context": _handle_noaa_context,
+    "fetch_supermag_data": _handle_fetch_supermag,
     "create_project": _handle_create_project,
     "list_projects": _handle_list_projects,
     "fetch_many": _handle_fetch_many,
