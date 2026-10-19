@@ -24,6 +24,7 @@ are not reachable without a browser session.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 
@@ -140,7 +141,7 @@ def test_window_is_inclusive_of_the_end_day():
 def test_long_windows_are_refused_before_any_request(monkeypatch):
     _with_logon(monkeypatch)
     seen = _install(monkeypatch, {})
-    res = sm.fetch_supermag_data("IRT", "2024-01-01", "2024-12-31")
+    res = sm.fetch_supermag_data("2024-01-01", "2024-12-31", station_code="IRT")
     assert sm.is_error(res) and res["error"] == "range_too_long"
     assert res["max_days"] == sm.MAX_DAYS
     assert seen == [], "a capped request must not reach the network"
@@ -153,7 +154,7 @@ def test_sites_frame_carries_the_baseline_removed_components(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"data-api.php": _Resp(_SITES_JSON)})
 
-    frame = sm.fetch_supermag_data("irt", "2024-09-12", "2024-09-12")
+    frame = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="irt")
 
     assert isinstance(frame, pd.DataFrame) and not sm.is_error(frame)
     assert list(frame.columns) == [
@@ -176,7 +177,7 @@ def test_gaps_stay_in_the_frame_as_nan(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"data-api.php": _Resp(_SITES_JSON)})
 
-    frame = sm.fetch_supermag_data("IRT", "2024-09-12", "2024-09-12")
+    frame = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="IRT")
 
     assert len(frame) == 3
     assert frame["dX"].isna().sum() == 1
@@ -191,7 +192,7 @@ def test_rows_are_sorted_by_timestamp(monkeypatch):
     shuffled = json.dumps(list(reversed(json.loads(_SITES_JSON))))
     _install(monkeypatch, {"data-api.php": _Resp(shuffled)})
 
-    frame = sm.fetch_supermag_data("IRT", "2024-09-12", "2024-09-12")
+    frame = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="IRT")
 
     assert frame["timestamp"].is_monotonic_increasing
     assert frame.loc[0, "dX"] == pytest.approx(-3.942651)
@@ -200,7 +201,7 @@ def test_rows_are_sorted_by_timestamp(monkeypatch):
 def test_the_station_request_names_the_station(monkeypatch):
     _with_logon(monkeypatch)
     seen = _install(monkeypatch, {"data-api.php": _Resp(_SITES_JSON)})
-    sm.fetch_supermag_data("irt", "2024-09-12", "2024-09-12", data_type="sites")
+    sm.fetch_supermag_data("2024-09-12", "2024-09-12", data_type="sites", station_code="irt")
     assert any("station=IRT" in url for url in seen)
 
 
@@ -211,7 +212,7 @@ def test_indices_frame_is_sme_sml_smu_only(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"indices.php": _Resp(_INDICES_JSON)})
 
-    frame = sm.fetch_supermag_data(None, "2024-09-12", "2024-09-12", data_type="indices")
+    frame = sm.fetch_supermag_data("2024-09-12", "2024-09-12", data_type="indices")
 
     assert isinstance(frame, pd.DataFrame) and not sm.is_error(frame)
     assert list(frame.columns) == ["timestamp", "SME", "SML", "SMU"]
@@ -224,9 +225,56 @@ def test_indices_frame_is_sme_sml_smu_only(monkeypatch):
 def test_indices_url_asks_for_the_three_substorm_indices(monkeypatch):
     _with_logon(monkeypatch)
     seen = _install(monkeypatch, {"indices.php": _Resp(_INDICES_JSON)})
-    sm.fetch_supermag_data(None, "2024-09-12", "2024-09-12", data_type="indices")
+    sm.fetch_supermag_data("2024-09-12", "2024-09-12", data_type="indices")
     assert any("indices=sme,sml,smu" in url for url in seen)
     assert not any("station=" in url for url in seen)
+
+
+def test_a_indices_call_omitting_station_code_does_not_raise(monkeypatch):
+    """SME/SML/SMU are global: the documented call passes no station at all."""
+    _with_logon(monkeypatch)
+    seen = _install(monkeypatch, {"indices.php": _Resp(_INDICES_JSON)})
+
+    frame = sm.fetch_supermag_data(
+        start_date="2024-09-12", end_date="2024-09-12", data_type="indices"
+    )
+
+    assert isinstance(frame, pd.DataFrame) and not sm.is_error(frame)
+    assert list(frame.columns) == ["timestamp", "SME", "SML", "SMU"]
+    assert not any("station=" in url for url in seen)
+
+
+def test_the_signature_leaves_station_code_optional():
+    """Dates first; station_code last, defaulted to the 'GLOBAL' placeholder."""
+    params = list(inspect.signature(sm.fetch_supermag_data).parameters.values())
+    assert [p.name for p in params[:4]] == [
+        "start_date", "end_date", "data_type", "station_code",
+    ]
+    assert params[0].default is inspect.Parameter.empty  # only start_date is a must
+    assert params[1].default is None                      # end_date -> start_date
+    assert params[2].default == "sites"
+    assert params[3].default == "GLOBAL"
+
+
+def test_the_global_placeholder_is_accepted_positionally(monkeypatch):
+    """station_code='GLOBAL' (the default) never reaches the indices URL."""
+    _with_logon(monkeypatch)
+    seen = _install(monkeypatch, {"indices.php": _Resp(_INDICES_JSON)})
+
+    frame = sm.fetch_supermag_data("2024-09-12", "2024-09-12", "indices", "GLOBAL")
+
+    assert isinstance(frame, pd.DataFrame)
+    assert not any("station=" in url for url in seen)
+
+
+def test_sites_still_need_a_real_station(monkeypatch):
+    """The 'GLOBAL' default is a placeholder: sites must name a station."""
+    _with_logon(monkeypatch)
+    seen = _install(monkeypatch, {})
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12")
+    assert sm.is_error(res) and res["error"] == "station_not_found"
+    assert "station_code" in res["message"]
+    assert seen == [], "a placeholder station must not reach the network"
 
 
 # --------------------------------------------------------------------------- #
@@ -234,7 +282,7 @@ def test_indices_url_asks_for_the_three_substorm_indices(monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_missing_logon_is_reported_before_any_request(monkeypatch):
     seen = _install(monkeypatch, {"data-api.php": _Resp(_SITES_JSON)})
-    res = sm.fetch_supermag_data("IRT", "2024-09-12", "2024-09-12")
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="IRT")
     assert sm.is_error(res) and res["error"] == "missing_logon"
     assert sm.LOGON_ENV in res["hint"]
     assert seen == [], "no logon means no request"
@@ -242,14 +290,14 @@ def test_missing_logon_is_reported_before_any_request(monkeypatch):
 
 def test_an_explicit_logon_wins_over_the_environment(monkeypatch):
     _install(monkeypatch, {"data-api.php": _Resp(_SITES_JSON)})
-    frame = sm.fetch_supermag_data("IRT", "2024-09-12", "2024-09-12", logon=_LOGON)
+    frame = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="IRT", logon=_LOGON)
     assert isinstance(frame, pd.DataFrame)
 
 
 def test_service_rejecting_the_logon_is_named(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"data-api.php": _Resp("ERROR: Invalid username")})
-    res = sm.fetch_supermag_data("IRT", "2024-09-12", "2024-09-12")
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="IRT")
     assert sm.is_error(res) and res["error"] == "invalid_logon"
     assert sm.LOGON_ENV in res["hint"]
 
@@ -258,7 +306,7 @@ def test_empty_window_is_no_data_when_the_station_is_known(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"data-api.php": _Resp("OK"),
                            "inventory.php": _Resp(_INVENTORY_TEXT)})
-    res = sm.fetch_supermag_data("IRT", "2024-09-12", "2024-09-12")
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="IRT")
     assert sm.is_error(res) and res["error"] == "no_data"
     assert res["hint"] and "indices" in res["hint"]
 
@@ -268,7 +316,7 @@ def test_empty_window_is_station_not_found_for_an_unknown_code(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"data-api.php": _Resp("OK"),
                            "inventory.php": _Resp(_INVENTORY_TEXT)})
-    res = sm.fetch_supermag_data("ZZZ", "2024-09-12", "2024-09-12")
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="ZZZ")
     assert sm.is_error(res) and res["error"] == "station_not_found"
     assert res["station"] == "ZZZ"
 
@@ -276,7 +324,7 @@ def test_empty_window_is_station_not_found_for_an_unknown_code(monkeypatch):
 def test_a_malformed_station_code_never_reaches_the_network(monkeypatch):
     _with_logon(monkeypatch)
     seen = _install(monkeypatch, {})
-    res = sm.fetch_supermag_data("Irkutsk", "2024-09-12", "2024-09-12")
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="Irkutsk")
     assert sm.is_error(res) and res["error"] == "station_not_found"
     assert seen == []
 
@@ -284,7 +332,7 @@ def test_a_malformed_station_code_never_reaches_the_network(monkeypatch):
 def test_indices_without_rows_is_no_data(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"indices.php": _Resp("OK")})
-    res = sm.fetch_supermag_data(None, "2024-09-12", "2024-09-12", data_type="indices")
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12", data_type="indices")
     assert sm.is_error(res) and res["error"] == "no_data"
 
 
@@ -292,16 +340,16 @@ def test_bad_dates_and_bad_data_type(monkeypatch):
     _with_logon(monkeypatch)
     seen = _install(monkeypatch, {})
 
-    assert sm.fetch_supermag_data("IRT", "12.09.2024")["error"] == "invalid_date"
-    assert sm.fetch_supermag_data("IRT", "2024-09-13", "2024-09-12")["error"] == "invalid_date"
-    assert sm.fetch_supermag_data("IRT", "2024-09-12", data_type="melt")["error"] == "invalid_data_type"
+    assert sm.fetch_supermag_data("12.09.2024", station_code="IRT")["error"] == "invalid_date"
+    assert sm.fetch_supermag_data("2024-09-13", "2024-09-12", station_code="IRT")["error"] == "invalid_date"
+    assert sm.fetch_supermag_data("2024-09-12", "2024-09-12", data_type="melt", station_code="IRT")["error"] == "invalid_data_type"
     assert seen == []
 
 
 def test_network_failure_is_not_confused_with_missing_data(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"data-api.php": ConnectionError("boom")})
-    res = sm.fetch_supermag_data("IRT", "2024-09-12", "2024-09-12")
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12", station_code="IRT")
     assert sm.is_error(res) and res["error"] == "supermag_unavailable"
     assert res["hint"]
 
@@ -309,7 +357,7 @@ def test_network_failure_is_not_confused_with_missing_data(monkeypatch):
 def test_http_error_is_unavailable(monkeypatch):
     _with_logon(monkeypatch)
     _install(monkeypatch, {"indices.php": _Resp("gateway", status=503)})
-    res = sm.fetch_supermag_data(None, "2024-09-12", "2024-09-12", data_type="indices")
+    res = sm.fetch_supermag_data("2024-09-12", "2024-09-12", data_type="indices")
     assert sm.is_error(res) and res["error"] == "supermag_unavailable"
 
 
@@ -344,6 +392,8 @@ def test_tool_schema_is_registered():
     assert params["properties"]["data_type"]["enum"] == ["sites", "indices"]
     desc = schema["function"]["description"].lower()
     assert "supermag" in desc and "sme" in desc and "индекс" in desc
+    # the LLM must see that no station stands behind the global product
+    assert "station_code" in desc and "необязател" in desc
 
 
 def test_handler_and_selection_are_wired():
@@ -442,7 +492,7 @@ def test_a_supermag_frame_survives_compaction():
     reason=f"set {sm.LOGON_ENV} to a registered SuperMAG logon to run the live check",
 )
 def test_live_substorm_indices_are_reachable():
-    frame = sm.fetch_supermag_data(None, "2024-09-12", "2024-09-12", data_type="indices")
+    frame = sm.fetch_supermag_data("2024-09-12", "2024-09-12", data_type="indices")
     assert not sm.is_error(frame), frame
     assert {"SME", "SML", "SMU"} <= set(frame.columns)
     assert len(frame) > 1000  # a full day of 1-minute values
@@ -456,7 +506,7 @@ def test_live_substorm_indices_are_reachable():
     reason=f"set {sm.LOGON_ENV} to a registered SuperMAG logon to run the live check",
 )
 def test_live_station_data_is_reachable():
-    frame = sm.fetch_supermag_data("IRT", "2024-09-12", "2024-09-12", data_type="sites")
+    frame = sm.fetch_supermag_data("2024-09-12", "2024-09-12", data_type="sites", station_code="IRT")
     assert not sm.is_error(frame), frame
     assert {"dX", "dY", "dZ"} <= set(frame.columns)
     assert len(frame) > 1000

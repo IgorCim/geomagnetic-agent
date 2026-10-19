@@ -68,6 +68,7 @@ __all__ = [
     "INDICES_URL",
     "INVENTORY_URL",
     "LOGON_ENV",
+    "GLOBAL_STATION",
 ]
 
 log = logging.getLogger("supermag_loader")
@@ -90,6 +91,12 @@ MAX_DAYS = 32
 
 #: ``data_type`` values the loader understands.
 DATA_TYPES = ("sites", "indices")
+
+#: Default for ``station_code``. The substorm indices are a global product, so
+#: no station stands behind them: the placeholder keeps the station argument
+#: optional. It is deliberately not a real code -- for ``data_type='sites'`` it
+#: is refused up front instead of being sent to the service.
+GLOBAL_STATION = "GLOBAL"
 
 _STATION_RE = re.compile(r"^[A-Za-z0-9]{2,6}$")
 
@@ -482,10 +489,10 @@ def _parse_inventory(body: str) -> list[str]:
 
 
 def fetch_supermag_data(
-    station_code: Any,
-    start_date: Any,
-    end_date: Any = None,
+    start_date: str,
+    end_date: str | None = None,
     data_type: str = "sites",
+    station_code: str = GLOBAL_STATION,
     *,
     logon: Any = None,
     timeout: int = DEFAULT_TIMEOUT,
@@ -493,10 +500,15 @@ def fetch_supermag_data(
 ) -> pd.DataFrame | dict[str, Any]:
     """SuperMAG minute data, or a strict error payload.
 
+    The dates come first and ``station_code`` is optional: it defaults to
+    :data:`GLOBAL_STATION`, a placeholder rather than a code, so asking for
+    the global indices needs no station at all.
+
     ``data_type='sites'``  -> station data with the baseline already removed
-    (``dX/dY/dZ`` in nT, plus the geographically mapped ``*_geo`` columns).
+    (``dX/dY/dZ`` in nT, plus the geographically mapped ``*_geo`` columns);
+    ``station_code`` must then be a real code (e.g. ``'IRT'``).
     ``data_type='indices'`` -> the global substorm indices ``SME/SML/SMU``;
-    ``station_code`` is then unused (the indices are a global product).
+    ``station_code`` is then ignored (the indices are a global product).
 
     The window is inclusive on both ends and capped at :data:`MAX_DAYS`.
     """
@@ -527,8 +539,19 @@ def fetch_supermag_data(
             hint=f"Разбейте период на окна не длиннее {MAX_DAYS} дней и вызовите инструмент повторно.",
         )
 
-    station = str(station_code or "").strip().upper()
+    # The global product has no station behind it: drop the argument entirely
+    # so neither the URL nor an error payload ever echoes the placeholder.
+    station = "" if kind == "indices" else str(station_code or "").strip().upper()
     if kind == "sites":
+        if not station or station == GLOBAL_STATION:
+            return _error(
+                "station_not_found",
+                f"station_code is required for data_type='sites'; {GLOBAL_STATION!r} "
+                "is only a placeholder, not a station.",
+                station=station or None,
+                hint="Укажите код станции, напр. 'IRT', либо data_type='indices' "
+                     "для глобальных индексов SME/SML/SMU.",
+            )
         if not _STATION_RE.match(station):
             return _error(
                 "station_not_found",

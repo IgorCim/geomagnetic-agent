@@ -1108,14 +1108,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Скачивает данные с базы SuperMAG. Используйте это для получения "
                 "возмущенных компонент (dX, dY, dZ) с уже удаленной базовой линией, "
                 "или для получения глобальных индексов суббурь (SME, SML, SMU), "
-                "указав data_type='indices'."
+                "указав data_type='indices'. station_code НЕОБЯЗАТЕЛЕН: при "
+                "data_type='indices' его передавать не нужно."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "station_code": {
                         "type": "string",
-                        "description": "Код станции SuperMAG, напр. 'IRT'. Нужен только при data_type='sites'.",
+                        "description": (
+                            "НЕОБЯЗАТЕЛЕН. Нужен только при data_type='sites' "
+                            "(напр. 'IRT'); при 'indices' игнорируется."
+                        ),
                     },
                     "start_date": {"type": "string", "description": "Начальная дата, YYYY-MM-DD (UTC)."},
                     "end_date": {
@@ -3201,7 +3205,9 @@ def _handle_fetch_supermag(args: dict[str, Any], store: FrameStore) -> tuple[Any
             f"Offline: SuperMAG {kind} синтезированы, {len(frame)} строк -> {slot!r}."
         )
 
-    result = supermag.fetch_supermag_data(station or None, start, end, data_type=kind)
+    result = supermag.fetch_supermag_data(
+        start, end, data_type=kind, station_code=station or None
+    )
     if supermag.is_error(result):
         return result, f"fetch_supermag_data failed: {result.get('error')}"
     store.put(slot, result)
