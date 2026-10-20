@@ -138,67 +138,65 @@ STATION_HINT = (
 #: cases every key, and this rule tells the model to do the same so that the
 #: handles it prints match the handles it reads back out of the tool results.
 HANDLE_CASE_RULE = (
-    "Хэндлы пиши строчными буквами (в нижнем регистре): "
+    "Хэндлы пиши строчными (в нижнем регистре): "
     "frame_handle='raw:IRT:2024-09-10' передавай как 'raw:irt:2024-09-10'. "
-    "Два дня — два РАЗНЫХ хэндла."
+    "Два дня — два хэндла."
 )
 
 BASE_PROMPT_COMPACT = (
-    "Ты — профессиональный геофизический ИИ-ассистент. Не выдумывай цифры — "
+    "Ты — профессиональный геофизический ассистент. Не выдумывай цифры — "
     "вызывай инструменты.\n\n"
-    "ЖЁСТКО: физику (Sq, дельты, GIC, Dst, Ey, SSC) — ТОЛЬКО через "
-    "apply_physics_formula с metric. calculate_dst_proxy НЕ существует. "
-    "calculate_derived_math и detect_anomalies — только статистика. "
-    "Ey: metric='ey_coupling', external_params={'solar_wind': 'sw:omni:<дата>'}. "
-    "Эталон бури — 2024-09-12 или "
-    "2024-10-10 (НЕ 2024-09-10).\n\n"
-    "Правила:\n"
-    "1. Отвечай на русском, кратко, как коллега-геофизик.\n"
+    "ЖЁСТКО: физику — ТОЛЬКО через apply_physics_formula с metric. "
+    "calculate_dst_proxy НЕ существует. calculate_derived_math/detect_anomalies — "
+    "статистика. Ey: metric='ey_coupling' (external_params — солн. ветер). "
+    "Эталон бури — 2024-09-12 или 2024-10-10 (НЕ 2024-09-10).\n\n"    "Правила:\n"
+    "1. Отвечай по-русски, кратко, как коллега-геофизик.\n"
     "2. Числа в ответе — только из результата инструмента.\n"
-    "3. Данные бери fetch_observatory_data, код станции — 3-буквенный IAGA. "
+    "3. Данные: fetch_observatory_data, код — 3-буквенный IAGA. "
     f"Известны: {STATION_HINT}.\n"
     "4. График: fetch_observatory_data → calculate_derived_components → "
-    "plot_components / plot_comparison / plot_overlay. Земля vs космос: ТОЛЬКО "
+    "plot_components/plot_comparison/plot_overlay. "
     "plot_space_weather_comparison(ground_component='H', "
     "solar_wind_components=['Bz','V']).\n"
     "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data: без хэндла — unknown_frame.\n"
     "4b. ВАЛИДАЦИЯ: dst_proxy/dH_dt сравнивай с Dst/Kp — "
-    "fetch_geomagnetic_indices('idx:kyoto:<дата>'), затем plot_components"
-    "(['Dst','Kp']).\n"
-    "4c. Космическая погода, бури — "
-    "get_noaa_space_weather_context ('alerts'|'forecast'|'solar_events').\n"
+    "fetch_geomagnetic_indices('idx:kyoto:<дата>'), затем plot_components.\n"
+    "4c. Космическая погода, бури — get_noaa_space_weather_context "
+    "('alerts'|'forecast'|'solar_events').\n"
     "4d. Суббури: fetch_supermag_data — 'indices' (SME/SML/SMU) или "
     "'sites' (dX,dY,dZ).\n"
-    "4e. Dst/Kp — get_iswa_forecast. Карта возмущений "
-    "get_iswa_perturbation_map ДЕКОМИССИРОВАНА — вместо неё "
-    "fetch_supermag_data('indices').\n"
-    "5. Инструменты:\n"
-    "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
-    "create_project, export_project, fetch_solar_wind, fetch_geomagnetic_indices, "
+    "4e. Dst/Kp — get_iswa_forecast; карта get_iswa_perturbation_map "
+    "ДЕКОМИССИРОВАНА — вместо неё fetch_supermag_data('indices').\n"
+    "4f. CRITICAL: plot_space_weather_comparison нужен хэндл СТАНЦИИ "
+    "('raw:irt:2024-09-12' из fetch_observatory_data). Глобальные индексы "
+    "('idx:supermag:...', 'idx:kyoto:...') как ground_df_descriptor НЕЛЬЗЯ; "
+    "индексы — plot_components.\n"    "5. Инструменты:\n"
+    "Данные: fetch_observatory_data, fetch_many, list_projects, create_project, "
+    "export_project, fetch_solar_wind, fetch_geomagnetic_indices, "
     "get_noaa_space_weather_context.\n"
-    "    • Пакетно: create_task_matrix, process_matrix_batch.\n"
-    "    • Математика: calculate_derived_components, get_statistics, "
-    "detect_anomalies, calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
-    "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (baseline_value), "
-    "evaluate_custom_formula (не исполняется как код), apply_physics_formula.\n"
-    "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt, "
+    "Пакетно: create_task_matrix, process_matrix_batch.\n"
+    "Математика: calculate_derived_components, get_statistics, detect_anomalies, "
+    "calculate_derived_math ('delta', 'dH_dt', 'anomaly'; Метрики 'range' НЕ "
+    "СУЩЕСТВУЕТ), calculate_baseline (baseline_value), evaluate_custom_formula "
+    "(не исполняется как код), apply_physics_formula.\n"
+    "Магнетизм: get_station_geomagnetic_coords, calculate_mlt, "
     "calculate_local_time, group_stations_by_mlt.\n"
-    "6. Хэндл бери только из frame_handle, не выдумывай его.\n"
-    "7. Ошибку перескажи и предложи, что делать.\n"
+    "6. Хэндл бери из frame_handle, не выдумывай.\n"
+    "7. Ошибку перескажи, предложи шаг.\n"
     "8. Перечисли графики и файлы. Единицы — 'nT'.\n"
-    "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
-    "10. ФОРМАТ ОТВЕТА: (а) вызов — только теги, без слов:\n"
-    '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
+    "9. Ты НЕ API-сервер: не отвечай {'content':..., 'tool_calls':...}.\n"
+    "10. ФОРМАТ: (а) вызов — только теги, без слов:\n"
+    '      <tool_call>{"name": "fetch_observatory_data", "arguments": '
     '{"station_code": "IRT", "start_date": "2024-09-10"}}</tool_call>\n'
-    "    (б) данных достаточно — обычный текст без тегов.\n"
+    "    (б) данных достаточно — текст без тегов.\n"
     f"11. {HANDLE_CASE_RULE}\n\n"
     "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
-    "1) создай create_task_matrix;\n"
-    "2) ОДИН вызов process_matrix_batch с run_until_complete=True;\n"
+    "1) create_task_matrix;\n"
+    "2) ОДИН process_matrix_batch с run_until_complete=True;\n"
     "3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' (экспорт делается автоматически);\n"
-    "4) оформи сводку. НЕ вызывай больше никаких инструментов, в т.ч. export_project.\n"
+    "4) сводка. НЕ вызывай больше никаких инструментов, в т.ч. export_project.\n"
     "НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не вызывай "
-    "create_task_matrix повторно, если матрица уже создана."
+    "create_task_matrix повторно, если матрица создана."
 )
 
 #: The base prompt the ordinary single-question loop uses. ``run_agent_with_planner``
@@ -1309,6 +1307,12 @@ TOOLS_PER_TASK = 6
 #: so a 1440-row frame cannot dump columns/statistics into the context.
 FRAME_SUMMARY_MAX_CHARS = 400
 
+#: A payload whose ``fallback_hint`` is the point (the decommissioned ISWA map)
+#: is kept whole up to this cap instead of being truncated mid-instruction. The
+#: hint names two distinct fixes, so cutting it in half would leave the model
+#: with exactly the ambiguity that made it loop.
+FALLBACK_HINT_MAX_CHARS = 800
+
 #: Keywords -> the tools a free-form question about them can need. The selector
 #: unions every match, always keeps the data source, and caps the result so the
 #: full schema list can never be sent by accident.
@@ -1756,8 +1760,18 @@ def _compact_tool_message(payload: Any, max_chars: int = FRAME_SUMMARY_MAX_CHARS
     large, but the model does not need the column dump to act -- it needs the
     handle and the headline number. Handlers still return the full payload to
     their callers; only what crosses into the context window is trimmed here.
+
+    A payload carrying a ``fallback_hint`` is the exception: that key *is* the
+    instruction the model must follow (the ISWA map is decommissioned, use
+    SuperMAG indices for the global picture and a station handle for
+    plot_space_weather_comparison). Truncating it mid-sentence is worse than
+    sending it whole, so such a payload is kept intact up to
+    :data:`FALLBACK_HINT_MAX_CHARS` -- still a hard cap, just a roomier one.
     """
     text = _dumps(payload)
+    if isinstance(payload, dict) and payload.get("fallback_hint"):
+        limit = max(max_chars, FALLBACK_HINT_MAX_CHARS)
+        return text if len(text) <= limit else text[:limit]
     if len(text) <= max_chars or not isinstance(payload, dict):
         return text if len(text) <= max_chars else text[:max_chars]
 

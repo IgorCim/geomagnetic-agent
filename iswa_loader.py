@@ -155,10 +155,15 @@ _DECOMMISSIONED_MESSAGE = (
     "map layer."
 )
 _DECOMMISSIONED_FALLBACK = (
-    "For the global substorm picture, use "
-    "fetch_supermag_data(data_type='indices') to get SME/SML/SMU indices, which "
-    "serve the exact same scientific purpose. For the Dst/Kp outlook use "
-    "get_iswa_forecast()."
+    "NASA ISWA WMS is decommissioned. \n"
+    "ACTION PLAN:\n"
+    "1) For GLOBAL substorm activity: use "
+    "fetch_supermag_data(data_type='indices') and plot SME/SML/SMU using the "
+    "regular plot_components tool.\n"
+    "2) To compare a SPECIFIC station (e.g. IRT) with solar wind: you MUST call "
+    "fetch_observatory_data for that station first to get a 'raw:<station>:<date>' "
+    "handle, and ONLY THEN use plot_space_weather_comparison. SuperMAG indices "
+    "CANNOT be used as ground data for plot_space_weather_comparison."
 )
 
 _FORECAST_HINT = (
