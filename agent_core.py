@@ -155,11 +155,12 @@ BASE_PROMPT_COMPACT = (
     f"{HANDLE_CASE_RULE}\n"
     "4. Физику (Ey, Dst-прокси) — ТОЛЬКО через apply_physics_formula "
     "с metric. calculate_dst_proxy НЕ существует. calculate_derived_math/"
-    "detect_anomalies — статистика. Ey: metric='ey_coupling'.\n"
+    "detect_anomalies — статистика. Ey: metric='ey_coupling'. EEJ — "
+    "calculate_eej_index.\n"
     "5. Метрики calculate_derived_math: 'delta', 'dH_dt', 'anomaly'; "
     "Метрики 'range' НЕ СУЩЕСТВУЕТ.\n"
     "6. Ошибку перескажи, предложи шаг. Перечисли графики и файлы; "
-    "единицы — 'nT'.\n\n"
+    "единицы 'nT'.\n\n"
     "СЦЕНАРИИ ГРАФИКОВ (ЕСЛИ → ТО):\n"
     "4a. ОДНА СТАНЦИЯ: ЕСЛИ нужен график станции → fetch_observatory_data, "
     "затем plot_components/plot_comparison/plot_overlay.\n"
@@ -167,8 +168,7 @@ BASE_PROMPT_COMPACT = (
     "fetch_observatory_data (станция) + fetch_solar_wind, затем "
     "plot_space_weather_comparison(ground_component='H', "
     "solar_wind_components=['Bz','V']). ground_df_descriptor — ТОЛЬКО хэндл "
-    "СТАНЦИИ ('raw:irt:2024-09-12'), НЕ индекс ('idx:supermag:...', "
-    "'idx:kyoto:...').\n"
+    "СТАНЦИИ ('raw:irt:2024-09-12'), НЕ idx:supermag/idx:kyoto.\n"
     "4c. ГЛОБАЛЬНЫЕ ИНДЕКСЫ: ЕСЛИ работаешь с индексами → "
     "fetch_supermag_data 'indices' (SME/SML/SMU) или fetch_geomagnetic_indices, "
     "затем plot_components; 'sites' (dX,dY,dZ).\n"
@@ -835,6 +835,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Dst), akasofu_epsilon (ввод энергии), peak_dhdt (пик dH/dt для GIC), "
                 "substorm_onset (начало суббури по SML), eej_index (экваториальный "
                 "электроджет).\n"
+                "WHEN TO USE EACH METRIC (NOT detect_anomalies): "
+                "burton_coupling = 'Dst prediction', 'Burton function', 'storm "
+                "evolution' (needs Np/V/Bz/Dst); akasofu_epsilon = 'energy input', "
+                "'Akasofu function', 'magnetospheric power' (needs V/Bx/By/Bz); "
+                "peak_dhdt = 'GIC risk', 'transformer risk', 'dH/dt peaks', 'power "
+                "grid impact'; substorm_onset = 'substorm start', 'onset time', "
+                "'SML drop' (SML frame, no external_params).\n"
                 "df_descriptor — точная строка из frame_handle предыдущего "
                 "результата (например, 'raw:irt:2024-09-10'); не придумывай её.\n"
                 "WARNING: аргументы 'formula', 'ground_component', 'stations' НЕ "
@@ -893,25 +900,53 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "calculate_eej_index",
+            "description": (
+                "Use for the equatorial electrojet, EEJ, or the H-difference "
+                "between an equatorial and an off-equatorial station. Downloads "
+                "BOTH stations for the date range, aligns them and returns "
+                "H_equatorial - H_reference as a derived frame. Do NOT use "
+                "apply_physics_formula for EEJ (one frame only). REQUIRED: "
+                "'equatorial_station', 'reference_station' (IAGA codes) and "
+                "'start_date'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "equatorial_station": {
+                        "type": "string",
+                        "description": "Three-letter IAGA code on the dip equator, e.g. IRT.",
+                    },
+                    "reference_station": {
+                        "type": "string",
+                        "description": (
+                            "Three-letter IAGA code 6-8 degrees away in latitude, "
+                            "e.g. ABG."
+                        ),
+                    },
+                    "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD."},
+                    "end_date": {
+                        "type": "string",
+                        "description": "End date, YYYY-MM-DD (inclusive). Defaults to start_date.",
+                    },
+                },
+                "required": ["equatorial_station", "reference_station", "start_date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "plot_overlay",
             "description": (
-                "Draw ONE component from SEVERAL stations on ONE chart, each shifted by a "
-                "per-station nT offset; x axis in UT, LT or MLT; stations ordered "
-                "north-first. Auto-fetches and derives any missing station/day. "
-                "REQUIRED arguments: 'stations' = LIST of IAGA codes, e.g. ['IRT'] "
-                "(this is NOT a frame handle); 'dates' = list of YYYY-MM-DD shared by "
-                "all stations, e.g. ['2024-09-12']. Give the component as "
-                "'component' = one string, e.g. 'H' ('components' = ['H'] also works). "
-                "This tool does NOT accept 'df1'/'df2'. Correct call: "
-                "{\"stations\": [\"IRT\"], \"dates\": [\"2024-09-12\"], "
-                "\"component\": \"H\", \"title\": \"Сравнение\"}. "
-                "DO NOT USE for two days of one station (use plot_comparison) or to "
-                "plot solar-wind Bz (align it with apply_physics_formula first). "
-                "ЗАПРЕЩЕНО использовать для сравнения данных солнечного ветра и "
-                "магнитного поля Земли -- для космической погоды есть ТОЛЬКО "
-                "plot_space_weather_comparison. Этот инструмент принимает аргументы "
-                "'stations' (список кодов) и 'dates'; аргументы 'df1'/'df2' НЕ "
-                "СУЩЕСТВУЮТ и вызовут ошибку."
+                "Draw ONE component from SEVERAL stations on ONE chart (per-station nT "
+                "offset; x axis UT/LT/MLT; north-first; auto-fetches missing days). "
+                "REQUIRED: 'stations' = LIST of IAGA codes, e.g. ['IRT'] (NOT a frame "
+                "handle); 'dates' = list of YYYY-MM-DD, e.g. ['2024-09-12']; "
+                "'component' = one string, e.g. 'H'. 'df1'/'df2' DO NOT EXIST here. "
+                "Correct call: {\"stations\": [\"IRT\"], \"dates\": [\"2024-09-12\"], "
+                "\"component\": \"H\"}. Two days of one station → plot_comparison. "
+                "Earth-vs-solar-wind → ONLY plot_space_weather_comparison."
             ),
             "parameters": {
                 "type": "object",
@@ -962,33 +997,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "plot_space_weather_comparison",
             "description": (
-                "КРИТИЧЕСКИ ВАЖНО: ИСПОЛЬЗУЙ ЭТОТ ИНСТРУМЕНТ, если нужно сравнить "
-                "данные Земли и космоса, то есть компоненты Земли (H, D, I, "
-                "dst_proxy) с данными солнечного ветра (Bz, V, By, Np). Например: "
-                "'построй график сравнения компоненты H и Bz' или 'сравни данные "
-                "Земли и космоса'. Dual-axis chart: a GROUND magnetometer component "
-                "(left axis, e.g. H or dst_proxy) vs SOLAR-WIND components (right "
-                "axis, e.g. Bz and V); the L1 data is aligned to the observatory "
-                "clock. DO NOT substitute it with plot_overlay (several stations) or "
-                "plot_comparison (two days of one station) -- they cannot mix ground "
-                "and solar-wind columns. ВАЖНО, перед вызовом убедитесь, что вы: "
-                "(1) скачали обсерваторию fetch_observatory_data (raw:<station>:<дата>); "
-                "(2) посчитали локальный Dst-прокси apply_physics_formula("
-                "metric='dst_proxy') (derived:<station>:<дата>); "
-                "(3) скачали солнечный ветер fetch_solar_wind (sw:omni:<дата>). "
-                "ground_component должен быть одним из: H, dst_proxy, dH_dt. "
-                "НЕ используйте 'Dst' -- это глобальный индекс Kyoto WDC, а не "
-                "локальный компонент.\n\n"
-                "EXAMPLE OF CORRECT USAGE:\n"
+                "КРИТИЧЕСКИ ВАЖНО: используй для сравнения Земли и космоса -- "
+                "компонент Земли (H, dst_proxy) с солнечным ветром (Bz, V, By, Np). "
+                "Dual-axis: GROUND component (left) vs SOLAR-WIND components (right); "
+                "L1 aligned to the observatory clock. НЕ заменяй plot_overlay/"
+                "plot_comparison -- они не смешивают Землю и ветер. Перед вызовом: "
+                "(1) fetch_observatory_data (raw:<station>:<дата>); (2) apply_physics_"
+                "formula(metric='dst_proxy'); (3) fetch_solar_wind (sw:omni:<дата>). "
+                "ground_component: H, dst_proxy или dH_dt. НЕ 'Dst' — это глобальный "
+                "индекс Kyoto, не компонент.\n"
+                "EXAMPLE:\n"
                 "{\n"
                 "  \"ground_df_descriptor\": \"derived:irt:2024-09-12\",\n"
                 "  \"solar_wind_df_descriptor\": \"sw:omni:2024-09-12\",\n"
                 "  \"ground_component\": \"H\",\n"
-                "  \"solar_wind_components\": [\"Bz\", \"V\"],\n"
-                "  \"title\": \"Сравнение Земли и Космоса\"\n"
+                "  \"solar_wind_components\": [\"Bz\", \"V\"]\n"
                 "}\n"
-                "WARNING: NEVER use 'frame_handle', 'df1', 'df2', or 'stations'. "
-                "Use EXACTLY 'ground_df_descriptor' and 'solar_wind_df_descriptor'."
+                "WARNING: NOT 'frame_handle', 'df1', 'df2', 'stations' -- use EXACTLY "
+                "'ground_df_descriptor' and 'solar_wind_df_descriptor'."
             ),
             "parameters": {
                 "type": "object",
@@ -1263,6 +1289,7 @@ TOOL_SELECTION: dict[str, list[str]] = {
     ],
     "fetch_solar_wind": ["fetch_solar_wind", "fetch_geomagnetic_indices", "apply_physics_formula"],
     "fetch_geomagnetic_indices": ["fetch_geomagnetic_indices", "apply_physics_formula"],
+    "calculate_eej_index": ["calculate_eej_index"],
     "get_noaa_space_weather_context": ["get_noaa_space_weather_context"],
     "fetch_supermag_data": [
         "fetch_supermag_data",
@@ -1402,8 +1429,18 @@ _QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (
         ("sq", "gic", "dst", "coupling", "ssc", "физик", "индекс", "ey", "bz", "связи",
          "спокойн", "базис", "космической погод", "solar", "буря", "storm", "kp",
-         "omni", "солнечн"),
+         "omni", "солнечн", "burton", "бёртон", "акaсофу", "akasofu", "epsilon",
+         "эпсилон", "энерговклад", "энергия", "substorm_onset", "onset", "gic_risk",
+         "трансформатор", "power grid", "dh/dt", "dH/dt", "суббуря старт", "sml drop"),
         ("apply_physics_formula", "fetch_solar_wind", "fetch_geomagnetic_indices"),
+    ),
+    (
+        # EEJ is a two-station product with its own tool; the generic "электроджет"
+        # keyword above points at SuperMAG, which cannot compute an H difference, so
+        # this entry maps the electrojet/EEJ/equatorial words onto the dedicated tool.
+        ("eej", "экваториальный электроджет", "equatorial electrojet",
+         "h-разниц", "электроджет", "electrojet"),
+        ("calculate_eej_index",),
     ),
     (
         ("mlt", "магнитное время", "локальн", "гражданск", "местное время", "координ",
@@ -4931,6 +4968,116 @@ _SOLAR_WIND_SCALAR_METRICS = ("burton_coupling", "akasofu_epsilon")
 #: Metrics that need a second frame (the off-equator reference station).
 _TWO_FRAME_METRICS = ("eej_index",)
 
+#: Per-metric requirements on ``external_params``, checked before dispatch.
+#:
+#: A model that reached for these new metrics was still judged by the old
+#: ``ey_coupling`` rule, which only ever looked for ``V``/``Bz``. That silently
+#: accepted a Burton call missing ``Np``/``Dst`` and then failed deep in the
+#: engine, or refused an Akasofu call that legitimately wanted ``Bx``/``By``. The
+#: table below names, per metric, the aliases that satisfy each logical input and
+#: whether the input may instead be a column of ``df_descriptor`` (a string).
+#:
+#: * ``required`` maps a logical name -> the aliases that count as "present";
+#:   every logical name must be satisfied or the call is refused with a
+#:   ``missing_external_params`` that lists exactly what is missing.
+#: * any string value is allowed when it names a real column of the frame, so
+#:   ``{'V': 'V'}`` reads the observatory frame's own column (validated against
+#:   ``df.columns``); unknown strings are refused rather than forwarded.
+_EXTERNAL_PARAM_SPECS: dict[str, dict[str, Any]] = {
+    "burton_coupling": {
+        "required": {
+            "Np": ("np", "n_p", "density", "n"),
+            "V": ("v", "v_sw", "vsw", "speed", "solar_wind_speed"),
+            "Bz": ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"),
+            "Dst": ("dst", "dst_current", "current_dst", "dst_now"),
+        },
+        "allow_handle": True,
+    },
+    "akasofu_epsilon": {
+        "required": {
+            "V": ("v", "v_sw", "vsw", "speed", "solar_wind_speed"),
+            "Bx": ("bx", "b_x", "bx_gsm", "bxgsm", "b_x_gsm"),
+            "By": ("by", "b_y", "by_gsm", "bygsm", "b_y_gsm"),
+            "Bz": ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"),
+        },
+        "allow_handle": True,
+    },
+    "peak_dhdt": {"required": {}, "allow_handle": False},
+    "substorm_onset": {"required": {}, "allow_handle": False},
+    "eej_index": {"required": {}, "allow_handle": False},
+}
+
+
+def _validate_external_params(
+    metric: str,
+    external: dict[str, Any] | None,
+    frame: pd.DataFrame,
+    *,
+    handle_provided: bool,
+) -> dict[str, Any] | None:
+    """Refuse an ``external_params`` payload that cannot satisfy *metric*.
+
+    Returns ``None`` when the payload is acceptable, else an error dict. The
+    accepted shapes are:
+
+    * a stored solar-wind handle (``{'solar_wind': 'sw:omni:...'}``) for the two
+      solar-wind metrics -- the handle supplies every input, so the per-key check
+      is skipped;
+    * numbers for each required input;
+    * column names of the frame the call targets, so ``{'V': 'V'}`` is legal when
+      the frame really has a ``V`` column.
+
+    A string that is neither a resolvable column nor a handle is refused: the
+    engine would otherwise treat it as a numeric literal and return a confusing
+    ``invalid_external_params`` far from the mistake.
+    """
+    spec = _EXTERNAL_PARAM_SPECS.get(metric)
+    if spec is None:
+        return None
+
+    required: dict[str, tuple[str, ...]] = spec.get("required", {})
+    if not required:
+        return None
+
+    external = external if isinstance(external, dict) else {}
+    if spec.get("allow_handle") and handle_provided:
+        return None
+
+    columns = {str(c).strip().lower() for c in frame.columns}
+    missing: list[str] = []
+    for logical, aliases in required.items():
+        value = pengine._first_param(external, aliases)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing.append(logical)
+            continue
+        if isinstance(value, str):
+            # A string must name a real column; numbers stay numbers.
+            if value.strip().lower() not in columns:
+                return _error(
+                    "invalid_external_params",
+                    f"external_params['{logical}']={value!r} is not a number and "
+                    f"not a column of the frame.",
+                    missing=[logical],
+                    available=sorted(frame.columns),
+                    hint=(
+                        f"Pass a number for {logical!r} or the exact name of a "
+                        f"column of df_descriptor. Available columns: "
+                        f"{sorted(frame.columns)}."
+                    ),
+                )
+    if missing:
+        return _error(
+            "missing_external_params",
+            f"metric={metric!r} needs external_params with: {', '.join(missing)}.",
+            missing=missing,
+            hint=(
+                f"Provide {missing} as numbers, e.g. "
+                f"{{'Np': 5, 'V': 450, 'Bz': -10, 'Dst': -30}}, or point at a "
+                f"solar-wind handle with {{'solar_wind': 'sw:omni:<date>'}}."
+            ),
+        )
+    return None
+
 #: Spellings a model reaches for that mean the same metric. 'dH_dt' is the
 #: physical name of the GIC proxy, so it is accepted and folded onto 'gic'
 #: rather than refused as an unknown metric.
@@ -4962,6 +5109,26 @@ _PHYSICS_METRIC_ALIASES: dict[str, str] = {
 _SOLAR_WIND_HANDLE_KEYS = (
     "solar_wind", "solar_wind_handle", "solar_wind_frame", "sw", "sw_handle",
 )
+
+
+def _external_handle_provided(args: dict[str, Any], external: dict[str, Any] | None) -> bool:
+    """True when the call points at a stored solar-wind frame by handle.
+
+    The handle can ride in ``external_params`` under one of
+    :data:`_SOLAR_WIND_HANDLE_KEYS` or as a top-level ``solar_wind``/
+    ``solar_wind_handle`` argument. When it does, the per-key requirement check
+    is skipped: the handle is what supplies ``Np``/``V``/``Bz``.
+    """
+    for key in ("solar_wind_handle", "solar_wind"):
+        candidate = args.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return True
+    if isinstance(external, dict):
+        for key in _SOLAR_WIND_HANDLE_KEYS:
+            candidate = external.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return True
+    return False
 
 
 def _resolve_coupling_external(
@@ -5069,6 +5236,33 @@ def _strict_argument_check(
             ),
         )
     return None
+
+
+def _materialize_external_columns(
+    external: dict[str, Any] | None, frame: pd.DataFrame
+) -> dict[str, Any] | None:
+    """Replace string values that name frame columns with that column's mean.
+
+    Task wording allows ``external_params`` to carry *either* numbers *or* the
+    names of columns of ``df_descriptor``. The scalar-based Burton/Akasofu
+    formulas cannot consume a whole column, so a column name is reduced to its
+    finite mean -- exactly the same treatment a stored solar-wind handle gets in
+    :func:`_resolve_scalar_solar_wind`. Numeric values pass through untouched.
+    """
+    if not isinstance(external, dict):
+        return external
+    lookup = {str(c).strip().lower(): c for c in frame.columns}
+    out: dict[str, Any] = {}
+    for key, value in external.items():
+        if isinstance(value, str) and value.strip():
+            column = lookup.get(value.strip().lower())
+            if column is not None:
+                numbers = pd.to_numeric(frame[column], errors="coerce")
+                numbers = numbers[np.isfinite(numbers)]
+                out[key] = float(numbers.mean()) if not numbers.empty else None
+                continue
+        out[key] = value
+    return out
 
 
 def _resolve_scalar_solar_wind(
@@ -5187,6 +5381,16 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
     if err:
         return err, f"apply_physics_formula failed: {err.get('error')}"
 
+    # Validate external_params against the metric's own requirements before
+    # dispatch, so a missing Np/Dst is named here rather than surfacing as a
+    # generic engine error, and a bare column name is accepted as an input.
+    handle_provided = _external_handle_provided(args, external)
+    ext_err = _validate_external_params(
+        metric, external, frame, handle_provided=handle_provided
+    )
+    if ext_err is not None:
+        return ext_err, f"apply_physics_formula failed: {ext_err.get('error')}"
+
     # ey_coupling is the only metric with a second, required argument. It accepts
     # scalars, a stored solar-wind handle, or already-aligned V/Bz arrays.
     if metric == "ey_coupling":
@@ -5195,6 +5399,7 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
             return sw_err, f"apply_physics_formula failed: {sw_err.get('error')}"
         result = func(frame, external)
     elif metric in _SOLAR_WIND_SCALAR_METRICS:
+        external = _materialize_external_columns(external, frame)
         external, sw_err = _resolve_scalar_solar_wind(args, external, frame, store)
         if sw_err is not None:
             return sw_err, f"apply_physics_formula failed: {sw_err.get('error')}"
@@ -5319,6 +5524,80 @@ def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
             f"{info.get('eej_mean_nT')} нТ -> хэндл {slot!r}."
         )
     return f"✅ {metric} рассчитан -> хэндл {slot!r}."
+
+
+def _handle_calculate_eej_index(
+    args: dict[str, Any], store: FrameStore
+) -> tuple[Any, str]:
+    """Fetch both stations and return the equatorial-electrojet H difference.
+
+    EEJ is a *two-station* product: the equatorial station's H minus a station
+    6-8 degrees away in latitude, so the Sq variation largely cancels. Feeding one
+    frame to ``apply_physics_formula`` could never express that, so this tool owns
+    the whole job -- it downloads both days, aligns them, and calls the engine.
+    """
+    strict = _strict_argument_check(
+        "calculate_eej_index",
+        args,
+        allowed=("equatorial_station", "reference_station", "start_date", "end_date"),
+        required=("equatorial_station", "reference_station", "start_date"),
+        handle_example="IRT",
+        missing_hint=(
+            "CRITICAL: calculate_eej_index needs 'equatorial_station' and "
+            "'reference_station' (three-letter IAGA codes, e.g. 'IRT' and 'ABG') "
+            "plus 'start_date' (YYYY-MM-DD)."
+        ),
+    )
+    if strict is not None:
+        return strict, f"calculate_eej_index refused: {strict['error']}"
+
+    equator = str(args.get("equatorial_station") or "").strip().upper()
+    reference = str(args.get("reference_station") or "").strip().upper()
+    start = str(args.get("start_date") or "").strip()
+    end = str(args.get("end_date") or start).strip() or start
+
+    def _fetch(code: str) -> tuple[pd.DataFrame | None, dict[str, Any] | None]:
+        if OFFLINE:
+            return _offline_frame(), None
+        fetched = loader.fetch_observatory_data(
+            station_code=code,
+            start_date=start,
+            end_date=end,
+            data_type=args.get("data_type") or "definitive",
+            samples_per_day=args.get("samples_per_day") or "Minute",
+        )
+        if loader.is_error(fetched):
+            return None, fetched
+        return fetched, None
+
+    eq_frame, eq_err = _fetch(equator)
+    if eq_err is not None:
+        return eq_err, f"calculate_eej_index failed fetching {equator}: {eq_err.get('error')}"
+    ref_frame, ref_err = _fetch(reference)
+    if ref_err is not None:
+        return ref_err, f"calculate_eej_index failed fetching {reference}: {ref_err.get('error')}"
+
+    result = pengine.calculate_eej_index(eq_frame, {"reference": ref_frame})
+    if pengine.is_error(result):
+        return result, f"calculate_eej_index failed: {result.get('error')}"
+
+    slot = FrameStore._normalise(f"derived:eej:{equator.lower()}_{reference.lower()}:{start}")
+    store.put(slot, result)
+    info = (result.attrs or {}).get("eej", {})
+    note = (
+        f"✅ EEJ-индекс ({equator} − {reference}): пик {info.get('eej_nT')} нТ, "
+        f"среднее {info.get('eej_mean_nT')} нТ -> хэндл {slot!r}."
+    )
+    payload = {
+        "ok": True,
+        "metric": "eej_index",
+        "equatorial_station": equator,
+        "reference_station": reference,
+        "frame_handle": slot,
+        "available_handles": store.names(),
+        "result": note,
+    }
+    return payload, note
 
 
 #: Components plot_overlay can draw straight from an observatory frame (H/D/I
@@ -5817,6 +6096,7 @@ HANDLERS: dict[str, Handler] = {
     "plot_overlay": _handle_plot_overlay,
     "plot_space_weather_comparison": _handle_plot_space_weather_comparison,
     "apply_physics_formula": _handle_apply_physics_formula,
+    "calculate_eej_index": _handle_calculate_eej_index,
 }
 
 
