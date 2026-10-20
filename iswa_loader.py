@@ -4,43 +4,58 @@ Two ISWA products answer the two questions this module exists for:
 
 * **"How does the storm look right now, globally?"** -- a Ground Magnetic
   Perturbation Map, an OGC WMS ``GetMap`` picture of the whole globe.
+  **(Decommissioned.)**
 * **"What comes next?"** -- a merged Dst/Kp outlook.
 
-Endpoints actually used
------------------------
-1. ``https://iswa.gsfc.nasa.gov/wmts/wmts.cgi`` (WMS 1.1.1, ``GetMap``,
-   ``LAYERS=ground_mag_perturbation``, ``FORMAT=image/png``) is the endpoint the
-   brief names, and :func:`build_wms_url` builds exactly that request. Probed
-   2026-10-19: the path answers HTTP 404 to a benign query and HTTP 403 to
-   *any* query carrying WMS keywords -- the CGI script is gone and NASA's WAF
-   blocks the pattern before Apache would reach it -- so ``GetMap`` cannot
-   return a picture from any network today. The loader therefore treats
-   reachability as an outcome, not an assumption: an unreachable or refused
-   response is ``iswa_unavailable``, a WMS ``ServiceExceptionReport`` (the
-   fault report a *working* WMS returns when it has no image for a TIME) or an
-   empty body is ``no_data``. The offline tests pin the URL shape and both
-   classifications; the ``network``-marked live test skips, with the reason in
-   the skip message, while the endpoint answers 403/404.
-2. The live ISWA data system is the NASA CCMC HAPI service at
-   ``https://iswa.ccmc.gsfc.nasa.gov/hapi`` -- ``data?id=<dataset>&time.min=
-   <ISO>&time.max=<ISO>&format=json``. Note the ``time.min``/``time.max``
-   spelling: this server does not accept the HAPI 2.0 ``start``/``stop`` pair,
-   it answers ``code 1400: 'time.min' parameter is required``. The two datasets
-   behind :func:`get_dst_kp_forecast` are:
+The WMS layer is retired
+------------------------
+NASA CCMC migrated ISWA to ``https://iswa.ccmc.gsfc.nasa.gov/`` and the public
+``ground_mag_perturbation`` WMS layer did not come with it. Checked 2026-10-20
+against the new system itself:
 
-   * ``NOAA_KP_P3H`` -- NOAA SWPC 3-hourly Kp with ``Kp_observed``,
-     ``Kp_estimated`` and ``Kp_predicted`` columns. Its catalogue stops three
-     days past "now", which *is* the forecast: the future rows carry only the
-     predicted/estimated columns.
-   * ``dst_quicklook`` -- the WDC Kyoto quicklook Dst, hourly, current to
-     within an hour of now (verified: stopDate tracks the current day).
+* its full catalog (``https://iswa.ccmc.gsfc.nasa.gov/api/info``, 1351
+  datafeeds) has no ``perturbation``/``ground magnet`` feed, no ``/ground``
+  datatree, and no ``wms`` protocol at all (the protocols are ftp/https/mv/sftp);
+* every WMS-shaped path on the new domain -- ``/wms``, ``/iswa/wms``,
+  ``/geoserver/wms``, ``/maps/wms``, ``/app/wms`` -- answers HTTP 404 bare and
+  HTTP 403 to ``SERVICE=WMS&REQUEST=GetCapabilities`` (NASA's WAF refuses the
+  keyword before Apache sees it);
+* the new app serves imagery through a servlet/REST file API
+  (``FilesInRangeServlet`` / ``api/search`` -> files under ``iswa_data_tree``),
+  not map tiles, and that API exposes no ground-perturbation product.
 
-   No ISWA dataset forecasts Dst. The SWMF real-time Dst series
-   (``SWMF2011_RT_DST_P1M`` stops 2025-08-21, ``SWMF2023_RT_GMlog_P1M`` stops
-   2025-12-16, ``SWMF2008_RT_DST_P1M`` stopped in 2017) are all stale, so
-   ``dst`` in the payload is the Kyoto *nowcast* and is ``None`` for
-   timestamps ahead of the last observation. ``sources`` says exactly that;
-   the loader never invents a Dst prediction.
+So there is no endpoint to retry against: the layer is *gone*, not flaky.
+:func:`get_ground_perturbation_map` therefore answers ``service_decommissioned``
+immediately -- no request is sent -- and its ``fallback_hint`` points the model
+at the SuperMAG indices it already has (``fetch_supermag_data(data_type=
+'indices')`` for SME/SML/SMU, the same science question) and at
+:func:`get_iswa_forecast` for the Dst/Kp outlook. The live WMS client is kept
+intact and reachable via ``decommissioned=False``: a deployment pointed at a
+still-live map service (or a restored layer) fetches a real PNG with exactly
+the documented request, and a 403/404 on that path also resolves to
+``service_decommissioned``. ``build_wms_url`` still builds the documented
+request, pinned by offline tests.
+
+The live ISWA data system is the NASA CCMC HAPI service at
+``https://iswa.ccmc.gsfc.nasa.gov/hapi`` -- ``data?id=<dataset>&time.min=
+<ISO>&time.max=<ISO>&format=json``. Note the ``time.min``/``time.max``
+spelling: this server does not accept the HAPI 2.0 ``start``/``stop`` pair,
+it answers ``code 1400: 'time.min' parameter is required``. The two datasets
+behind :func:`get_dst_kp_forecast` are:
+
+* ``NOAA_KP_P3H`` -- NOAA SWPC 3-hourly Kp with ``Kp_observed``,
+  ``Kp_estimated`` and ``Kp_predicted`` columns. Its catalogue stops three
+  days past "now", which *is* the forecast: the future rows carry only the
+  predicted/estimated columns.
+* ``dst_quicklook`` -- the WDC Kyoto quicklook Dst, hourly, current to
+  within an hour of now (verified: stopDate tracks the current day).
+
+No ISWA dataset forecasts Dst. The SWMF real-time Dst series
+(``SWMF2011_RT_DST_P1M`` stops 2025-08-21, ``SWMF2023_RT_GMlog_P1M`` stops
+2025-12-16, ``SWMF2008_RT_DST_P1M`` stopped in 2017) are all stale, so
+``dst`` in the payload is the Kyoto *nowcast* and is ``None`` for
+timestamps ahead of the last observation. ``sources`` says exactly that;
+the loader never invents a Dst prediction.
 
 Column selection for Kp
 -----------------------
@@ -126,6 +141,24 @@ _UNAVAILABLE_HINT = (
     "as-is (no credentials, no session): check connectivity and retry. For the "
     "global storm picture meanwhile use fetch_supermag_data(data_type='indices') "
     "for SME/SML/SMU, and get_iswa_forecast() for the Dst/Kp outlook."
+)
+
+#: What the public WMS map layer became after NASA CCMC migrated ISWA to
+#: ``iswa.ccmc.gsfc.nasa.gov``: the old ``ground_mag_perturbation`` layer is
+#: gone. Its full catalog (``/api/info``, 1351 datafeeds) carries no
+#: ground-perturbation map feed at all, no WMS protocol, and every WMS-shaped
+#: path on the new domain is answered with 403 by the WAF -- so there is
+#: nothing to retry against. The map tool therefore degrades gracefully and
+#: points the model at the SuperMAG indices it already has.
+_DECOMMISSIONED_MESSAGE = (
+    "NASA ISWA has decommissioned the public WMS ground magnetic perturbation "
+    "map layer."
+)
+_DECOMMISSIONED_FALLBACK = (
+    "For the global substorm picture, use "
+    "fetch_supermag_data(data_type='indices') to get SME/SML/SMU indices, which "
+    "serve the exact same scientific purpose. For the Dst/Kp outlook use "
+    "get_iswa_forecast()."
 )
 
 _FORECAST_HINT = (
@@ -403,6 +436,30 @@ def save_map_png(
     }
 
 
+def _decommissioned(timestamp: str = "", detail: str = "") -> dict[str, Any]:
+    """The honest answer for the retired WMS map layer (no request is sent).
+
+    After the ISWA migration the layer does not exist on any domain, so the
+    tool reports the decommission rather than dressing a dead endpoint up as a
+    transient outage. ``fallback_hint`` is what the model is meant to act on.
+    The payload is kept to exactly the four documented keys -- ``ok``,
+    ``error``, ``message``, ``fallback_hint`` -- so its JSON fits under the
+    400-character result cap and the hint is never truncated away from the
+    model. *timestamp* and *detail* are folded into the message instead of
+    becoming extra keys that would push it over the cap.
+    """
+    message = _DECOMMISSIONED_MESSAGE
+    if timestamp:
+        message = f"{message} Requested instant: {timestamp}."
+    if detail:
+        message = f"{message} ({detail})"
+    return _error(
+        "service_decommissioned",
+        message,
+        fallback_hint=_DECOMMISSIONED_FALLBACK,
+    )
+
+
 def get_ground_perturbation_map(
     timestamp: str,
     bbox: tuple = (-180, -90, 180, 90),
@@ -414,6 +471,7 @@ def get_ground_perturbation_map(
     timeout: int = DEFAULT_TIMEOUT,
     retries: int = DEFAULT_MAX_RETRIES,
     output_dir: str | Path | None = None,
+    decommissioned: bool = True,
 ) -> dict[str, Any]:
     """Fetch one ISWA ground magnetic perturbation map and save it as a PNG.
 
@@ -426,11 +484,20 @@ def get_ground_perturbation_map(
 
         * ``{"ok": False, "error": "invalid_input", ...}`` -- the arguments
           could not be interpreted (no request was sent);
-        * ``{"ok": False, "error": "iswa_unavailable", ...}`` -- the endpoint
-          is unreachable, refused, or answered with something that is not a
-          picture (this is what the documented endpoint returns today);
+        * ``{"ok": False, "error": "service_decommissioned", ...}`` -- the
+          public WMS map layer was retired by NASA CCMC during the ISWA
+          migration. This is the answer the live tool gives today, together
+          with ``fallback_hint`` naming SuperMAG indices and the Dst/Kp
+          forecast. No network request is made for it;
+        * ``{"ok": False, "error": "iswa_unavailable", ...}`` -- a request was
+          sent but the endpoint was unreachable, refused, or answered with
+          something that is not a picture;
         * ``{"ok": False, "error": "no_data", ...}`` -- the service answered
           properly but has no image for that TIME.
+
+    The WMS client is kept intact (``decommissioned=False``): a deployment that
+    runs against a still-live map service can fetch a real PNG, and the request
+    builder stays the documented one. The default is the honest degraded path.
     """
     try:
         iso = iso_z(parse_timestamp(timestamp))
@@ -447,6 +514,12 @@ def get_ground_perturbation_map(
             ),
         )
 
+    if decommissioned:
+        # No timestamp and no detail: the payload must stay under the 400-char
+        # result cap so fallback_hint survives whole, and the handler's note
+        # already names the requested instant.
+        return _decommissioned()
+
     url = build_wms_url(iso, bbox_t, w, h, layer=layer, endpoint=endpoint)
     try:
         resp = _request(url, timeout=timeout, retries=retries)
@@ -454,6 +527,9 @@ def get_ground_perturbation_map(
         log.warning("ISWA WMS unreachable at %s: %s", url, exc)
         return _unavailable(str(exc))
 
+    if resp.status_code in (403, 404):
+        # The WAF/dead CGI spelling of the same truth: the layer is gone.
+        return _decommissioned(detail=f"{url} -> HTTP {resp.status_code}")
     if resp.status_code != 200:
         return _unavailable(f"{url} -> HTTP {resp.status_code}")
 

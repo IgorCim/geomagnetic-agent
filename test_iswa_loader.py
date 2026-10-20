@@ -9,19 +9,25 @@ with a small stand-in and feed the exact shapes the live endpoints return (a
 WMS picture or fault report, a HAPI JSON document). The ``network``-marked
 tests hit the live ISWA endpoints for real and double as a health check.
 
-Endpoint note (Phase 6.4)
---------------------------
+Endpoint note (Phase 6.4 / decommissioning)
+--------------------------------------------
 The brief named ``https://iswa.gsfc.nasa.gov/wmts/wmts.cgi`` (WMS 1.1.1,
 ``REQUEST=GetMap``, ``LAYERS=ground_mag_perturbation``, ``FORMAT=image/png``).
-Probed 2026-10-19: that path answers HTTP 404 to a benign query and HTTP 403
-to *any* query carrying WMS keywords -- the CGI script is gone behind NASA's
-WAF. The loader builds exactly the documented request (pinned below) and
-classifies what comes back; the live GetMap test skips with the probe result
-as its reason while the endpoint stays dead, and runs full assertions the day
-it answers with a PNG. The live Dst/Kp forecast runs against the ISWA HAPI
-service at ``iswa.ccmc.gsfc.nasa.gov``, which does answer -- verified
-2026-10-19 with the ``time.min``/``time.max`` spelling this server requires
-(the HAPI 2.0 ``start``/``stop`` pair is rejected with ``status.code 1400``).
+That layer is now **decommissioned**: NASA CCMC migrated ISWA to
+``iswa.ccmc.gsfc.nasa.gov`` and the public ground-magnetic-perturbation WMS
+layer did not come with it. Checked 2026-10-20 against the new system: its
+catalog (``/api/info``, 1351 datafeeds) has no perturbation/ground-map feed and
+no ``wms`` protocol, and every WMS-shaped path on the new domain returns 403 to
+``SERVICE=WMS`` (the WAF refuses the keyword). So
+:func:`iswa_loader.get_ground_perturbation_map` answers
+``service_decommissioned`` immediately, without any network request, carrying a
+``fallback_hint`` that points at ``fetch_supermag_data(data_type='indices')``.
+``build_wms_url`` still builds the documented request (pinned below) and the
+live WMS client stays reachable via ``decommissioned=False`` for a still-live
+service. The live forecast test runs against the ISWA HAPI service at
+``iswa.ccmc.gsfc.nasa.gov``, which does answer -- verified with the
+``time.min``/``time.max`` spelling this server requires (the HAPI 2.0
+``start``/``stop`` pair is rejected with ``status.code 1400``).
 """
 
 from __future__ import annotations
@@ -199,9 +205,47 @@ def test_build_wms_url_rejects_impossible_pixel_sizes(size):
 
 
 # --------------------------------------------------------------------------- #
-# offline: map classification (what each response shape means)
+# offline: the map layer is decommissioned (the live default), and the WMS
+# client behind it still classifies what a still-live service would answer
 # --------------------------------------------------------------------------- #
+def test_map_default_returns_service_decommissioned_without_network(monkeypatch):
+    """The documented, honest answer for the retired layer -- and no request."""
+
+    def forbidden(url, **kwargs):
+        raise AssertionError("the decommissioned layer must not be probed")
+
+    monkeypatch.setattr(iswa, "_request", forbidden)
+    res = iswa.get_ground_perturbation_map("2024-09-12T12:00:00Z")
+    assert iswa.is_error(res)
+    assert res["error"] == "service_decommissioned"
+    assert "decommissioned" in res["message"]
+    assert "ground magnetic perturbation" in res["message"]
+    assert "fetch_supermag_data(data_type='indices')" in res["fallback_hint"]
+    assert "SME/SML/SMU" in res["fallback_hint"]
+    assert "get_iswa_forecast()" in res["fallback_hint"]
+
+
+def test_map_decommissioned_still_validates_its_arguments(monkeypatch):
+    """A malformed call is invalid_input, not a decommission notice (no request)."""
+
+    def forbidden(url, **kwargs):
+        raise AssertionError("no request may be sent")
+
+    monkeypatch.setattr(iswa, "_request", forbidden)
+    cases = [
+        {"timestamp": "вчера"},
+        {"timestamp": "2024-09-12T12:00:00Z", "bbox": (0, 0, 999, 90)},
+        {"timestamp": "2024-09-12T12:00:00Z", "width": 0},
+        {"timestamp": None},
+    ]
+    for args in cases:
+        res = iswa.get_ground_perturbation_map(**args)
+        assert iswa.is_error(res) and res["error"] == "invalid_input", args
+        assert res["hint"]
+
+
 def test_live_png_is_saved_with_the_documented_payload(monkeypatch, tmp_path):
+    """A still-live service (``decommissioned=False``) still saves a real PNG."""
     urls = []
 
     def fake(url, **kwargs):
@@ -209,8 +253,9 @@ def test_live_png_is_saved_with_the_documented_payload(monkeypatch, tmp_path):
         return _Resp(content=iswa.synthetic_map_png(32, 16), ctype="image/png")
 
     monkeypatch.setattr(iswa, "_request", fake)
-    res = iswa.get_ground_perturbation_map("2024-09-12T12:00:00Z",
-                                           output_dir=tmp_path)
+    res = iswa.get_ground_perturbation_map(
+        "2024-09-12T12:00:00Z", output_dir=tmp_path, decommissioned=False
+    )
 
     assert res["ok"] is True
     assert set(res) == {"ok", "map_path", "metadata"}
@@ -228,14 +273,27 @@ def test_live_png_is_saved_with_the_documented_payload(monkeypatch, tmp_path):
     assert "LAYERS=ground_mag_perturbation" in urls[0]
 
 
-@pytest.mark.parametrize("status", [401, 403, 404, 500])
-def test_map_http_error_is_iswa_unavailable(monkeypatch, status):
-    """403/404 are what NASA's WAF answers the documented endpoint today."""
+@pytest.mark.parametrize("status", [401, 500])
+def test_map_live_http_error_is_iswa_unavailable(monkeypatch, status):
     monkeypatch.setattr(iswa, "_request", lambda url, **kw: _Resp(status=status))
-    res = iswa.get_ground_perturbation_map("2024-09-12T12:00:00Z")
+    res = iswa.get_ground_perturbation_map(
+        "2024-09-12T12:00:00Z", decommissioned=False
+    )
     assert iswa.is_error(res) and res["error"] == "iswa_unavailable"
     assert f"HTTP {status}" in res["detail"]
     assert res["hint"]
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_map_live_403_404_resolve_to_service_decommissioned(monkeypatch, status):
+    """The WAF/dead-CGI spelling of the same truth: the layer is gone."""
+    monkeypatch.setattr(iswa, "_request", lambda url, **kw: _Resp(status=status))
+    res = iswa.get_ground_perturbation_map(
+        "2024-09-12T12:00:00Z", decommissioned=False
+    )
+    assert iswa.is_error(res) and res["error"] == "service_decommissioned"
+    assert f"HTTP {status}" in res["message"]
+    assert "SME/SML/SMU" in res["fallback_hint"]
 
 
 def test_map_dead_network_is_iswa_unavailable(monkeypatch):
@@ -243,7 +301,9 @@ def test_map_dead_network_is_iswa_unavailable(monkeypatch):
         raise ConnectionError("no route to host")
 
     monkeypatch.setattr(iswa, "_request", boom)
-    res = iswa.get_ground_perturbation_map("2024-09-12T12:00:00Z")
+    res = iswa.get_ground_perturbation_map(
+        "2024-09-12T12:00:00Z", decommissioned=False
+    )
     assert iswa.is_error(res) and res["error"] == "iswa_unavailable"
     assert "no route to host" in res["detail"]
 
@@ -253,7 +313,9 @@ def test_map_html_error_page_is_iswa_unavailable(monkeypatch):
     html = b"<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>"
     monkeypatch.setattr(iswa, "_request",
                         lambda url, **kw: _Resp(content=html, ctype="text/html"))
-    res = iswa.get_ground_perturbation_map("2024-09-12T12:00:00Z")
+    res = iswa.get_ground_perturbation_map(
+        "2024-09-12T12:00:00Z", decommissioned=False
+    )
     assert iswa.is_error(res) and res["error"] == "iswa_unavailable"
     assert "HTML" in res["detail"]
 
@@ -270,7 +332,9 @@ def test_map_service_exception_is_no_data(monkeypatch):
     )
     monkeypatch.setattr(iswa, "_request",
                         lambda url, **kw: _Resp(content=fault, ctype="text/xml"))
-    res = iswa.get_ground_perturbation_map("2024-09-12T12:00:00Z")
+    res = iswa.get_ground_perturbation_map(
+        "2024-09-12T12:00:00Z", decommissioned=False
+    )
     assert iswa.is_error(res) and res["error"] == "no_data"
     assert "No image available" in res["detail"]
     assert res["timestamp"] == "2024-09-12T12:00:00Z"
@@ -278,25 +342,10 @@ def test_map_service_exception_is_no_data(monkeypatch):
 
 def test_map_empty_body_is_no_data(monkeypatch):
     monkeypatch.setattr(iswa, "_request", lambda url, **kw: _Resp(content=b""))
-    res = iswa.get_ground_perturbation_map("2024-09-12T12:00:00Z")
+    res = iswa.get_ground_perturbation_map(
+        "2024-09-12T12:00:00Z", decommissioned=False
+    )
     assert iswa.is_error(res) and res["error"] == "no_data"
-
-
-def test_invalid_arguments_never_reach_the_network(monkeypatch):
-    def forbidden(url, **kwargs):
-        raise AssertionError("the loader must not send a malformed request")
-
-    monkeypatch.setattr(iswa, "_request", forbidden)
-    cases = [
-        {"timestamp": "вчера"},
-        {"timestamp": "2024-09-12T12:00:00Z", "bbox": (0, 0, 999, 90)},
-        {"timestamp": "2024-09-12T12:00:00Z", "width": 0},
-        {"timestamp": None},
-    ]
-    for args in cases:
-        res = iswa.get_ground_perturbation_map(**args)
-        assert iswa.is_error(res) and res["error"] == "invalid_input", args
-        assert res["hint"]
 
 
 # --------------------------------------------------------------------------- #
@@ -567,22 +616,23 @@ def test_selector_offers_the_forecast_for_an_outlook_question():
     assert len(picked) <= ac.TOOLS_PER_TASK
 
 
-def test_offline_map_handler_writes_a_real_png(monkeypatch, tmp_path):
+def test_offline_map_handler_reports_the_decommission(monkeypatch, tmp_path):
+    """Offline mirrors the live truth: the layer is gone, no PNG is written."""
     monkeypatch.setattr(ac, "OFFLINE", True)
     monkeypatch.setattr(iswa, "DEFAULT_OUTPUT_DIR", tmp_path)
 
     payload, note = ac._handle_iswa_perturbation_map(
         {"timestamp": "2024-09-12T12:00:00Z"}, ac.FrameStore()
     )
-    assert payload["ok"] is True
-    assert payload["metadata"]["timestamp"] == "2024-09-12T12:00:00Z"
-    assert payload["metadata"]["offline"] is True
-    path = Path(payload["map_path"])
-    assert path.exists() and path.read_bytes().startswith(b"\x89PNG")
+    assert iswa.is_error(payload)
+    assert payload["error"] == "service_decommissioned"
+    assert "fetch_supermag_data(data_type='indices')" in payload["fallback_hint"]
+    assert list(tmp_path.iterdir()) == []  # nothing was written
+    assert "service_decommissioned" in note
     assert "2024-09-12T12:00:00Z" in note
 
 
-def test_offline_map_handler_passes_bbox_and_size_through(monkeypatch, tmp_path):
+def test_offline_map_handler_passes_arguments_through_validation(monkeypatch, tmp_path):
     monkeypatch.setattr(ac, "OFFLINE", True)
     monkeypatch.setattr(iswa, "DEFAULT_OUTPUT_DIR", tmp_path)
 
@@ -591,12 +641,9 @@ def test_offline_map_handler_passes_bbox_and_size_through(monkeypatch, tmp_path)
          "width": 64, "height": 32},
         ac.FrameStore(),
     )
-    assert payload["metadata"]["bbox"] == [0.0, -60.0, 90.0, 60.0]
-    assert payload["metadata"]["width"] == 64
-    width, height = struct.unpack(
-        ">II", Path(payload["map_path"]).read_bytes()[16:24]
-    )
-    assert (width, height) == (64, 32)  # the image really is the requested size
+    # valid arguments still reach the decommission notice (no map is produced)
+    assert payload["error"] == "service_decommissioned"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_offline_map_handler_rejects_a_missing_timestamp(monkeypatch, tmp_path):
@@ -710,29 +757,58 @@ def test_prompt_advertises_both_iswa_tools_and_stays_in_budget():
     assert len(ac.SYSTEM_PROMPT) <= 3200
 
 
+def test_prompt_marks_the_map_decommissioned_and_points_at_supermag():
+    """The prompt must tell the model the map is gone and what to use instead."""
+    sp = ac.SYSTEM_PROMPT
+    assert "get_iswa_perturbation_map" in sp
+    assert "ДЕКОМИССИРОВАНА" in sp
+    # the fallback the agent should reach for
+    assert "fetch_supermag_data" in sp
+    assert "'indices'" in sp
+
+
 def test_total_prompt_budget_including_the_iswa_schemas():
     budget = ac.prompt_budget(ac.SYSTEM_PROMPT, ac.TOOL_SCHEMAS, ac.N_CTX)
     assert budget["est_tokens"] <= ac.N_CTX // 2, budget
+
+
+def test_decommissioned_payload_survives_compaction_with_its_fallback_hint():
+    """``fallback_hint`` is the whole point: the cap must not eat it."""
+    payload = iswa._decommissioned()
+    assert len(ac._dumps(payload)) <= ac.FRAME_SUMMARY_MAX_CHARS
+    compacted = ac._compact_tool_message(payload)
+    assert len(compacted) <= ac.FRAME_SUMMARY_MAX_CHARS
+    body = json.loads(compacted)
+    assert body["error"] == "service_decommissioned"
+    assert "fetch_supermag_data(data_type='indices')" in body["fallback_hint"]
+    assert body["fallback_hint"] == payload["fallback_hint"]  # untruncated
 
 
 # --------------------------------------------------------------------------- #
 # live network: the ISWA endpoints
 # --------------------------------------------------------------------------- #
 @pytest.mark.network
-def test_live_ground_perturbation_map_for_the_storm_day():
-    """The canonical storm instant; skips while NASA's WAF answers 403/404."""
+def test_live_ground_perturbation_map_reports_the_decommission():
+    """The map layer is retired for real, so the live tool says so, no request."""
     res = iswa.get_ground_perturbation_map("2024-09-12T12:00:00Z")
-    if iswa.is_error(res):
-        if res["error"] in ("iswa_unavailable", "no_data"):
-            pytest.skip(
-                f"ISWA WMS gives no image for 2024-09-12T12:00:00Z "
-                f"({res['error']}: {res.get('detail')}) -- probed dead 2026-10-19"
-            )
-        pytest.fail(f"unexpected map error: {res}")
-    assert res["ok"] is True
-    path = Path(res["map_path"])
-    assert path.exists() and path.read_bytes().startswith(b"\x89PNG")
-    assert res["metadata"]["timestamp"] == "2024-09-12T12:00:00Z"
+    assert iswa.is_error(res)
+    assert res["error"] == "service_decommissioned"
+    assert "fetch_supermag_data(data_type='indices')" in res["fallback_hint"]
+
+
+@pytest.mark.network
+def test_live_wms_client_is_still_wired(monkeypatch):
+    """``decommissioned=False`` still sends the documented request to the network.
+
+    The endpoint is dead, so a real call cannot return a picture; the point here
+    is that the live client path is intact -- it reaches the network and comes
+    back with an honest failure (unavailable or decommissioned), never a crash.
+    """
+    res = iswa.get_ground_perturbation_map(
+        "2024-09-12T12:00:00Z", decommissioned=False
+    )
+    assert iswa.is_error(res)
+    assert res["error"] in ("iswa_unavailable", "service_decommissioned", "no_data")
 
 
 @pytest.mark.network

@@ -165,13 +165,13 @@ BASE_PROMPT_COMPACT = (
     "4b. ВАЛИДАЦИЯ: dst_proxy/dH_dt сравнивай с Dst/Kp — "
     "fetch_geomagnetic_indices('idx:kyoto:<дата>'), затем plot_components"
     "(['Dst','Kp']).\n"
-    "4c. Космическая погода, предупреждения, бури, вспышки — "
-    "get_noaa_space_weather_context (query_type 'alerts'|'forecast'|"
-    "'solar_events').\n"
+    "4c. Космическая погода, бури — "
+    "get_noaa_space_weather_context ('alerts'|'forecast'|'solar_events').\n"
     "4d. Суббури: fetch_supermag_data — 'indices' (SME/SML/SMU) или "
     "'sites' (dX,dY,dZ).\n"
-    "4e. Карта возмущений и прогноз Dst/Kp: get_iswa_perturbation_map / "
-    "get_iswa_forecast.\n"
+    "4e. Dst/Kp — get_iswa_forecast. Карта возмущений "
+    "get_iswa_perturbation_map ДЕКОМИССИРОВАНА — вместо неё "
+    "fetch_supermag_data('indices').\n"
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
     "create_project, export_project, fetch_solar_wind, fetch_geomagnetic_indices, "
@@ -1143,9 +1143,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "get_iswa_perturbation_map",
             "description": (
-                "Карта наземных геомагнитных возмущений ISWA: глобальный снимок "
-                "WMS ground_mag_perturbation (PNG) на момент времени. Для численных "
-                "рядов станции — fetch_observatory_data."
+                "Карта наземных возмущений ISWA (WMS ground_mag_perturbation) — "
+                "ДЕКОМИССИРОВАНА: NASA CCMC удалила публичный WMS-слой при миграции, "
+                "инструмент вернёт service_decommissioned. Для глобальной картины "
+                "суббурь используй fetch_supermag_data(data_type='indices') (SME/SML/SMU)."
             ),
             "parameters": {
                 "type": "object",
@@ -1486,7 +1487,7 @@ _MODEL_PAYLOAD_KEYS = (
     "available_handles", "handle_aliases", "path", "plot", "metric", "result",
     "station", "date", "computed", "offline", "publication_state", "source",
     "query_type", "count", "summary", "max_kp", "max_scale", "max_scale_time",
-    "map_path", "metadata", "warnings",
+    "map_path", "metadata", "warnings", "fallback_hint",
 )
 
 
@@ -3156,19 +3157,20 @@ def _offline_iswa_map(
     width: Any = 1024,
     height: Any = 512,
 ) -> dict[str, Any]:
-    """A deterministic perturbation map for offline runs (no network at all).
+    """The offline answer for the retired map layer (mirrors the live one).
 
-    The picture is schematic -- a checkerboard, not the real disturbance field --
-    and ``metadata['offline']`` says so. It is written at the requested size by
-    the loader's own encoder, so offline the *file* is as real as the live one:
-    it opens in the same viewer, and the handler path (write, name, payload) is
-    the same code that a live PNG takes.
+    The WMS layer is decommissioned for real, so offline must not pretend a
+    picture exists -- a synthetic PNG here would teach the model that the map
+    works, which is exactly the mistake this phase removes. Offline reports the
+    same ``service_decommissioned`` payload the live loader returns, with the
+    same ``fallback_hint``, after validating the arguments so a malformed call
+    is still ``invalid_input``.
     """
     try:
-        w = int(width) if width is not None else 1024
-        h = int(height) if height is not None else 512
-        png = iswa.synthetic_map_png(w, h)
-        payload = iswa.save_map_png(png, timestamp, bbox, w, h)
+        iso = iswa.iso_z(iswa.parse_timestamp(timestamp))
+        iswa._norm_bbox(bbox)
+        iswa._norm_size(width, "width")
+        iswa._norm_size(height, "height")
     except ValueError as exc:
         return _error(
             "invalid_input",
@@ -3178,21 +3180,19 @@ def _offline_iswa_map(
                 "bbox as [minx, miny, maxx, maxy], width/height as pixel counts."
             ),
         )
-    payload["metadata"]["offline"] = True
-    payload["source"] = "ISWA WMS ground_mag_perturbation (offline synthetic)"
-    return payload
+    return iswa._decommissioned()
 
 
 def _handle_iswa_perturbation_map(
     args: dict[str, Any], store: FrameStore
 ) -> tuple[Any, str]:
-    """Fetch the ISWA ground magnetic perturbation map (a PNG on disk).
+    """Report the ISWA ground magnetic perturbation map layer's decommission.
 
-    This is the *picture* layer: it answers "how does the storm look globally"
-    with an image, where the magnetogram answers "what did one station see". It
-    produces no frame handle -- there is nothing to analyse, only a file to show
-    -- and the payload carries ``map_path`` plus small ``metadata`` so the whole
-    result survives the 400-character cap intact.
+    NASA CCMC retired the public WMS map layer in the ISWA migration, so this
+    tool no longer draws a picture: it returns ``service_decommissioned`` with a
+    ``fallback_hint`` naming the SuperMAG indices that cover the same science
+    and the Dst/Kp forecast. The arguments are still validated (they are what
+    the model fills in), but no map path is produced.
     """
     strict = _strict_argument_check(
         "get_iswa_perturbation_map",
@@ -3219,7 +3219,10 @@ def _handle_iswa_perturbation_map(
             timestamp, bbox=bbox, width=width, height=height
         )
     if iswa.is_error(result):
-        return result, f"get_iswa_perturbation_map failed: {result.get('error')}"
+        return result, (
+            f"get_iswa_perturbation_map ({timestamp}): {result.get('error')} — "
+            f"{result.get('fallback_hint') or result.get('message')}"
+        )
 
     meta = result.get("metadata") or {}
     return result, (
