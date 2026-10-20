@@ -43,7 +43,7 @@ import os
 import re
 import sys
 import traceback
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
@@ -57,6 +57,7 @@ import intermagnet_loader as loader
 import space_weather_loader as space_weather
 import noaa_swpc_loader as noaa
 import supermag_loader as supermag
+import iswa_loader as iswa
 import project_store as projects
 import geomag_coords as gcoords
 import physics_engine as pengine
@@ -169,12 +170,13 @@ BASE_PROMPT_COMPACT = (
     "'solar_events').\n"
     "4d. Суббури: fetch_supermag_data — 'indices' (SME/SML/SMU) или "
     "'sites' (dX,dY,dZ).\n"
+    "4e. Карта возмущений и прогноз Dst/Kp: get_iswa_perturbation_map / "
+    "get_iswa_forecast.\n"
     "5. Инструменты:\n"
     "    • Данные: fetch_observatory_data, fetch_many, list_projects, "
     "create_project, export_project, fetch_solar_wind, fetch_geomagnetic_indices, "
     "get_noaa_space_weather_context.\n"
-    "    • Пакетно: create_task_matrix, process_matrix_batch "
-    "(run_until_complete=True).\n"
+    "    • Пакетно: create_task_matrix, process_matrix_batch.\n"
     "    • Математика: calculate_derived_components, get_statistics, "
     "detect_anomalies, calculate_derived_math ('delta', 'dH_dt', 'anomaly'; "
     "Метрики 'range' НЕ СУЩЕСТВУЕТ), calculate_baseline (baseline_value), "
@@ -182,13 +184,12 @@ BASE_PROMPT_COMPACT = (
     "    • Магнетизм: get_station_geomagnetic_coords, calculate_mlt, "
     "calculate_local_time, group_stations_by_mlt.\n"
     "6. Хэндл бери только из frame_handle, не выдумывай его.\n"
-    "7. Ошибку перескажи и предложи, что делать; свои цифры не подставляй.\n"
+    "7. Ошибку перескажи и предложи, что делать.\n"
     "8. Перечисли графики и файлы. Единицы — 'nT'.\n"
     "9. Ты НЕ API-сервер: не отвечай {'content': ..., 'tool_calls': ...}.\n"
     "10. ФОРМАТ ОТВЕТА: (а) вызов — только теги, без слов:\n"
     '        <tool_call>{"name": "fetch_observatory_data", "arguments": '
-    '{"station_code": "IRT", "start_date": "2024-09-10", '
-    '"end_date": "2024-09-10"}}</tool_call>\n'
+    '{"station_code": "IRT", "start_date": "2024-09-10"}}</tool_call>\n'
     "    (б) данных достаточно — обычный текст без тегов.\n"
     f"11. {HANDLE_CASE_RULE}\n\n"
     "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
@@ -265,12 +266,10 @@ def _args_signature(args: Any) -> str:
 _FRAME_ARG = {
     "type": "string",
     "description": (
-        "A data descriptor returned by a previous tool, copied EXACTLY from its "
-        "'frame_handle' field. It is either a full per-day slot such as "
-        "'raw:irt:2024-09-10' or 'derived:irt:2024-09-10', or one of the short "
-        "family names 'raw' / 'derived' / 'anomalies', which always mean the most "
-        "recent member of that family. Never invent a handle: the valid ones are "
-        "listed in 'available_handles' of the previous tool result."
+        "A descriptor from a previous tool, copied EXACTLY from its "
+        "'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name "
+        "'raw' / 'derived' / 'anomalies'. Never invent one; see "
+        "'available_handles' in the last result."
     ),
 }
 
@@ -1139,6 +1138,46 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_iswa_perturbation_map",
+            "description": (
+                "Карта наземных геомагнитных возмущений ISWA: глобальный снимок "
+                "WMS ground_mag_perturbation (PNG) на момент времени. Для численных "
+                "рядов станции — fetch_observatory_data."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "timestamp": {
+                        "type": "string",
+                        "description": "Момент, ISO 8601 UTC, напр. '2024-09-12T12:00:00Z'.",
+                    },
+                    "bbox": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "[min_lon, min_lat, max_lon, max_lat]; по умолчанию весь мир.",
+                    },
+                    "width": {"type": "integer", "description": "Ширина PNG, px (по умолчанию 1024)."},
+                    "height": {"type": "integer", "description": "Высота PNG, px (по умолчанию 512)."},
+                },
+                "required": ["timestamp"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_iswa_forecast",
+            "description": (
+                "Прогноз Dst/Kp из ISWA (HAPI): Kp на 3-часовой сетке — "
+                "наблюдённый/оценённый/предсказанный (поле kp_kind); Dst — nowcast "
+                "Kyoto, вперёд не прогнозируется. Аргументов не требует."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 TOOLS_BY_NAME = {t["function"]["name"] for t in TOOL_SCHEMAS}
@@ -1218,6 +1257,8 @@ TOOL_SELECTION: dict[str, list[str]] = {
         "detect_anomalies",
         "plot_components",
     ],
+    "get_iswa_perturbation_map": ["get_iswa_perturbation_map"],
+    "get_iswa_forecast": ["get_iswa_forecast"],
     "get_statistics": ["fetch_observatory_data", "get_statistics"],
     "calculate_derived_math": ["fetch_observatory_data", "calculate_derived_math"],
     "detect_anomalies": ["fetch_observatory_data", "detect_anomalies"],
@@ -1287,6 +1328,16 @@ _QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         ("суббур", "substorm", "sme", "sml", "smu", "аврор", "auror",
          "электроджет", "electrojet", "supermag"),
         ("fetch_supermag_data",),
+    ),
+    (
+        # The ISWA pair ranks with the other specialised sources. The word
+        # "iswa" is there because a question that names the source must get its
+        # tools; the physics words ("возмущен", "карта", "прогноз") are here
+        # because those are what the question is actually about.
+        ("iswa", "возмущен", "perturbation", "карта возмущений", "карта",
+         "map", "глобальн", "global", "прогноз", "forecast", "предсказан",
+         "kp_kind"),
+        ("get_iswa_perturbation_map", "get_iswa_forecast"),
     ),
     (
         # Kyoto indices / scientific validation come first as well: "compare the
@@ -1435,6 +1486,7 @@ _MODEL_PAYLOAD_KEYS = (
     "available_handles", "handle_aliases", "path", "plot", "metric", "result",
     "station", "date", "computed", "offline", "publication_state", "source",
     "query_type", "count", "summary", "max_kp", "max_scale", "max_scale_time",
+    "map_path", "metadata", "warnings",
 )
 
 
@@ -1628,6 +1680,8 @@ _SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
     "fetch_solar_wind": "solar_wind",
     "fetch_geomagnetic_indices": "indices",
     "get_noaa_space_weather_context": "noaa_context",
+    "get_iswa_perturbation_map": "iswa_map",
+    "get_iswa_forecast": "iswa_forecast",
     "fetch_supermag_data": "supermag",
     "plot_space_weather_comparison": "space_weather_plot",
     "calculate_derived_components": "calc_hdi",
@@ -3094,6 +3148,215 @@ def _handle_noaa_context(args: dict[str, Any], store: FrameStore) -> tuple[Any, 
         if result.get(key) is not None:
             payload[key] = result[key]
     return payload, f"NOAA {query_type}: {len(data)} записей ({payload['summary']})"
+
+
+def _offline_iswa_map(
+    timestamp: str,
+    bbox: Any = None,
+    width: Any = 1024,
+    height: Any = 512,
+) -> dict[str, Any]:
+    """A deterministic perturbation map for offline runs (no network at all).
+
+    The picture is schematic -- a checkerboard, not the real disturbance field --
+    and ``metadata['offline']`` says so. It is written at the requested size by
+    the loader's own encoder, so offline the *file* is as real as the live one:
+    it opens in the same viewer, and the handler path (write, name, payload) is
+    the same code that a live PNG takes.
+    """
+    try:
+        w = int(width) if width is not None else 1024
+        h = int(height) if height is not None else 512
+        png = iswa.synthetic_map_png(w, h)
+        payload = iswa.save_map_png(png, timestamp, bbox, w, h)
+    except ValueError as exc:
+        return _error(
+            "invalid_input",
+            str(exc),
+            hint=(
+                "Pass 'timestamp' as ISO 8601 (e.g. '2024-09-12T12:00:00Z'), "
+                "bbox as [minx, miny, maxx, maxy], width/height as pixel counts."
+            ),
+        )
+    payload["metadata"]["offline"] = True
+    payload["source"] = "ISWA WMS ground_mag_perturbation (offline synthetic)"
+    return payload
+
+
+def _handle_iswa_perturbation_map(
+    args: dict[str, Any], store: FrameStore
+) -> tuple[Any, str]:
+    """Fetch the ISWA ground magnetic perturbation map (a PNG on disk).
+
+    This is the *picture* layer: it answers "how does the storm look globally"
+    with an image, where the magnetogram answers "what did one station see". It
+    produces no frame handle -- there is nothing to analyse, only a file to show
+    -- and the payload carries ``map_path`` plus small ``metadata`` so the whole
+    result survives the 400-character cap intact.
+    """
+    strict = _strict_argument_check(
+        "get_iswa_perturbation_map",
+        args,
+        allowed=("timestamp", "bbox", "width", "height"),
+        required=("timestamp",),
+        missing_hint=(
+            "CRITICAL: You forgot the mandatory argument 'timestamp'. It MUST be "
+            "an ISO 8601 instant like '2024-09-12T12:00:00Z'."
+        ),
+    )
+    if strict is not None:
+        return strict, "bad iswa map arguments"
+
+    timestamp = str(args.get("timestamp")).strip()
+    bbox = args.get("bbox")
+    width = args.get("width", 1024)
+    height = args.get("height", 512)
+
+    if OFFLINE:
+        result = _offline_iswa_map(timestamp, bbox, width, height)
+    else:
+        result = iswa.get_ground_perturbation_map(
+            timestamp, bbox=bbox, width=width, height=height
+        )
+    if iswa.is_error(result):
+        return result, f"get_iswa_perturbation_map failed: {result.get('error')}"
+
+    meta = result.get("metadata") or {}
+    return result, (
+        f"Карта возмущений ISWA на {meta.get('timestamp')} -> {result.get('map_path')}"
+    )
+
+
+def _offline_iswa_forecast() -> dict[str, Any]:
+    """A deterministic Dst/Kp outlook for offline runs (no network at all).
+
+    Window and shape mirror the live loader: 24 h back / 48 h ahead on a
+    three-hour grid. The past half carries "observed" Kp values that peak at
+    5.7 (a G1 storm) with Dst bottoms out at -66 nT, and the future half
+    carries "predicted" Kp peaking at 5.3 -- and ``dst: None``, because no Dst
+    forecast exists anywhere in ISWA.
+    """
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start = now - timedelta(hours=24)
+    stop = now + timedelta(hours=48)
+    observed = [3.0, 4.3, 5.7, 4.7, 3.3, 2.7, 2.3, 2.0, 1.7]
+    predicted = [2.0, 2.7, 3.3, 4.0, 4.7, 5.3, 4.7, 4.0, 3.3]
+    dst_past = [-20.0, -35.0, -52.0, -66.0, -58.0, -44.0, -33.0, -24.0, -18.0]
+
+    forecast: list[dict[str, Any]] = []
+    stamp = start
+    index = 0
+    while stamp <= stop:
+        if stamp <= now:
+            kp = observed[index % len(observed)]
+            dst: float | None = dst_past[index % len(dst_past)]
+            kind = "observed"
+        else:
+            kp = predicted[index % len(predicted)]
+            dst = None
+            kind = "predicted"
+        forecast.append(
+            {
+                "timestamp": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "dst": dst,
+                "kp": kp,
+                "kp_kind": kind,
+            }
+        )
+        index += 1
+        stamp += timedelta(hours=3)
+
+    return {
+        "ok": True,
+        "forecast": forecast,
+        "count": len(forecast),
+        "source": "ISWA HAPI (offline synthetic forecast)",
+        "window": {
+            "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "stop": stop.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "step_hours": 3,
+            "now": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+        "sources": {
+            "kp": "ISWA HAPI NOAA_KP_P3H (offline synthetic)",
+            "dst": "ISWA HAPI dst_quicklook (offline synthetic)",
+        },
+    }
+
+
+#: How many forecast rows the model sees; ``summary`` carries the rest.
+_ISWA_MAX_ROWS = 8
+
+_KP_KIND_LABEL = {
+    "observed": "наблюдение",
+    "predicted": "прогноз",
+    "estimated": "оценка",
+    "reported": "Kp-3H",
+}
+
+
+def _summarize_iswa_forecast(result: dict[str, Any]) -> str:
+    """One-line, quotable digest of a Dst/Kp outlook.
+
+    ``_compact_tool_message`` will drop the ``forecast`` array itself, so the
+    peak, its kind and the horizon must live in this line. The kind is spelled
+    out because a Kp of 5.7 that is *predicted* and one that was *observed* mean
+    different things to the user.
+    """
+    rows = list(result.get("forecast") or [])
+    valued = [r for r in rows if r.get("kp") is not None]
+    peak = max(valued, key=lambda r: r["kp"]) if valued else None
+    dsts = [r["dst"] for r in rows if r.get("dst") is not None]
+    stop = (result.get("window") or {}).get("stop") or (rows[-1]["timestamp"] if rows else "?")
+    parts = [f"Прогноз ISWA: строк {len(rows)}, до {stop}"]
+    if peak is not None:
+        kind = _KP_KIND_LABEL.get(str(peak.get("kp_kind")), str(peak.get("kp_kind")))
+        parts.append(f"Kp пик {peak['kp']} ({kind}) в {peak['timestamp']}")
+    else:
+        parts.append("Kp в окне нет")
+    if dsts:
+        parts.append(
+            f"Dst минимум {min(dsts)} nT (наблюдения; вперёд не прогнозируется)"
+        )
+    else:
+        parts.append("Dst недоступен")
+    return "; ".join(parts) + "."
+
+
+def _handle_iswa_forecast(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+    """Return the ISWA Dst/Kp outlook: predicted Kp, quicklook Dst.
+
+    Takes no arguments -- the loader owns the window (24 h back / 48 h ahead),
+    because "what comes next" is not a question the model should have to phrase
+    in dates. Like the NOAA handler it returns a digest rather than a frame: the
+    rows feed ``summary``, and the newest ``_ISWA_MAX_ROWS`` ride along.
+    """
+    strict = _strict_argument_check(
+        "get_iswa_forecast", args, allowed=(), required=()
+    )
+    if strict is not None:
+        return strict, "bad iswa forecast arguments"
+
+    result = _offline_iswa_forecast() if OFFLINE else iswa.get_dst_kp_forecast()
+    if iswa.is_error(result):
+        return result, f"get_iswa_forecast failed: {result.get('error')}"
+
+    rows = list(result.get("forecast") or [])
+    now = (result.get("window") or {}).get("now")
+    horizon = [r for r in rows if now and r.get("timestamp", "") >= str(now)]
+    payload: dict[str, Any] = {
+        "ok": True,
+        "source": result.get("source"),
+        "count": len(rows),
+        "summary": _summarize_iswa_forecast(result),
+        "window": result.get("window"),
+        "sources": result.get("sources"),
+        "forecast": (horizon or rows)[:_ISWA_MAX_ROWS],
+    }
+    if result.get("warnings"):
+        payload["warnings"] = result["warnings"]
+    return payload, f"ISWA Dst/Kp: {len(rows)} строк ({payload['summary']})"
+
 
 
 def _offline_supermag(kind: str, station: str, start: str) -> pd.DataFrame:
@@ -5345,6 +5608,8 @@ HANDLERS: dict[str, Handler] = {
     "fetch_solar_wind": _handle_fetch_solar_wind,
     "fetch_geomagnetic_indices": _handle_fetch_geomagnetic_indices,
     "get_noaa_space_weather_context": _handle_noaa_context,
+    "get_iswa_perturbation_map": _handle_iswa_perturbation_map,
+    "get_iswa_forecast": _handle_iswa_forecast,
     "fetch_supermag_data": _handle_fetch_supermag,
     "create_project": _handle_create_project,
     "list_projects": _handle_list_projects,
