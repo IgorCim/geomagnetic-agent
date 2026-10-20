@@ -829,29 +829,16 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Этот инструмент выполняет ВСЕ научные расчёты над фреймом данных. "
                 "Для физики вызывай ТОЛЬКО его, а не выдуманные имена вроде "
-                "calculate_dst_proxy. Аргумент metric ДОЛЖЕН быть строго одной из "
-                "строк ниже, по запросу пользователя:\n"
-                "  • 'sq_baseline' — если просят базовую линию или спокойный уровень (Sq);\n"
-                "  • 'deltas' — если просят возмущения или дельты поля;\n"
-                "  • 'gic' (или 'dH_dt') — если просят скорость изменения поля или GIC;\n"
-                "  • 'dst_proxy' — если просят кольцевой ток или Dst;\n"
-                "  • 'detect_ssc' — если просят внезапное commencement (SSC) или скачок;\n"
-                "  • 'ey_coupling' — связь с солнечным ветром (нужен external_params).\n"
-                "Аргумент df_descriptor ДОЛЖЕН быть точной строкой, возвращённой "
-                "предыдущим инструментом (например, 'raw:irt:2024-09-10'); не "
-                "придумывай её — бери из frame_handle предыдущего результата.\n\n"
-                "EXAMPLE FOR EY_COUPLING:\n"
-                "If you need to calculate Ey coupling, you MUST use this exact structure:\n"
-                "{\n"
-                "  \"name\": \"apply_physics_formula\",\n"
-                "  \"arguments\": {\n"
-                "    \"df_descriptor\": \"raw:irt:2024-09-12\", \n"
-                "    \"metric\": \"ey_coupling\",\n"
-                "    \"external_params\": {\"solar_wind\": \"sw:omni:2024-09-12\"}\n"
-                "  }\n"
-                "}\n"
-                "WARNING: Do NOT use 'formula', 'ground_component', or 'stations' as arguments. "
-                "They DO NOT EXIST."
+                "calculate_dst_proxy. Аргумент metric — строго одна строка из enum. "
+                "Метрики: ey_coupling (функция связи солнечного ветра), dst_proxy "
+                "(локальный Dst), ssc_flag (начало бури), burton_coupling (прогноз "
+                "Dst), akasofu_epsilon (ввод энергии), peak_dhdt (пик dH/dt для GIC), "
+                "substorm_onset (начало суббури по SML), eej_index (экваториальный "
+                "электроджет).\n"
+                "df_descriptor — точная строка из frame_handle предыдущего "
+                "результата (например, 'raw:irt:2024-09-10'); не придумывай её.\n"
+                "WARNING: аргументы 'formula', 'ground_component', 'stations' НЕ "
+                "СУЩЕСТВУЮТ."
             ),
             "parameters": {
                 "type": "object",
@@ -859,23 +846,43 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "df_descriptor": _FRAME_ARG,
                     "metric": {
                         "type": "string",
-                        "enum": ["sq_baseline", "deltas", "gic", "dH_dt", "dst_proxy", "ey_coupling", "detect_ssc"],
+                        "enum": [
+                            "sq_baseline", "deltas", "gic", "dH_dt", "dst_proxy",
+                            "ey_coupling", "detect_ssc", "burton_coupling",
+                            "akasofu_epsilon", "peak_dhdt", "substorm_onset",
+                            "eej_index",
+                        ],
                         "description": (
                             "Ровно одна строка: 'sq_baseline' (базовая линия/Sq), "
                             "'deltas' (возмущения), 'gic'/'dH_dt' (скорость/GIC), "
                             "'dst_proxy' (Dst), 'detect_ssc' (SSC), "
-                            "'ey_coupling' (+external_params)."
+                            "'ey_coupling' (+external_params), 'burton_coupling' "
+                            "(прогноз Dst), 'akasofu_epsilon' (ввод энергии), "
+                            "'peak_dhdt' (пик dH/dt для GIC), 'substorm_onset' "
+                            "(суббуря по SML), 'eej_index' (экваториальный электроджет)."
                         ),
                     },
                     "external_params": {
                         "type": "object",
                         "description": (
-                            "Solar-wind inputs for 'ey_coupling' only. external_params "
-                            "accepts ONLY a dict like {'solar_wind': 'sw:omni:<date>'} or "
-                            "scalar values, e.g. {'V': <km/s>, 'Bz': <nT>} (aligned to the "
-                            "observatory timestamps automatically). DO NOT put "
+                            "Solar-wind and secondary inputs. For 'ey_coupling' a dict "
+                            "like {'solar_wind': 'sw:omni:<date>'} or scalars "
+                            "{'V': <km/s>, 'Bz': <nT>}. For 'burton_coupling': "
+                            "{'Np': <cm^-3>, 'V': <km/s>, 'Bz': <nT>, 'Dst': <nT>}. For "
+                            "'akasofu_epsilon': {'V': <km/s>, 'Bx': <nT>, 'By': <nT>, "
+                            "'Bz': <nT>}. For 'eej_index': {'reference': "
+                            "'raw:<station>:<date>'} (the off-equator station). A "
+                            "solar-wind handle may also be given as "
+                            "{'solar_wind': 'sw:omni:<date>'}. DO NOT put "
                             "'ground_component' or 'stations' inside external_params. "
                             "Ignored by other metrics."
+                        ),
+                    },
+                    "window_seconds": {
+                        "type": "integer",
+                        "description": (
+                            "Rolling-window length for 'peak_dhdt', in samples "
+                            "(default 10 = 10 minutes on a 1-minute grid)."
                         ),
                     },
                 },
@@ -4910,7 +4917,19 @@ _PHYSICS_METRICS: dict[str, Any] = {
     "dst_proxy": pengine.calculate_dst_proxy,
     "ey_coupling": pengine.calculate_coupling_function,
     "detect_ssc": pengine.detect_ssc,
+    "burton_coupling": pengine.calculate_burton_coupling,
+    "akasofu_epsilon": pengine.calculate_akasofu_epsilon,
+    "peak_dhdt": pengine.calculate_peak_dhdt,
+    "substorm_onset": pengine.detect_substorm_onset,
+    "eej_index": pengine.calculate_eej_index,
 }
+
+#: Metrics that read solar-wind scalars from ``external_params`` and therefore
+#: accept a stored solar-wind handle the same way ``ey_coupling`` does.
+_SOLAR_WIND_SCALAR_METRICS = ("burton_coupling", "akasofu_epsilon")
+
+#: Metrics that need a second frame (the off-equator reference station).
+_TWO_FRAME_METRICS = ("eej_index",)
 
 #: Spellings a model reaches for that mean the same metric. 'dH_dt' is the
 #: physical name of the GIC proxy, so it is accepted and folded onto 'gic'
@@ -4924,6 +4943,17 @@ _PHYSICS_METRIC_ALIASES: dict[str, str] = {
     "ssc": "detect_ssc",
     "dst": "dst_proxy",
     "ey": "ey_coupling",
+    "burton": "burton_coupling",
+    "burton_dst": "burton_coupling",
+    "dst_prediction": "burton_coupling",
+    "akasofu": "akasofu_epsilon",
+    "epsilon": "akasofu_epsilon",
+    "peak_dh_dt": "peak_dhdt",
+    "peak_dhdt": "peak_dhdt",
+    "substorm": "substorm_onset",
+    "substorm_detection": "substorm_onset",
+    "eej": "eej_index",
+    "equatorial_electrojet": "eej_index",
 }
 
 
@@ -5041,6 +5071,86 @@ def _strict_argument_check(
     return None
 
 
+def _resolve_scalar_solar_wind(
+    args: dict[str, Any],
+    external: dict[str, Any] | None,
+    frame: pd.DataFrame,
+    store: FrameStore,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Flatten a stored solar-wind frame into the scalar keys Burton/Akasofu read.
+
+    The model can pass ready scalars (``{'Np': 5, 'V': 450, 'Bz': -10, ...}``) or
+    point at a ``fetch_solar_wind`` handle. In the handle case the frame is
+    resolved and reduced to representative values: the solar-wind speed ``V`` and
+    the field components are taken as the mean over the overlap with the
+    observatory clock, and ``Np``/``Bz`` likewise. That turns a whole day of L1
+    data into the single set of inputs the one-step Burton/Akasofu formulas need.
+    """
+    handle = args.get("solar_wind_handle") or args.get("solar_wind")
+    if not (isinstance(handle, str) and handle.strip()) and isinstance(external, dict):
+        for key in _SOLAR_WIND_HANDLE_KEYS:
+            candidate = external.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                handle = candidate
+                break
+
+    if not (isinstance(handle, str) and handle.strip()):
+        return external, None
+
+    sw_frame, sw_err = store.resolve(handle)
+    if sw_err:
+        return None, sw_err
+
+    def _mean(*names: str) -> float | None:
+        col = pengine._column_ci(sw_frame, *names)
+        if col is None:
+            return None
+        values = pd.to_numeric(sw_frame[col], errors="coerce")
+        values = values[np.isfinite(values)]
+        return float(values.mean()) if not values.empty else None
+
+    flat: dict[str, Any] = dict(external or {})
+    matrix = {
+        "V": ("V", "V_sw", "speed", "solar_wind_speed"),
+        "Np": ("Np", "density", "n_p"),
+        "Bx": ("Bx", "Bx_gsm"),
+        "By": ("By", "By_gsm"),
+        "Bz": ("Bz", "Bz_gsm"),
+    }
+    for target, names in matrix.items():
+        if target not in flat:
+            value = _mean(*names)
+            if value is not None:
+                flat[target] = value
+    return flat, None
+
+
+def _resolve_reference_frame(
+    external: dict[str, Any] | None,
+    store: FrameStore,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Resolve the EEJ reference-station handle (``external_params['reference']``).
+
+    A two-station index cannot be computed from one handle, so the reference is
+    carried the same way the solar wind is: a nested frame handle. The handle is
+    resolved here and dropped into ``external_params`` as a real DataFrame so the
+    engine never has to know about the store.
+    """
+    if not isinstance(external, dict):
+        return external, None
+
+    for key in ("reference", "reference_df", "df2", "reference_frame"):
+        candidate = external.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            ref_frame, ref_err = store.resolve(candidate)
+            if ref_err:
+                return None, ref_err
+            resolved = dict(external)
+            resolved[key] = ref_frame
+            return resolved, None
+    return external, None
+
+
 def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Run one physical formula and store the enriched frame as a derived slot.
 
@@ -5052,7 +5162,7 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
     strict = _strict_argument_check(
         "apply_physics_formula",
         args,
-        allowed=("df_descriptor", "metric", "external_params"),
+        allowed=("df_descriptor", "metric", "external_params", "window_seconds"),
         required=("df_descriptor",),
     )
     if strict is not None:
@@ -5084,6 +5194,18 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
         if sw_err is not None:
             return sw_err, f"apply_physics_formula failed: {sw_err.get('error')}"
         result = func(frame, external)
+    elif metric in _SOLAR_WIND_SCALAR_METRICS:
+        external, sw_err = _resolve_scalar_solar_wind(args, external, frame, store)
+        if sw_err is not None:
+            return sw_err, f"apply_physics_formula failed: {sw_err.get('error')}"
+        result = func(frame, external)
+    elif metric in _TWO_FRAME_METRICS:
+        external, ref_err = _resolve_reference_frame(external, store)
+        if ref_err is not None:
+            return ref_err, f"apply_physics_formula failed: {ref_err.get('error')}"
+        result = func(frame, external)
+    elif metric == "peak_dhdt" and args.get("window_seconds") is not None:
+        result = func(frame, args.get("window_seconds"))
     else:
         result = func(frame)
     if pengine.is_error(result):
@@ -5112,6 +5234,11 @@ _PHYSICS_COLUMNS: dict[str, list[str]] = {
     "dst_proxy": ["dst_proxy"],
     "ey_coupling": ["E_y"],
     "detect_ssc": ["dH_dt", "ssc_flag"],
+    "burton_coupling": ["burton_coupling"],
+    "akasofu_epsilon": ["akasofu_epsilon"],
+    "peak_dhdt": ["dH_dt", "peak_dhdt"],
+    "substorm_onset": ["sml_dh_dt"],
+    "eej_index": ["eej_index"],
 }
 
 
@@ -5155,6 +5282,41 @@ def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
         return (
             f"✅ Детектирование SSC выполнено. Найдено событий: "
             f"{attrs.get('ssc_count', 0)} -> хэндл {slot!r}."
+        )
+    if metric == "burton_coupling":
+        info = attrs.get("burton", {})
+        return (
+            f"✅ Функция связи Бёртона: coupling={info.get('coupling_function')} нТ/ч, "
+            f"прогноз Dst={info.get('predicted_dst')} нТ (dDst/dt="
+            f"{info.get('dDst_dt_nT_per_h')} нТ/ч) -> хэндл {slot!r}."
+        )
+    if metric == "akasofu_epsilon":
+        info = attrs.get("akasofu", {})
+        return (
+            f"✅ Параметр Акасофу epsilon={info.get('epsilon_W')} Вт "
+            f"({info.get('epsilon_erg_s')} эрг/с) -> хэндл {slot!r}."
+        )
+    if metric == "peak_dhdt":
+        info = attrs.get("peak_dhdt", {})
+        return (
+            f"✅ Пиковый dH/dt за {info.get('window_seconds')} с: "
+            f"{info.get('peak_dhdt_nT_min')} нТ/мин, уровень "
+            f"{info.get('warning_level')} -> хэндл {slot!r}."
+        )
+    if metric == "substorm_onset":
+        info = attrs.get("substorm", {})
+        if info.get("onset_time"):
+            return (
+                f"✅ Начало суббури: {info.get('onset_time')}, падение SML "
+                f"{info.get('sml_drop')} нТ, уверенность {info.get('confidence')} "
+                f"-> хэндл {slot!r}."
+            )
+        return f"✅ Суббуря не обнаружена в окне -> хэндл {slot!r}."
+    if metric == "eej_index":
+        info = attrs.get("eej", {})
+        return (
+            f"✅ EEJ-индекс: пик {info.get('eej_nT')} нТ, среднее "
+            f"{info.get('eej_mean_nT')} нТ -> хэндл {slot!r}."
         )
     return f"✅ {metric} рассчитан -> хэндл {slot!r}."
 

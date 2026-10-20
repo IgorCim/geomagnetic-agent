@@ -157,3 +157,149 @@ def test_calculate_coupling_function_scalar_records_summary():
     info = res.attrs['ey_coupling']
     assert info['mode'] == 'scalar'
     assert abs(info['E_y_mV_m'] + 2000.0) < 1e-9
+
+
+# --- Phase 5.2: five more physics metrics -----------------------------------
+
+def test_burton_coupling_needs_external_params():
+    res = pe.calculate_burton_coupling(_observatory(periods=2))
+    assert pe.is_error(res)
+    assert res.get('error') == 'missing_external_params'
+
+
+def test_burton_coupling_reports_coupling_and_predicted_dst():
+    obs = _observatory(periods=2)
+    res = pe.calculate_burton_coupling(obs, {'Np': 5.0, 'V': 450.0, 'Bz': -10.0, 'Dst': -30.0})
+    assert not pe.is_error(res)
+    assert 'burton_coupling' in res.columns
+    info = res.attrs['burton']
+    # Bs = -Bz = 10; coupling = 0.005 * sqrt(5) * 450 * 10
+    expected_coupling = 0.005 * (5.0 ** 0.5) * 450.0 * 10.0
+    assert abs(info['coupling_function'] - expected_coupling) < 1e-3
+    # dDst/dt = coupling - Dst/tau ; predicted = Dst + dDst/dt (1-hour Euler step)
+    expected_ddst = expected_coupling - (-30.0) / 8.0
+    assert abs(info['dDst_dt_nT_per_h'] - expected_ddst) < 1e-3
+    assert abs(info['predicted_dst'] - (-30.0 + expected_ddst)) < 1e-2
+
+
+def test_burton_coupling_northward_bz_gives_zero_injection():
+    obs = _observatory(periods=2)
+    res = pe.calculate_burton_coupling(obs, {'Np': 5, 'V': 450, 'Bz': 5, 'Dst': -30})
+    assert not pe.is_error(res)
+    info = res.attrs['burton']
+    assert info['Bs'] == 0.0
+    assert info['coupling_function'] == 0.0
+
+
+def test_burton_coupling_missing_key_is_an_error():
+    obs = _observatory(periods=2)
+    res = pe.calculate_burton_coupling(obs, {'Np': 5, 'V': 450, 'Bz': -10})  # no Dst
+    assert pe.is_error(res)
+    assert res.get('error') == 'invalid_external_params'
+    assert 'Dst' in res['missing']
+
+
+def test_akasofu_epsilon_needs_external_params():
+    res = pe.calculate_akasofu_epsilon(_observatory(periods=2))
+    assert pe.is_error(res)
+    assert res.get('error') == 'missing_external_params'
+
+
+def test_akasofu_epsilon_reports_both_units():
+    obs = _observatory(periods=2)
+    res = pe.calculate_akasofu_epsilon(obs, {'V': 450.0, 'Bx': 2.0, 'By': -3.0, 'Bz': -5.0})
+    assert not pe.is_error(res)
+    assert 'akasofu_epsilon' in res.columns
+    info = res.attrs['akasofu']
+    assert info['epsilon_W'] > 0
+    # W -> erg/s is a fixed 1e7 factor; attrs are rounded, so compare loosely
+    assert abs(info['epsilon_erg_s'] - info['epsilon_W'] * 1e7) < 1e-2 * info['epsilon_erg_s']
+
+
+def test_akasofu_epsilon_northward_field_has_small_orientation_factor():
+    obs = _observatory(periods=2)
+    res = pe.calculate_akasofu_epsilon(obs, {'V': 450, 'Bx': 0, 'By': 0, 'Bz': 5})
+    assert not pe.is_error(res)
+    # theta = arctan(0/5) = 0 -> sin^4(0) = 0
+    assert res.attrs['akasofu']['epsilon_W'] == 0.0
+
+
+def test_peak_dhdt_grades_the_peak():
+    idx = pd.date_range('2024-09-10 00:00:00', periods=6, freq='min', tz='UTC')
+    # a 300 nT/min jump -> high
+    df = pd.DataFrame({'timestamp': idx, 'H': [100, 100, 400, 400, 400, 400]})
+    res = pe.calculate_peak_dhdt(df)
+    assert not pe.is_error(res)
+    assert 'peak_dhdt' in res.columns
+    info = res.attrs['peak_dhdt']
+    assert info['warning_level'] == 'high'
+    assert info['peak_dhdt_nT_min'] >= 200
+    assert info['peak_time'] is not None
+
+
+def test_peak_dhdt_low_and_medium_levels():
+    idx = pd.date_range('2024-09-10 00:00:00', periods=4, freq='min', tz='UTC')
+    low = pe.calculate_peak_dhdt(pd.DataFrame({'timestamp': idx, 'H': [100, 110, 110, 110]}))
+    assert low.attrs['peak_dhdt']['warning_level'] == 'low'
+    medium = pe.calculate_peak_dhdt(pd.DataFrame({'timestamp': idx, 'H': [100, 180, 180, 180]}))
+    assert medium.attrs['peak_dhdt']['warning_level'] == 'medium'
+
+
+def test_peak_dhdt_window_must_be_positive():
+    res = pe.calculate_peak_dhdt(_observatory(periods=3), window_seconds=0)
+    assert pe.is_error(res)
+    assert res.get('error') == 'invalid_input'
+
+
+def test_substorm_onset_needs_sml_column():
+    res = pe.detect_substorm_onset(_observatory(periods=3))
+    assert pe.is_error(res)
+    assert res.get('error') == 'missing_columns'
+
+
+def test_substorm_onset_finds_sustained_drop():
+    idx = pd.date_range('2024-09-10 00:00:00', periods=8, freq='min', tz='UTC')
+    # onset: SML falls -60 nT/min for 3 consecutive minutes starting at index 2
+    sml = [-100, -110, -170, -230, -290, -290, -290, -290]
+    df = pd.DataFrame({'timestamp': idx, 'SML': sml})
+    res = pe.detect_substorm_onset(df)
+    assert not pe.is_error(res)
+    info = res.attrs['substorm']
+    assert info['onset_time'] is not None
+    assert info['sml_drop'] > 0
+    assert info['confidence'] in ('low', 'medium', 'high')
+
+
+def test_substorm_onset_quiet_period_has_no_onset():
+    idx = pd.date_range('2024-09-10 00:00:00', periods=6, freq='min', tz='UTC')
+    df = pd.DataFrame({'timestamp': idx, 'SML': [-50, -51, -50, -52, -51, -50]})
+    res = pe.detect_substorm_onset(df)
+    assert not pe.is_error(res)
+    assert res.attrs['substorm']['onset_time'] is None
+    assert res.attrs['substorm']['confidence'] is None
+
+
+def test_eej_index_needs_reference():
+    res = pe.calculate_eej_index(_observatory(periods=3))
+    assert pe.is_error(res)
+    assert res.get('error') == 'missing_external_params'
+
+
+def test_eej_index_subtracts_the_reference_h():
+    idx = pd.date_range('2024-09-10 00:00:00', periods=4, freq='min', tz='UTC')
+    eq = pd.DataFrame({'timestamp': idx, 'H': [100.0, 120.0, 150.0, 130.0]})
+    ref = pd.DataFrame({'timestamp': idx, 'H': [100.0, 105.0, 110.0, 110.0]})
+    res = pe.calculate_eej_index(eq, {'reference': ref})
+    assert not pe.is_error(res)
+    np.testing.assert_allclose(res['eej_index'].to_numpy(), [0.0, 15.0, 40.0, 20.0])
+    info = res.attrs['eej']
+    assert abs(info['eej_nT'] - 40.0) < 1e-9
+    assert info['peak_time'] is not None
+
+
+def test_eej_index_length_mismatch_is_an_error():
+    idx = pd.date_range('2024-09-10 00:00:00', periods=4, freq='min', tz='UTC')
+    eq = pd.DataFrame({'timestamp': idx, 'H': [100.0] * 4})
+    res = pe.calculate_eej_index(eq, {'H_reference': [1.0, 2.0]})
+    assert pe.is_error(res)
+    assert res.get('error') == 'length_mismatch'

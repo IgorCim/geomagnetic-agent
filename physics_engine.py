@@ -59,10 +59,21 @@ __all__ = [
     "calculate_coupling_function",
     "align_solar_wind",
     "detect_ssc",
+    "calculate_burton_coupling",
+    "calculate_akasofu_epsilon",
+    "calculate_peak_dhdt",
+    "detect_substorm_onset",
+    "calculate_eej_index",
     # contract + constants
     "is_error",
     "SSC_THRESHOLD_NT_PER_MIN",
     "DEFAULT_SQ_METHOD",
+    "BURTON_A",
+    "BURTON_TAU_HOURS",
+    "AKASOFU_L0_RE",
+    "PEAK_DHDT_WINDOW_SECONDS",
+    "SUBSTORM_DROP_NT_PER_MIN",
+    "SUBSTORM_MIN_DURATION_MIN",
 ]
 
 #: Default hour window (UTC) used as the geomagnetic night for the Sq baseline.
@@ -76,6 +87,30 @@ DEFAULT_SQ_METHOD = "night_median"
 #: Default SSC threshold: a sudden commencement is a sharp, near-step increase
 #: of the horizontal field, conventionally a jump of a few nT/min upwards.
 SSC_THRESHOLD_NT_PER_MIN = 5.0
+
+#: Burton coupling constants (Burton, McPherron & Russell 1975): the ring-current
+#: injection efficiency ``a`` (nT per unit of the coupling function, per hour) and
+#: the ring-current decay time ``tau`` in hours.
+BURTON_A = 0.005
+BURTON_TAU_HOURS = 8.0
+
+#: Akasofu's ``l0`` length scale in Earth radii, used by the epsilon parameter.
+AKASOFU_L0_RE = 7.0
+
+#: Default rolling window (seconds) for the peak dH/dt GIC metric. INTERMAGNET
+#: minute means make 10 samples a ten-minute window.
+PEAK_DHDT_WINDOW_SECONDS = 10
+
+#: Substorm onset detection thresholds: an SML drop steeper than this for at least
+#: this many minutes marks the expansion phase.
+SUBSTORM_DROP_NT_PER_MIN = 50.0
+SUBSTORM_MIN_DURATION_MIN = 3
+
+#: One Earth radius in metres, for the SI epsilon value.
+_RE_METRES = 6.371e6
+
+#: One erg/s in watts (1 erg = 1e-7 J).
+_ERG_PER_S_IN_W = 1e-7
 
 
 def is_error(result: Any) -> bool:
@@ -794,4 +829,445 @@ def detect_ssc(
     out.attrs["ssc_events"] = events
     out.attrs["ssc_count"] = len(events)
     out.attrs["ssc_threshold_nT_per_min"] = _jsonable(threshold, 2)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# 7. Burton coupling function (Dst prediction)
+# --------------------------------------------------------------------------- #
+def _scalar_param(params: dict[str, Any], aliases: tuple[str, ...]) -> float | None:
+    """First finite numeric parameter matching *aliases*, or ``None``."""
+    raw = _first_param(params, aliases)
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) else None
+
+
+def calculate_burton_coupling(
+    df: pd.DataFrame, external_params: dict[str, Any] | None = None
+) -> pd.DataFrame | dict[str, Any]:
+    """Burton et al. (1975) ring-current coupling and a one-step Dst forecast.
+
+    The classic first-order ring-current model integrates the injection of
+    energy from a southward IMF against the ring current's own decay::
+
+        dDst/dt = a * sqrt(Np) * V * Bs - Dst / tau
+        Bs      = -Bz   (Bz < 0, i.e. southward; 0 otherwise)
+        a       = 0.005, tau = 8 h
+
+    The injected term is the "coupling function"; the decay term closes the
+    balance. A one-hour Euler step from the current ``Dst`` gives the predicted
+    value. Inputs come from ``external_params`` (case-insensitive keys): ``Np``
+    (or ``density``) in cm^-3, ``V`` in km/s, ``Bz`` in nT, and the current
+    ``Dst`` (or ``dst``) in nT; a stored solar-wind handle is accepted by the
+    caller and flattened to the same keys.
+
+    Writes the constant ``burton_coupling`` column (the injected dDst/dt term in
+    nT/h) across the frame and records the forecast in ``attrs['burton']``.
+    Returns the enriched DataFrame, or an error dict.
+    """
+    problem = _validate_frame(df)
+    if problem is not None:
+        return problem
+    if external_params is None or not isinstance(external_params, dict):
+        return _error(
+            "missing_external_params",
+            "Burton coupling needs solar-wind data and a current Dst.",
+            hint=(
+                "Provide Np (cm^-3), V (km/s), Bz (nT) and Dst (nT), e.g. "
+                "{'Np': 5, 'V': 450, 'Bz': -10, 'Dst': -30}."
+            ),
+        )
+
+    np_val = _scalar_param(external_params, ("np", "n_p", "density", "n"))
+    v_val = _scalar_param(external_params, ("v", "v_sw", "vsw", "speed", "solar_wind_speed"))
+    bz_val = _scalar_param(external_params, ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"))
+    dst_val = _scalar_param(external_params, ("dst", "dst_current", "current_dst", "dst_now"))
+
+    missing = [
+        name
+        for name, value in (("Np", np_val), ("V", v_val), ("Bz", bz_val), ("Dst", dst_val))
+        if value is None
+    ]
+    if missing:
+        return _error(
+            "invalid_external_params",
+            f"Burton coupling needs {missing} but they are missing or non-numeric.",
+            missing=missing,
+            available=sorted(str(k) for k in external_params),
+            hint="Keys accepted: 'Np', 'V', 'Bz', 'Dst' (case-insensitive).",
+        )
+
+    bs = -float(bz_val) if float(bz_val) < 0 else 0.0
+    coupling = BURTON_A * np.sqrt(max(float(np_val), 0.0)) * float(v_val) * bs
+    decay = float(dst_val) / BURTON_TAU_HOURS
+    ddst_dt = coupling - decay
+    predicted = float(dst_val) + ddst_dt  # one-hour Euler step
+
+    out = df.copy()
+    out["burton_coupling"] = coupling
+    out.attrs = dict(getattr(df, "attrs", {}))
+    out.attrs["burton"] = {
+        "Np": _jsonable(np_val, 2),
+        "V": _jsonable(v_val, 1),
+        "Bz": _jsonable(bz_val, 2),
+        "Bs": _jsonable(bs, 2),
+        "Dst_input": _jsonable(dst_val, 2),
+        "a": BURTON_A,
+        "tau_hours": BURTON_TAU_HOURS,
+        "coupling_function": _jsonable(coupling, 4),
+        "decay_term": _jsonable(decay, 4),
+        "dDst_dt_nT_per_h": _jsonable(ddst_dt, 4),
+        "predicted_dst": _jsonable(predicted, 2),
+        "mode": "one_hour_step",
+    }
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# 8. Akasofu epsilon parameter (energy input)
+# --------------------------------------------------------------------------- #
+def calculate_akasofu_epsilon(
+    df: pd.DataFrame, external_params: dict[str, Any] | None = None
+) -> pd.DataFrame | dict[str, Any]:
+    """Akasofu's epsilon parameter: the solar-wind energy input to the magnetosphere.
+
+    ::
+
+        epsilon = V * B_total^2 * l0^2 * sin^4(theta/2)
+        B_total = sqrt(Bx^2 + By^2 + Bz^2)
+        theta   = arctan(By / Bz)
+        l0      = 7 RE
+
+    ``V`` in m/s, ``B`` in tesla and ``l0`` in metres give epsilon in watts, the
+    standard form. The ``sin^4(theta/2)`` factor couples the field orientation to
+    the dayside reconnection geometry: it vanishes for a purely northward IMF and
+    peaks for a southward one. Solar-wind inputs come from ``external_params``
+    (case-insensitive): ``V`` in km/s, ``Bx``/``By``/``Bz`` in nT.
+
+    Writes the constant ``akasofu_epsilon`` column (in watts) across the frame and
+    records both unit systems in ``attrs['akasofu']``. Returns the enriched
+    DataFrame, or an error dict.
+    """
+    problem = _validate_frame(df)
+    if problem is not None:
+        return problem
+    if external_params is None or not isinstance(external_params, dict):
+        return _error(
+            "missing_external_params",
+            "Akasofu epsilon needs the solar-wind vector and speed.",
+            hint="Provide V (km/s), Bx, By, Bz (nT), e.g. {'V': 450, 'Bx': 2, 'By': -3, 'Bz': -5}.",
+        )
+
+    v_val = _scalar_param(external_params, ("v", "v_sw", "vsw", "speed", "solar_wind_speed"))
+    bx_val = _scalar_param(external_params, ("bx", "b_x", "bx_gsm", "bxgsm"))
+    by_val = _scalar_param(external_params, ("by", "b_y", "by_gsm", "bygsm"))
+    bz_val = _scalar_param(external_params, ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"))
+
+    missing = [
+        name
+        for name, value in (("V", v_val), ("Bx", bx_val), ("By", by_val), ("Bz", bz_val))
+        if value is None
+    ]
+    if missing:
+        return _error(
+            "invalid_external_params",
+            f"Akasofu epsilon needs {missing} but they are missing or non-numeric.",
+            missing=missing,
+            available=sorted(str(k) for k in external_params),
+            hint="Keys accepted: 'V', 'Bx', 'By', 'Bz' (case-insensitive).",
+        )
+
+    b_total_nt = float(np.sqrt(bx_val**2 + by_val**2 + bz_val**2))
+    theta = float(np.arctan2(by_val, bz_val)) if bz_val != 0 else float(np.pi / 2) * float(np.sign(by_val) or 1)
+    sin_half = float(np.sin(theta / 2.0))
+    orientation = sin_half**4
+
+    v_si = float(v_val) * 1e3            # km/s -> m/s
+    b_si = b_total_nt * 1e-9             # nT   -> T
+    l0_m = AKASOFU_L0_RE * _RE_METRES    # RE   -> m
+
+    epsilon_w = v_si * (b_si**2) * (l0_m**2) * orientation
+    epsilon_erg_s = epsilon_w / _ERG_PER_S_IN_W  # W -> erg/s
+
+    out = df.copy()
+    out["akasofu_epsilon"] = epsilon_w
+    out.attrs = dict(getattr(df, "attrs", {}))
+    out.attrs["akasofu"] = {
+        "V_kms": _jsonable(v_val, 1),
+        "B_total_nT": _jsonable(b_total_nt, 2),
+        "theta_rad": _jsonable(theta, 4),
+        "l0_RE": AKASOFU_L0_RE,
+        "epsilon_W": _jsonable(epsilon_w, 4),
+        "epsilon_erg_s": _jsonable(epsilon_erg_s, 4),
+    }
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# 9. peak dH/dt over a rolling window (GIC severity)
+# --------------------------------------------------------------------------- #
+def calculate_peak_dhdt(
+    df: pd.DataFrame,
+    window_seconds: int = PEAK_DHDT_WINDOW_SECONDS,
+) -> pd.DataFrame | dict[str, Any]:
+    """Peak ``|dH/dt|`` over a sliding window, graded for GIC risk.
+
+    The instantaneous ``dH/dt`` (:func:`calculate_gic_proxy`) is spiky; the
+    physical driver of a GIC event is the largest change over a short interval.
+    This rolls a ``window_seconds``-long window (default 10 samples on a
+    1-minute grid) over ``|dH/dt|`` and takes the maximum inside it.
+
+    Adds the ``peak_dhdt`` column (nT/min) and records the peak value, its
+    timestamp and a ``low``/``medium``/``high`` warning (thresholds 50 and 200
+    nT/min) in ``attrs['peak_dhdt']``. Returns the enriched DataFrame, or an
+    error dict.
+    """
+    problem = _validate_frame(df)
+    if problem is not None:
+        return problem
+    if "H" not in df.columns:
+        problem = _require_columns(df, ("X", "Y"))
+        if problem is not None:
+            return problem
+
+    try:
+        window = int(window_seconds)
+    except (TypeError, ValueError):
+        return _error("invalid_input", f"window_seconds={window_seconds!r} must be an integer.")
+    if window < 1:
+        return _error("invalid_input", f"window_seconds={window_seconds!r} must be >= 1.")
+
+    out = df.copy()
+    dh_dt = _first_difference(_horizontal(out))
+    abs_rate = pd.Series(np.abs(dh_dt))
+    rolled = abs_rate.rolling(window=window, min_periods=1).max().to_numpy(dtype="float64")
+    out["dH_dt"] = dh_dt
+    out["peak_dhdt"] = rolled
+
+    peak = float(np.nanmax(rolled)) if np.isfinite(rolled).any() else float("nan")
+    peak_index: int | None = None
+    if np.isfinite(rolled).any():
+        peak_index = int(np.nanargmax(rolled))
+
+    if not np.isfinite(peak):
+        level = None
+    elif peak < 50.0:
+        level = "low"
+    elif peak <= 200.0:
+        level = "medium"
+    else:
+        level = "high"
+
+    peak_time: Any = None
+    if peak_index is not None and "timestamp" in df.columns:
+        stamps = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+        if peak_index < len(stamps) and not pd.isna(stamps.iloc[peak_index]):
+            peak_time = str(stamps.iloc[peak_index])
+
+    out.attrs = dict(getattr(df, "attrs", {}))
+    out.attrs["peak_dhdt"] = {
+        "window_seconds": window,
+        "peak_dhdt_nT_min": _jsonable(peak, 2),
+        "peak_time": peak_time,
+        "warning_level": level,
+    }
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# 10. substorm onset from SML
+# --------------------------------------------------------------------------- #
+def detect_substorm_onset(
+    df: pd.DataFrame,
+    drop_threshold_nT_per_min: float = SUBSTORM_DROP_NT_PER_MIN,
+    min_duration_min: int = SUBSTORM_MIN_DURATION_MIN,
+) -> pd.DataFrame | dict[str, Any]:
+    """Detect a substorm onset as a sustained steep drop of the SML index.
+
+    The auroral electrojet intensifies at substorm onset, which drives the SML
+    (SuperMAG lower envelope) sharply negative. Onset is called at the first
+    sample of the earliest run where ``dSML/dt`` stays below
+    ``-drop_threshold_nT_per_min`` (default -50 nT/min) for at least
+    ``min_duration_min`` minutes (default 3).
+
+    Needs an ``SML`` column (from :func:`supermag_loader` ``data_type='indices'``).
+    Adds the ``sml_dh_dt`` column and records the onset in ``attrs['substorm']``
+    with a confidence graded by how far the drop exceeds the threshold. Returns
+    the enriched DataFrame, or an error dict.
+    """
+    problem = _validate_frame(df)
+    if problem is not None:
+        return problem
+    sml_col = _column_ci(df, "SML", "SML_index", "sml")
+    if sml_col is None:
+        return _error(
+            "missing_columns",
+            "Substorm onset needs an 'SML' column (SuperMAG indices).",
+            missing=["SML"],
+            available=[str(c) for c in df.columns],
+            hint="Fetch it with fetch_supermag_data(data_type='indices').",
+        )
+
+    try:
+        threshold = float(drop_threshold_nT_per_min)
+        duration = int(min_duration_min)
+    except (TypeError, ValueError):
+        return _error(
+            "invalid_input",
+            "drop_threshold_nT_per_min and min_duration_min must be numeric.",
+        )
+    if duration < 1:
+        return _error("invalid_input", f"min_duration_min={min_duration_min!r} must be >= 1.")
+
+    sml = pd.to_numeric(df[sml_col], errors="coerce").to_numpy(dtype="float64")
+    dsml_dt = _first_difference(sml)
+
+    out = df.copy()
+    out["sml_dh_dt"] = dsml_dt
+
+    steep = (dsml_dt < -abs(threshold)) & np.isfinite(dsml_dt)
+    onset_index: int | None = None
+    sml_drop = float("nan")
+    run = 0
+    for i, is_steep in enumerate(steep):
+        run = run + 1 if is_steep else 0
+        if run >= duration:
+            onset_index = i - duration + 1
+            # Drop across the detected window (first SML minus last SML).
+            window = sml[onset_index : i + 1]
+            if np.isfinite(window).sum() >= 2:
+                sml_drop = float(window[0] - window[-1])
+            break
+
+    if onset_index is None:
+        confidence = None
+        onset_time = None
+    else:
+        stamps = None
+        if "timestamp" in df.columns:
+            stamps = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+        if stamps is not None and onset_index < len(stamps) and not pd.isna(stamps.iloc[onset_index]):
+            onset_time = str(stamps.iloc[onset_index])
+        else:
+            onset_time = None
+        depth = abs(sml_drop) if np.isfinite(sml_drop) else 0.0
+        confidence = "high" if depth >= 2 * duration * abs(threshold) else (
+            "medium" if depth >= duration * abs(threshold) else "low"
+        )
+
+    out.attrs = dict(getattr(df, "attrs", {}))
+    out.attrs["substorm"] = {
+        "onset_time": onset_time,
+        "sml_drop": _jsonable(sml_drop, 2),
+        "confidence": confidence,
+        "threshold_nT_per_min": _jsonable(threshold, 2),
+        "min_duration_min": duration,
+    }
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# 11. equatorial electrojet (EEJ) index
+# --------------------------------------------------------------------------- #
+def calculate_eej_index(
+    df: pd.DataFrame, external_params: dict[str, Any] | None = None
+) -> pd.DataFrame | dict[str, Any]:
+    """Equatorial electrojet strength: equatorial minus off-equator H.
+
+    ``EEJ = H(equatorial) - H(reference)``, where the reference station sits
+    6-8 degrees away in latitude so the Sq variation largely cancels and the
+    difference isolates the electrojet's enhancement along the dip equator. It is
+    usually computed from two INTERMAGNET stations.
+
+    The equatorial frame is ``df``; the reference frame is passed through
+    ``external_params`` under ``reference`` (a stored frame handle or a mapping
+    with ``H``), or as a ready ``H_reference`` series/array. Writes the
+    ``eej_index`` column and records the mean, peak and peak time in
+    ``attrs['eej']``. Returns the enriched DataFrame, or an error dict.
+    """
+    problem = _validate_frame(df)
+    if problem is not None:
+        return problem
+    if "H" not in df.columns and not {"X", "Y"} <= set(df.columns):
+        problem = _require_columns(df, ("H",))
+        if problem is not None:
+            return problem
+
+    n_rows = len(df)
+    ref_values: np.ndarray | None = None
+    ref_label: str | None = None
+
+    if external_params is not None and isinstance(external_params, dict):
+        raw_ref = _first_param(external_params, ("h_reference", "reference_h", "reference_frame"))
+        if raw_ref is None:
+            raw_ref = _first_param(external_params, ("reference", "reference_df", "df2"))
+        if isinstance(raw_ref, pd.DataFrame):
+            if "H" in raw_ref.columns:
+                ref_values = pd.to_numeric(raw_ref["H"], errors="coerce").to_numpy(dtype="float64")
+                ref_label = "mapping:H"
+            elif {"X", "Y"} <= set(raw_ref.columns):
+                ref_values = _horizontal(raw_ref)
+                ref_label = "mapping:hypot(X,Y)"
+        elif isinstance(raw_ref, (pd.Series, pd.Index, np.ndarray, list, tuple)):
+            try:
+                ref_values = pd.to_numeric(pd.Series(list(raw_ref)), errors="coerce").to_numpy(
+                    dtype="float64"
+                )
+                ref_label = "array"
+            except (TypeError, ValueError):
+                ref_values = None
+        elif isinstance(raw_ref, str) and raw_ref.strip():
+            return _error(
+                "unresolved_reference",
+                "calculate_eej_index needs the resolved reference frame, not its handle.",
+                hint="Resolve the handle via the store, then pass its H column.",
+            )
+
+    if ref_values is None:
+        return _error(
+            "missing_external_params",
+            "EEJ needs the reference station's H series (6-8 degrees off the equator).",
+            hint=(
+                "Pass external_params={'reference': <ref frame with H>} or "
+                "{'H_reference': <array>}."
+            ),
+        )
+    if ref_values.size != n_rows:
+        return _error(
+            "length_mismatch",
+            f"The reference H has {ref_values.size} values but the equatorial frame has {n_rows} rows.",
+            hint="Align the two station frames to the same minute grid first.",
+        )
+
+    h_eq = _horizontal(df)
+    eej = h_eq - ref_values
+
+    out = df.copy()
+    out["eej_index"] = eej
+
+    peak_index: int | None = None
+    if np.isfinite(eej).any():
+        peak_index = int(np.nanargmax(eej))
+    peak_time: Any = None
+    if peak_index is not None and "timestamp" in df.columns:
+        stamps = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+        if peak_index < len(stamps) and not pd.isna(stamps.iloc[peak_index]):
+            peak_time = str(stamps.iloc[peak_index])
+
+    mean_eej = float(np.nanmean(eej)) if np.isfinite(eej).any() else float("nan")
+    peak_eej = float(np.nanmax(eej)) if np.isfinite(eej).any() else float("nan")
+
+    out.attrs = dict(getattr(df, "attrs", {}))
+    out.attrs["eej"] = {
+        "eej_nT": _jsonable(peak_eej, 2),
+        "eej_mean_nT": _jsonable(mean_eej, 2),
+        "eej_peak_nT": _jsonable(peak_eej, 2),
+        "peak_time": peak_time,
+        "reference_source": ref_label,
+    }
     return out
