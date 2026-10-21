@@ -440,9 +440,9 @@ def test_iframe_of_a_missing_or_empty_file_is_empty(tmp_path):
     assert ga._iframe(str(empty)) == ""
 
 
-def test_seven_charts_use_every_slot(tmp_path, monkeypatch):
+def test_a_full_panel_uses_every_slot(tmp_path, monkeypatch):
     """The panel is a fixed row, so it has to say which charts did not fit."""
-    names = [f"day{i}.html" for i in range(10, 17)]
+    names = [f"day{i}.html" for i in range(ga.MAX_PLOTS_IN_PANEL)]
     saved = [{"question": "q", "path": _write_plot(tmp_path / n)} for n in names]
     slots = ga._slot_updates(saved)
     assert len(slots) == ga.MAX_PLOTS_IN_PANEL

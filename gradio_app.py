@@ -87,7 +87,7 @@ GRADIO_VERSION = getattr(gr, "__version__", "unknown")
 # --------------------------------------------------------------------------- #
 #: How many saved figures to remember. A three-day request makes three charts
 #: plus one comparison, so 3 silently dropped a chart the user had asked for.
-MAX_PLOTS_IN_PANEL = 6
+MAX_PLOTS_IN_PANEL = 12
 
 #: The chat handler returns a flat tuple: messages, one update per figure slot,
 #: then the tool log, the panel state, the file list and the cleared textbox.
@@ -786,6 +786,11 @@ def build_demo(brain: Any) -> gr.Blocks:
                 )
 
             with gr.Column(scale=2):
+                sm_logon = gr.Textbox(
+                    label="SuperMAG Logon (опционально)",
+                    placeholder="Ваш логин с supermag.jhuapl.edu",
+                    type="password",
+                )
                 gr.Markdown("### Графики")
                 # A Gallery cannot hold these charts. It accepts raster images
                 # only, and a Plotly figure reaches Gallery._save as a dict:
@@ -841,10 +846,14 @@ def build_demo(brain: Any) -> gr.Blocks:
 
         plots_state = gr.State([])
 
-        def submit(text, history, state):
+        def submit(text, history, state, logon):
             if not _message_text(text):
                 gr.Info("Введите вопрос.")
                 return gr.skip()
+            # Credential Isolation: устанавливаем переменную окружения ТОЛЬКО
+            # для этого запроса; в лог и историю логин не попадает.
+            if logon and logon.strip():
+                os.environ["SUPERMAG_LOGON"] = logon.strip()
             return chat_and_plot(text, history, state)
 
         outputs = [
@@ -855,8 +864,16 @@ def build_demo(brain: Any) -> gr.Blocks:
             files_view,
             textbox,
         ]
-        send.click(submit, inputs=[textbox, chatbot, plots_state], outputs=outputs)
-        textbox.submit(submit, inputs=[textbox, chatbot, plots_state], outputs=outputs)
+        send.click(
+            submit,
+            inputs=[textbox, chatbot, plots_state, sm_logon],
+            outputs=outputs,
+        )
+        textbox.submit(
+            submit,
+            inputs=[textbox, chatbot, plots_state, sm_logon],
+            outputs=outputs,
+        )
 
         # Projects: selecting one reloads its tree; the ZIP is built on demand so
         # that opening the accordion never walks the whole tree.
