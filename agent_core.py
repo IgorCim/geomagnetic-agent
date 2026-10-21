@@ -836,10 +836,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "WHEN TO USE EACH METRIC (NOT detect_anomalies): "
                 "burton_coupling = 'Dst prediction', 'Burton function', 'storm "
                 "evolution' (needs Np/V/Bz/Dst); akasofu_epsilon = 'energy input', "
-                "'Akasofu function', 'magnetospheric power' (needs V/Bx/By/Bz); "
-                "peak_dhdt = 'GIC risk', 'transformer risk', 'dH/dt peaks', 'power "
-                "grid impact'; substorm_onset = 'substorm start', 'onset time', "
-                "'SML drop' (SML frame, no external_params).\n"
+                "'Akasofu function', 'magnetospheric power' (needs V/Bx/By/Bz). "
+                "metric='peak_dhdt' ('GIC risk', 'transformer risk', 'dH/dt peaks'): "
+                "ИСПОЛЬЗУЙ ЭТО для оценки риска GIC и поиска пиковых dH/dt; требует "
+                "высокого разрешения (1-сек/минутных). metric='substorm_onset' "
+                "('substorm start', 'onset time', 'SML drop'): ИСПОЛЬЗУЙ ЭТО для "
+                "времени начала суббури по резкому падению SML.\n"
                 "df_descriptor — точная строка из frame_handle предыдущего "
                 "результата (например, 'raw:irt:2024-09-10'); не придумывай её.\n"
                 "WARNING: аргументы 'formula', 'ground_component', 'stations' НЕ "
@@ -858,13 +860,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "eej_index",
                         ],
                         "description": (
-                            "Ровно одна строка: 'sq_baseline' (базовая линия/Sq), "
-                            "'deltas' (возмущения), 'gic'/'dH_dt' (скорость/GIC), "
-                            "'dst_proxy' (Dst), 'detect_ssc' (SSC), "
-                            "'ey_coupling' (+external_params), 'burton_coupling' "
-                            "(прогноз Dst), 'akasofu_epsilon' (ввод энергии), "
-                            "'peak_dhdt' (пик dH/dt для GIC), 'substorm_onset' "
-                            "(суббуря по SML), 'eej_index' (экваториальный электроджет)."
+                            "Ровно одна строка enum: 'sq_baseline' (Sq), 'deltas', "
+                            "'gic'/'dH_dt' (скорость/GIC), 'dst_proxy', 'detect_ssc', "
+                            "'ey_coupling' (+external_params), 'burton_coupling', "
+                            "'akasofu_epsilon', 'peak_dhdt' (пик dH/dt для GIC), "
+                            "'substorm_onset' (суббуря по SML), 'eej_index'."
                         ),
                     },
                     "external_params": {
@@ -879,8 +879,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "'raw:<station>:<date>'} (the off-equator station). A "
                             "solar-wind handle may also be given as "
                             "{'solar_wind': 'sw:omni:<date>'}. DO NOT put "
-                            "'ground_component' or 'stations' inside external_params. "
-                            "Ignored by other metrics."
+                            "'ground_component'/'stations' inside it; ignored elsewhere."
                         ),
                     },
                     "window_seconds": {
@@ -906,7 +905,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "H_equatorial - H_reference as a derived frame. Do NOT use "
                 "apply_physics_formula for EEJ (one frame only). REQUIRED: "
                 "'equatorial_station', 'reference_station' (IAGA codes) and "
-                "'start_date'."
+                "'start_date'. CRITICAL FALLBACK: definitive data for equatorial "
+                "stations (like AAE) often lags by months. If you get a 'no_data' "
+                "error for the current year, YOU MUST AUTOMATICALLY RETRY the tool "
+                "call with data_type='auto' OR a historical year (e.g. "
+                "'2023-09-12'). Do not give up."
             ),
             "parameters": {
                 "type": "object",
@@ -972,15 +975,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": (
-                            "Alias for 'component': a list, e.g. ['H']. The first "
-                            "entry is drawn; the name must be a column of the "
-                            "fetched frame (X/Y/Z/F/H/D/I)."
+                            "Alias for 'component': a list, e.g. ['H']. First entry "
+                            "is drawn; must be a frame column (X/Y/Z/F/H/D/I)."
                         )
                     },
                     "offsets": {
                         "type": "object",
                         "additionalProperties": {"type": "number"},
-                        "description": "nT shift per station for visual separation, e.g. {'IRT': 0, 'API': 150}. Missing stations get 0."
+                        "description": "nT shift per station, e.g. {'IRT': 0, 'API': 150}."
                     },
                     "time_system": {"type": "string", "enum": ["UT", "LT", "MLT"], "description": "X-axis time system, default UT."},
                     "title": {"type": "string", "description": "Chart title."},
@@ -997,20 +999,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "КРИТИЧЕСКИ ВАЖНО: используй для сравнения Земли и космоса -- "
                 "компонент Земли (H, dst_proxy) с солнечным ветром (Bz, V, By, Np). "
-                "Dual-axis: GROUND component (left) vs SOLAR-WIND components (right); "
-                "L1 aligned to the observatory clock. НЕ заменяй plot_overlay/"
-                "plot_comparison -- они не смешивают Землю и ветер. Перед вызовом: "
-                "(1) fetch_observatory_data (raw:<station>:<дата>); (2) apply_physics_"
-                "formula(metric='dst_proxy'); (3) fetch_solar_wind (sw:omni:<дата>). "
-                "ground_component: H, dst_proxy или dH_dt. НЕ 'Dst' — это глобальный "
-                "индекс Kyoto, не компонент.\n"
-                "EXAMPLE:\n"
-                "{\n"
-                "  \"ground_df_descriptor\": \"derived:irt:2024-09-12\",\n"
-                "  \"solar_wind_df_descriptor\": \"sw:omni:2024-09-12\",\n"
-                "  \"ground_component\": \"H\",\n"
-                "  \"solar_wind_components\": [\"Bz\", \"V\"]\n"
-                "}\n"
+                "Dual-axis: GROUND (left) vs SOLAR-WIND (right); L1 aligned to the "
+                "observatory clock. НЕ заменяй plot_overlay/plot_comparison -- они не "
+                "смешивают Землю и ветер. Перед вызовом: (1) fetch_observatory_data "
+                "(raw:<station>:<дата>); (2) apply_physics_formula(metric='dst_proxy'); "
+                "(3) fetch_solar_wind (sw:omni:<дата>). ground_component: H, dst_proxy "
+                "или dH_dt. НЕ 'Dst' — это глобальный индекс Kyoto, не компонент.\n"
+                "EXAMPLE: {\"ground_df_descriptor\": \"derived:irt:2024-09-12\", "
+                "\"solar_wind_df_descriptor\": \"sw:omni:2024-09-12\", "
+                "\"ground_component\": \"H\", \"solar_wind_components\": [\"Bz\",\"V\"]}\n"
                 "WARNING: NOT 'frame_handle', 'df1', 'df2', 'stations' -- use EXACTLY "
                 "'ground_df_descriptor' and 'solar_wind_df_descriptor'."
             ),
@@ -1020,32 +1017,22 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "ground_df_descriptor": {
                         **_FRAME_ARG,
                         "description": (
-                            "Ground frame handle, e.g. 'raw:irt:2024-09-12' or a "
-                            "'derived:irt:2024-09-12' frame carrying 'dst_proxy'."
+                            "Ground handle, e.g. 'raw:irt:2024-09-12' or a "
+                            "'derived:...' frame with 'dst_proxy'."
                         ),
                     },
                     "solar_wind_df_descriptor": {
                         **_FRAME_ARG,
-                        "description": (
-                            "Solar-wind frame handle returned by fetch_solar_wind, "
-                            "e.g. 'sw:omni:2024-09-12'."
-                        ),
+                        "description": "Handle from fetch_solar_wind, e.g. 'sw:omni:2024-09-12'.",
                     },
                     "ground_component": {
                         "type": "string",
-                        "description": (
-                            "Ground component on the LEFT axis: one of 'H', "
-                            "'dst_proxy', 'dH_dt'. Do NOT pass 'Dst' -- that is the "
-                            "global Kyoto index; use the local 'dst_proxy'."
-                        ),
+                        "description": "LEFT axis: 'H', 'dst_proxy' or 'dH_dt'. NOT 'Dst'.",
                     },
                     "solar_wind_components": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": (
-                            "Solar-wind components on the RIGHT axis, e.g. ['Bz','V'] "
-                            "(also Bx, By, Np)."
-                        ),
+                        "description": "RIGHT axis, e.g. ['Bz','V'] (also Bx, By, Np).",
                     },
                     "title": {"type": "string", "description": "Chart title."},
                     "filename": {"type": "string", "description": "Output file name, .html."}
