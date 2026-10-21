@@ -111,10 +111,11 @@ MAX_TOKENS = 1200
 
 # A three-day request costs three fetches, three derive calls and three plots
 # before a single sentence of the answer, and a two-day comparison that first
-# tries a bad handle costs a failed call plus a retry. 16 leaves room for both
-# without letting a runaway loop run away.
-MAX_TOOL_CALLS = 16        # tool executions per user query
-MAX_ROUNDS = 18            # model round-trips per user query
+# tries a bad handle costs a failed call plus a retry. A multi-step 14B-model
+# task chains more of these before it answers, so the budget is raised to 28
+# calls / 25 rounds -- still bounded, so a runaway loop still terminates.
+MAX_TOOL_CALLS = 28        # tool executions per user query
+MAX_ROUNDS = 25            # model round-trips per user query
 
 #: Ceiling on downloads inside one ``fetch_many`` call, whatever it asks for.
 #: The agent's own budget bounds how many times it may *call* a tool, not how much
