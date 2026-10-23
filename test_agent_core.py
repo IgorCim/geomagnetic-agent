@@ -2648,12 +2648,15 @@ def test_apply_physics_formula_peak_dhdt_accepts_window_seconds():
 
 
 def test_apply_physics_formula_substorm_onset_needs_sml():
+    """A ground frame is the wrong dataset for onset: say so, don't say 'missing SML'."""
     store = _physics_store()
     payload, _ = ac.HANDLERS["apply_physics_formula"](
         {"df_descriptor": "raw:irt:2024-09-10", "metric": "substorm_onset"}, store
     )
     assert ac.is_error(payload)
-    assert payload["error"] == "missing_columns"
+    assert payload["error"] == "invalid_data_type"
+    assert payload["data_type"] == "ground station"
+    assert "SML" in payload["hint"]
 
 
 def test_apply_physics_formula_eej_resolves_a_reference_handle():
@@ -3034,3 +3037,133 @@ def test_legacy_tool_schemas_advertise_the_alias():
         assert "df" in props, tool
         note = schema["function"]["description"]
         assert "df_descriptor" in note and "backward compatibility" in note, tool
+
+
+# --------------------------------------------------------------------------- #
+# data-type pre-flight: reject the wrong dataset before the formula runs
+# --------------------------------------------------------------------------- #
+def test_detect_ssc_on_a_solar_wind_frame_is_refused_before_the_formula():
+    """The reported bug: SSC pointed at the wind frame cost a doomed round."""
+    store = _physics_store()
+    sw_handle = _mock_solar_wind(store)
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": sw_handle, "metric": "detect_ssc"}, store
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "invalid_data_type"
+    assert payload["data_type"] == "solar wind"
+    assert "SSC requires ground station data" in payload["hint"]
+    assert "Pass a ground station frame" in payload["hint"]
+    # The formula never ran: no derived slot was written.
+    assert "derived:" not in " ".join(store.names())
+    assert "missing_columns" not in note
+
+
+def test_ground_metrics_on_a_solar_wind_frame_are_refused():
+    store = _physics_store()
+    sw_handle = _mock_solar_wind(store)
+    for metric in ("peak_dhdt", "dst_proxy", "sq_baseline", "deltas", "gic"):
+        payload, _ = ac.HANDLERS["apply_physics_formula"](
+            {"df_descriptor": sw_handle, "metric": metric}, store
+        )
+        assert payload.get("error") == "invalid_data_type", (metric, payload)
+        assert payload["data_type"] == "solar wind", metric
+
+
+def test_solar_wind_metric_on_a_ground_frame_handle_is_refused():
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "ey_coupling",
+            "solar_wind_handle": "raw:irt:2024-09-10",
+        },
+        store,
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "invalid_data_type"
+    assert payload["data_type"] == "ground station"
+    assert "Solar wind metrics require V, Bz" in payload["hint"]
+    assert "Pass a solar wind frame" in payload["hint"]
+
+
+def test_solar_wind_frame_passed_as_df_descriptor_is_refused():
+    store = _physics_store()
+    sw_handle = _mock_solar_wind(store)
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": sw_handle,
+            "metric": "burton_coupling",
+            "solar_wind_handle": sw_handle,
+        },
+        store,
+    )
+    assert payload["error"] == "invalid_data_type"
+    assert payload["data_type"] == "solar wind"
+    assert "ground station frame as 'df_descriptor'" in payload["hint"]
+
+
+def test_substorm_onset_on_ground_frame_names_the_indices_fix():
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "substorm_onset"}, store
+    )
+    assert payload["error"] == "invalid_data_type"
+    assert payload["data_type"] == "ground station"
+    assert "SML" in payload["hint"]
+    assert "indices" in payload["hint"]
+
+
+def test_substorm_onset_runs_on_a_supermag_indices_frame():
+    """The pre-flight must not block the right dataset."""
+    store = ac.FrameStore()
+    stamps = pd.date_range("2024-09-10 00:00:00", periods=20, freq="min", tz="UTC")
+    sml = [0.0] * 10 + [-200.0, -400.0, -600.0, -800.0, -900.0] + [-800.0] * 5
+    store.put(
+        "idx:supermag:2024-09-10",
+        pd.DataFrame({"timestamp": stamps, "SML": sml}),
+    )
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "idx:supermag:2024-09-10", "metric": "substorm_onset"}, store
+    )
+    assert payload.get("ok"), payload
+
+
+def test_burton_needs_np_on_the_wind_frame_but_ey_does_not():
+    store = _physics_store()
+    sw_handle = _mock_solar_wind(store)
+    wind = store.get(sw_handle)
+    store.put(sw_handle, wind.drop(columns=["Np"]))
+
+    ey, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "ey_coupling",
+         "solar_wind_handle": sw_handle},
+        store,
+    )
+    assert ey.get("ok"), ey
+
+    burton, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "burton_coupling",
+         "solar_wind_handle": sw_handle},
+        store,
+    )
+    assert burton["error"] == "invalid_data_type"
+    assert "Np" in burton["expected"]
+
+
+def test_data_type_preflight_runs_before_the_formula(monkeypatch):
+    """Proof of ordering: even a blowing-up formula is never reached."""
+    called = []
+    store = _physics_store()
+    sw_handle = _mock_solar_wind(store)
+
+    def blow_up(*args, **kwargs):
+        called.append(args)
+        raise AssertionError("the formula must not run on the wrong dataset")
+
+    monkeypatch.setitem(ac._PHYSICS_METRICS, "detect_ssc", blow_up)
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": sw_handle, "metric": "detect_ssc"}, store
+    )
+    assert payload["error"] == "invalid_data_type"
+    assert called == []

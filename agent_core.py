@@ -5101,8 +5101,154 @@ def _strict_argument_check(
     return None
 
 
+#: Columns each metric needs on the frame it actually reads, and the dataset
+#: kind that frame is supposed to be. Mirrors the engine's own ``_require_columns``
+#: calls -- a looser check here would only postpone the same failure by one round.
+#: Solar-wind metrics are absent on purpose: their primary frame is the ground
+#: station, and the columns that matter (V, Bz, Np) live in the frame named by
+#: ``solar_wind_handle``, so they are checked there instead.
+_METRIC_DATA_REQUIREMENTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "sq_baseline": ("ground station", ("X", "Y", "Z")),
+    "deltas": ("ground station", ("X", "Y", "Z")),
+    "gic": ("ground station", ("X", "Y")),
+    "dst_proxy": ("ground station", ("X", "Y")),
+    "detect_ssc": ("ground station", ("X", "Y")),
+    "peak_dhdt": ("ground station", ("X", "Y")),
+    "eej_index": ("ground station", ("H",)),
+    "substorm_onset": ("indices", ("SML",)),
+}
+
+#: Columns a solar-wind frame must carry for the coupling metrics. ``Np`` is
+#: only read by Burton, so it is required for that metric alone.
+_SOLAR_WIND_COLUMNS = ("V", "Bz")
+_SOLAR_WIND_EXTRA = {"burton_coupling": ("Np",)}
+
+
+def _frame_kind(columns: Any) -> str:
+    """Name the dataset a frame looks like, from its columns alone."""
+    lowered = {str(c).strip().lower() for c in columns}
+    if lowered & {"x", "y", "h", "d", "z"}:
+        return "ground station"
+    if lowered & {"v", "bz", "np", "bx", "by"}:
+        return "solar wind"
+    if lowered & {"sml", "smu", "dst", "kp"}:
+        return "indices"
+    return "unrecognised"
+
+
+def _data_type_error(
+    metric: str,
+    descriptor: str,
+    actual: str,
+    needed: tuple[str, ...],
+    hint: str,
+) -> dict[str, Any]:
+    """The one error that says "wrong dataset", not "wrong column"."""
+    return _error(
+        "invalid_data_type",
+        (
+            f"{metric} needs {', '.join(needed)}; the frame {descriptor!r} looks like "
+            f"{actual} data and does not have them."
+        ),
+        metric=metric,
+        frame=descriptor,
+        data_type=actual,
+        expected=needed,
+        hint=hint,
+    )
+
+
+def _validate_data_type(
+    metric: str, frame: pd.DataFrame, df_descriptor: str, *, role: str = "primary"
+) -> dict[str, Any] | None:
+    """Refuse a frame of the wrong kind BEFORE the formula reads it.
+
+    The engine's ``missing_columns`` is correct but arrives one round too late and
+    reads like a data-quality problem ("missing X"), when the real mistake is a
+    contract one: SSC was pointed at a solar-wind frame. Naming the dataset lets
+    the model repair the call in one step instead of retrying variants of it.
+
+    ``role`` says which side of the contract ``frame`` is:
+
+    * ``"primary"`` -- the frame named by ``df_descriptor`` (the default). For the
+      solar-wind metrics it must be a ground station; the wind frame is checked
+      separately with ``role="solar_wind"``.
+    * ``"solar_wind"`` -- the frame named by ``solar_wind_handle``.
+
+    Returns ``None`` when the metric can proceed.
+    """
+    if metric in _SOLAR_WIND_METRICS:
+        if role == "solar_wind":
+            needed = _SOLAR_WIND_COLUMNS + _SOLAR_WIND_EXTRA.get(metric, ())
+            present = {str(c).strip().lower() for c in frame.columns}
+            missing = [c for c in needed if c.lower() not in present]
+            if not missing:
+                return None
+            actual = _frame_kind(frame.columns)
+            return _data_type_error(
+                metric,
+                df_descriptor,
+                actual,
+                needed,
+                hint=(
+                    f"Solar wind metrics require {', '.join(needed)}. "
+                    f"Current frame is {actual}. Pass a solar wind frame as "
+                    "'solar_wind_handle' (e.g. 'sw:omni:2024-09-12')."
+                ),
+            )
+        # Primary frame of a coupling metric is the ground station. A wind frame
+        # here means the two handles were swapped, which alignment alone cannot
+        # explain to the model.
+        present = {str(c).strip() for c in frame.columns}
+        if {"X", "Y"} & present or "H" in present:
+            return None
+        actual = _frame_kind(frame.columns)
+        return _data_type_error(
+            metric,
+            df_descriptor,
+            actual,
+            ("X", "Y"),
+            hint=(
+                f"{metric} takes the ground station frame as 'df_descriptor' and the "
+                f"solar wind as 'solar_wind_handle'. Current frame is {actual}. "
+                "Pass a ground station frame."
+            ),
+        )
+
+    requirement = _METRIC_DATA_REQUIREMENTS.get(metric)
+    if requirement is None:
+        return None
+    expected_kind, needed = requirement
+    present = {str(c) for c in frame.columns}
+    missing = [c for c in needed if c not in present]
+    # EEJ is happy with the horizontal field built from X and Y.
+    if metric == "eej_index" and missing and {"X", "Y"} <= present:
+        missing = []
+    if not missing:
+        return None
+
+    actual = _frame_kind(frame.columns)
+    if expected_kind == "indices":
+        hint = (
+            "substorm_onset requires SuperMAG indices (SML). "
+            f"Current frame is {actual}. Pass an indices frame, e.g. "
+            "fetch_supermag_data(data_type='indices')."
+        )
+    elif metric == "detect_ssc":
+        hint = (
+            "SSC requires ground station data. "
+            f"Current frame is {actual}. Pass a ground station frame."
+        )
+    else:
+        hint = (
+            f"{metric} requires ground station data. "
+            f"Current frame is {actual}. Pass a ground station frame."
+        )
+    return _data_type_error(metric, df_descriptor, actual, needed, hint)
+
+
 def _resolve_solar_wind_frame(
-    args: dict[str, Any], frame: pd.DataFrame, store: FrameStore
+    args: dict[str, Any], frame: pd.DataFrame, store: FrameStore, metric: str = ""
 ) -> tuple[pd.DataFrame | None, dict[str, Any] | None]:
     """Resolve ``solar_wind_handle`` and align it to ``frame``'s clock.
 
@@ -5137,6 +5283,14 @@ def _resolve_solar_wind_frame(
             f"Handle {handle!r} does not hold a solar-wind frame.",
             available=store.names(),
         )
+
+    # Same pre-flight as the primary frame, but on the wind frame: a ground
+    # station passed as 'solar_wind_handle' is named as such here, before
+    # alignment turns it into a confusing "missing V" from the engine.
+    if metric:
+        problem = _validate_data_type(metric, sw_frame, handle, role="solar_wind")
+        if problem is not None:
+            return None, problem
 
     aligned = pengine.align_solar_wind(frame, sw_frame)
     if pengine.is_error(aligned):
@@ -5213,11 +5367,17 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
     if err:
         return err, f"apply_physics_formula failed: {err.get('error')}"
 
+    # Pre-flight the frame kind before any formula runs: a wrong dataset is a
+    # one-round fix, a "missing X" from the engine is a retry loop.
+    problem = _validate_data_type(metric, frame, descriptor)
+    if problem is not None:
+        return problem, f"apply_physics_formula refused: {problem['error']}"
+
     if metric in _SOLAR_WIND_METRICS:
         # Every solar-wind metric takes the same aligned frame. Burton also reads
         # the current Dst from a stored indices frame when one is available; the
         # engine falls back to Dst=0 (a quiet start) when it is not.
-        solar_wind, sw_err = _resolve_solar_wind_frame(args, frame, store)
+        solar_wind, sw_err = _resolve_solar_wind_frame(args, frame, store, metric)
         if sw_err is not None:
             return sw_err, f"apply_physics_formula failed: {sw_err.get('error')}"
         alignment = dict(solar_wind.attrs.get("solar_wind_alignment", {}))
