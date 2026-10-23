@@ -157,10 +157,9 @@ BASE_PROMPT_COMPACT = (
     f"Известны: {STATION_HINT}.\n"
     "3. Хэндл — только из frame_handle. "
     f"{HANDLE_CASE_RULE}\n"
-    "4. Физику (Ey, Dst-прокси) — ТОЛЬКО через apply_physics_formula "
-    "metric. calculate_dst_proxy НЕ существует. calculate_derived_math/"
-    "detect_anomalies — статистика. Ey: metric='ey_coupling'. EEJ — "
-    "calculate_eej_index.\n"
+    "4. Физику — ТОЛЬКО через apply_physics_formula metric. calculate_dst_proxy "
+    "НЕ существует. Для солнечных метрик передавай solar_wind_handle с "
+    "хэндлом фрейма. EEJ — calculate_eej_index.\n"
     "5. Метрики calculate_derived_math: 'delta', 'dH_dt', 'anomaly'. "
     "Метрики 'range' НЕ СУЩЕСТВУЕТ.\n"
     "6. Ошибку перескажи, предложи шаг; файлы; "
@@ -826,72 +825,48 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "apply_physics_formula",
             "description": (
-                "Этот инструмент выполняет ВСЕ научные расчёты над фреймом данных. "
-                "Для физики вызывай ТОЛЬКО его, а не выдуманные имена вроде "
-                "calculate_dst_proxy. Аргумент metric — строго одна строка из enum. "
-                "Метрики: ey_coupling (функция связи солнечного ветра), dst_proxy "
-                "(локальный Dst), ssc_flag (начало бури), burton_coupling (прогноз "
-                "Dst), akasofu_epsilon (ввод энергии), peak_dhdt (пик dH/dt для GIC), "
-                "substorm_onset (начало суббури по SML), eej_index (экваториальный "
-                "электроджет).\n"
-                "WHEN TO USE EACH METRIC (NOT detect_anomalies): "
-                "burton_coupling = 'Dst prediction', 'Burton function', 'storm "
-                "evolution'; akasofu_epsilon = 'energy input', 'Akasofu function', "
-                "'magnetospheric power'. "
-                "metric='peak_dhdt' ('GIC risk', 'transformer risk', 'dH/dt peaks'): "
-                "ИСПОЛЬЗУЙ ЭТО для оценки риска GIC и поиска пиковых dH/dt; требует "
-                "высокого разрешения (1-сек/минутных). metric='substorm_onset' "
-                "('substorm start', 'onset time', 'SML drop'): ИСПОЛЬЗУЙ ЭТО для "
-                "времени начала суббури по резкому падению SML.\n"
-                "df_descriptor — точная строка из frame_handle предыдущего "
-                "результата (например, 'raw:irt:2024-09-10'); не придумывай её.\n"
-                "ДЛЯ СОЛНЕЧНЫХ МЕТРИК передай 'solar_wind_handle' (например, "
-                "'sw:omni:2024-09-12') — система выровняет данные автоматически. "
-                "Числа НЕ принимаются. Для 'eej_index' — 'reference_handle'.\n"
-                "WARNING: аргументы 'formula', 'ground_component', 'stations' НЕ "
-                "СУЩЕСТВУЮТ."
+                "Apply a physics formula to a stored frame and return a derived frame "
+                "with the new column. For solar-wind metrics, pass 'solar_wind_handle': "
+                "the system aligns solar wind data with the ground station frame "
+                "automatically."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df_descriptor": _FRAME_ARG,
+                    "df_descriptor": {
+                        "type": "string",
+                        "description": "Handle of the ground station or indices frame.",
+                    },
                     "metric": {
                         "type": "string",
                         "enum": [
-                            "sq_baseline", "deltas", "gic", "dH_dt", "dst_proxy",
-                            "ey_coupling", "detect_ssc", "burton_coupling",
-                            "akasofu_epsilon", "peak_dhdt", "substorm_onset",
-                            "eej_index",
+                            "ey_coupling", "burton_coupling", "akasofu_epsilon",
+                            "peak_dhdt", "substorm_onset", "eej_index", "dst_proxy",
+                            "ssc_flag", "sq_baseline", "deltas", "gic",
                         ],
                         "description": (
-                            "Ровно одна строка enum: 'sq_baseline', 'deltas', "
-                            "'gic'/'dH_dt', 'dst_proxy', 'detect_ssc', 'ey_coupling', "
-                            "'burton_coupling', 'akasofu_epsilon', 'peak_dhdt', "
-                            "'substorm_onset', 'eej_index'."
+                            "Name of the metric to calculate. Available: ey_coupling, "
+                            "burton_coupling, akasofu_epsilon, peak_dhdt, "
+                            "substorm_onset, eej_index, dst_proxy, ssc_flag, "
+                            "sq_baseline, deltas, gic."
                         ),
                     },
                     "solar_wind_handle": {
                         "type": "string",
                         "description": (
-                            "Handle of the solar wind frame (e.g., "
-                            "'sw:omni:2024-09-12'). Required for metrics: "
-                            "ey_coupling, burton_coupling, akasofu_epsilon. "
-                            "The system will automatically align solar wind data "
-                            "with the ground station frame."
+                            "Handle of solar wind frame. Required for: ey_coupling, "
+                            "burton_coupling, akasofu_epsilon."
                         ),
                     },
                     "reference_handle": {
                         "type": "string",
-                        "description": (
-                            "Handle of the off-equator reference station frame for "
-                            "metric 'eej_index' (e.g., 'raw:abg:2023-09-12')."
-                        ),
+                        "description": "Handle of reference station frame. Required for: eej_index.",
                     },
                     "window_seconds": {
                         "type": "integer",
                         "description": (
-                            "Rolling-window length for 'peak_dhdt', in samples "
-                            "(default 10 = 10 minutes on a 1-minute grid)."
+                            "Window size in samples for 'peak_dhdt' (default 10 = 10 "
+                            "minutes on a 1-minute grid)."
                         ),
                     },
                 },
@@ -4972,6 +4947,7 @@ _PHYSICS_METRIC_ALIASES: dict[str, str] = {
     "sq": "sq_baseline",
     "delta": "deltas",
     "ssc": "detect_ssc",
+    "ssc_flag": "detect_ssc",
     "dst": "dst_proxy",
     "ey": "ey_coupling",
     "burton": "burton_coupling",

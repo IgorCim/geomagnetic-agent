@@ -2702,35 +2702,33 @@ def test_apply_physics_formula_eej_unknown_reference_is_refused():
 
 
 def test_apply_physics_formula_schema_advertises_all_new_metrics():
-    """The enum and the guidance must name every metric the dispatcher accepts."""
+    """The enum must name every key metric the dispatcher accepts."""
     schema = next(t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == "apply_physics_formula")
     enum = set(schema["function"]["parameters"]["properties"]["metric"]["enum"])
+    mdesc = schema["function"]["parameters"]["properties"]["metric"]["description"]
     for metric in (
-        "burton_coupling", "akasofu_epsilon", "peak_dhdt", "substorm_onset", "eej_index",
+        "burton_coupling",
+        "akasofu_epsilon",
+        "peak_dhdt",
+        "substorm_onset",
+        "eej_index",
     ):
         assert metric in enum, f"{metric} missing from the metric enum"
         assert metric in ac._PHYSICS_METRICS, f"{metric} not dispatched"
-        assert metric in schema["function"]["description"], f"{metric} not described"
+        assert metric in mdesc, f"{metric} not described"
 
 
 def test_apply_physics_formula_description_maps_keywords_to_metrics():
-    """Problem 2: GIC/onset/Burton/Akasofu keywords must name their metric."""
-    desc = next(
-        t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == "apply_physics_formula"
-    )["function"]["description"]
-    assert "WHEN TO USE EACH METRIC" in desc
-    for keyword, metric in (
-        ("Dst prediction", "burton_coupling"),
-        ("Burton function", "burton_coupling"),
-        ("energy input", "akasofu_epsilon"),
-        ("Akasofu function", "akasofu_epsilon"),
-        ("GIC risk", "peak_dhdt"),
-        ("transformer risk", "peak_dhdt"),
-        ("substorm start", "substorm_onset"),
-        ("SML drop", "substorm_onset"),
-    ):
-        assert keyword in desc, f"{keyword!r} not advertised"
-        assert metric in desc, f"{metric!r} not advertised"
+    """Concise schema keeps required handles and core metrics visible."""
+    schema = next(t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == "apply_physics_formula")
+    desc = schema["function"]["description"]
+    props = schema["function"]["parameters"]["properties"]
+    mdesc = props["metric"]["description"]
+    assert "solar_wind_handle" in desc
+    assert "solar_wind_handle" in props
+    assert "reference_handle" in props
+    for metric in ("ey_coupling", "burton_coupling", "akasofu_epsilon", "peak_dhdt"):
+        assert metric in mdesc
 
 
 def test_solar_wind_metrics_require_the_handle_not_numbers():
