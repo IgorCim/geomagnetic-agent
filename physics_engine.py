@@ -455,12 +455,27 @@ def calculate_dst_proxy(
 # --------------------------------------------------------------------------- #
 # 5. solar-wind coupling function
 # --------------------------------------------------------------------------- #
-def _first_param(params: dict[str, Any], aliases: tuple[str, ...]) -> Any:
-    lowered = {str(k).lower(): k for k in params}
-    for alias in aliases:
-        if alias in lowered:
-            return params[lowered[alias]]
-    return None
+
+def _solar_wind_series(
+    solar_wind: Any, df: pd.DataFrame, *names: str
+) -> "pd.Series | None":
+    """A solar-wind column as a float64 Series aligned to ``df``'s length.
+
+    ``solar_wind`` is the aligned frame the caller produced with
+    :func:`align_solar_wind` (or any frame carrying the column). A scalar column
+    is broadcast to ``len(df)``; a vector must already match ``df`` row for row,
+    which is exactly what alignment guarantees. Returns ``None`` when the column
+    is absent, so the caller can name what is missing.
+    """
+    if solar_wind is None:
+        return None
+    column = _column_ci(solar_wind, *names) if isinstance(solar_wind, pd.DataFrame) else None
+    if column is None:
+        return None
+    values = pd.to_numeric(solar_wind[column], errors="coerce").to_numpy(dtype="float64")
+    if values.size == 1:
+        values = np.full(len(df), values[0], dtype="float64")
+    return pd.Series(values)
 
 
 def _column_ci(df: pd.DataFrame, *names: str) -> str | None:
@@ -473,33 +488,6 @@ def _column_ci(df: pd.DataFrame, *names: str) -> str | None:
     return None
 
 
-def _as_numeric(value: Any) -> tuple[Any, bool]:
-    """Classify a coupling input as ``(float_or_array, is_vector)``.
-
-    A scalar becomes ``(float, False)``; a Series/Index/ndarray/list/tuple
-    becomes ``(float64 ndarray, True)``. Returns ``(None, ...)`` when the value
-    cannot be coerced to numbers, so the caller can report a clean error.
-    """
-    if isinstance(value, (pd.Series, pd.Index, np.ndarray, list, tuple)):
-        try:
-            arr = pd.to_numeric(pd.Series(list(value)), errors="coerce")
-        except (TypeError, ValueError):
-            return None, True
-        return arr.to_numpy(dtype="float64"), True
-    try:
-        return float(value), False
-    except (TypeError, ValueError):
-        return None, False
-
-
-def _describe_input(value: Any) -> str:
-    """Short, safe rendering of a coupling input for an error message."""
-    if isinstance(value, (pd.Series, pd.Index, np.ndarray, list, tuple)):
-        try:
-            return f"{type(value).__name__}(len={len(value)})"
-        except TypeError:
-            return type(value).__name__
-    return repr(value)
 
 
 def align_solar_wind(
@@ -622,6 +610,25 @@ def align_solar_wind(
     out["V"] = v_aligned
     out["Bz"] = bz_aligned
     out["Bz_gsm"] = bz_aligned
+
+    # Np/Bx/By are optional, but Burton (Np) and Akasofu (Bx, By) need them: if
+    # the solar-wind frame carries them, put them on the same aligned clock so no
+    # formula ever has to touch the unaligned source frame.
+    aligned_extra: dict[str, np.ndarray] = {}
+    for target, aliases in (
+        ("Np", ("Np", "n_p", "density", "n")),
+        ("Bx", ("Bx", "B_x", "Bx_gsm", "BxGSM", "bx_gsm")),
+        ("By", ("By", "B_y", "By_gsm", "ByGSM", "by_gsm")),
+    ):
+        source = _column_ci(solar_wind_df, *aliases)
+        if source is None:
+            continue
+        extra_series = _one(source)
+        if extra_series.empty:
+            continue
+        aligned_extra[target] = _resample(extra_series)
+        out[target] = aligned_extra[target]
+
     out.attrs = dict(getattr(observatory_df, "attrs", {}))
     out.attrs["solar_wind_alignment"] = {
         "lag_minutes": _jsonable(float(lag_minutes), 1),
@@ -630,13 +637,14 @@ def align_solar_wind(
         "n_solar_wind": int(len(solar_wind_df)),
         "n_finite_V": int(np.isfinite(v_aligned).sum()),
         "n_finite_Bz": int(np.isfinite(bz_aligned).sum()),
+        "aligned_extra_columns": sorted(aligned_extra),
         "source": "OMNI (L1)",
     }
     return out
 
 
 def calculate_coupling_function(
-    df: pd.DataFrame, external_params: dict[str, Any] | None = None
+    df: pd.DataFrame, solar_wind: Any = None
 ) -> pd.DataFrame | dict[str, Any]:
     """Solar-wind coupling function ``E_y = V * B_z``.
 
@@ -647,19 +655,16 @@ def calculate_coupling_function(
     conventional proxied mV/m when ``V`` is in km/s and ``B_z`` in nT.
 
     This is the one function that cannot be answered from the magnetometer frame
-    alone: it needs solar-wind data (L1 / OMNIWeb). Without ``external_params``
-    it returns ``missing_external_params`` with a hint rather than inventing a
-    number. Accepted keys are case-insensitive: ``V``/``v``/``speed``,
-    ``Bz``/``bz``/``B_z``/``bz_gsm``.
+    alone: it needs solar-wind data (L1 / OMNIWeb). The caller passes the aligned
+    solar-wind frame through ``solar_wind`` -- typically the output of
+    :func:`align_solar_wind`, whose ``V``/``Bz`` columns already sit on the
+    observatory's own minute grid. Without it the function returns
+    ``missing_solar_wind`` rather than inventing a number.
 
-    Two input shapes are accepted:
-
-    * **scalars** -- ``{'V': 450, 'Bz': -5}``: a single ``E_y`` is written to
-      every row and recorded in ``attrs['ey_coupling']`` (classic behaviour);
-    * **vectors** -- ``{'V': series_or_array, 'Bz': series_or_array}``, typically
-      the ``V``/``Bz`` columns produced by :func:`align_solar_wind`: a per-row
-      ``E_y`` is written to ``out['E_y']`` and the summary reports the peak,
-      mean, min and max. A scalar paired with a vector is broadcast.
+    ``V`` and ``Bz`` are read from the frame by name (case-insensitive, with the
+    usual aliases: ``V``/``V_sw``/``speed``, ``Bz``/``Bz_gsm``/``B_z``). A
+    single-row (scalar) frame is broadcast to every observatory row, so the
+    classic "one number for the whole frame" behaviour is preserved.
 
     Returns the enriched DataFrame, or an error dict.
     """
@@ -667,77 +672,65 @@ def calculate_coupling_function(
     if problem is not None:
         return problem
 
-    if external_params is None:
+    if solar_wind is None:
         return _error(
-            "missing_external_params",
-            "Ey requires solar-wind data: E_y = V * B_z. Provide V (km/s) and Bz (nT).",
-            hint="Load them from OMNIWeb (L1) or align_solar_wind; keys 'V' and 'Bz'.",
+            "missing_solar_wind",
+            "Ey requires solar-wind data: E_y = V * B_z.",
+            hint=(
+                "Pass 'solar_wind_handle' with a solar-wind frame handle "
+                "(e.g. 'sw:omni:2024-09-12'); the system aligns it automatically."
+            ),
         )
-    if not isinstance(external_params, dict):
+    if not isinstance(solar_wind, pd.DataFrame):
         return _error(
-            "invalid_external_params",
-            f"external_params must be a mapping, got {type(external_params).__name__}.",
-            hint="For example {'V': 450, 'Bz': -5} or {'V': series, 'Bz': series}.",
-        )
-
-    v_raw = _first_param(external_params, ("v", "v_sw", "vsw", "solar_wind_speed", "speed"))
-    bz_raw = _first_param(external_params, ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"))
-    if v_raw is None or bz_raw is None:
-        return _error(
-            "invalid_external_params",
-            "Both V and Bz are required for E_y = V * B_z.",
-            available=sorted(str(k) for k in external_params),
-            hint="Keys accepted: 'V' and 'Bz' (case-insensitive).",
+            "invalid_solar_wind",
+            f"solar_wind must be an aligned solar-wind DataFrame, got {type(solar_wind).__name__}.",
         )
 
-    v_val, v_vec = _as_numeric(v_raw)
-    bz_val, bz_vec = _as_numeric(bz_raw)
-    if v_val is None or bz_val is None:
+    v_series = _solar_wind_series(solar_wind, df, "V", "V_sw", "Vx", "speed", "solar_wind_speed")
+    bz_series = _solar_wind_series(solar_wind, df, "Bz", "Bz_gsm", "BzGSM", "B_z", "bz_gsm", "B_z_gsm")
+    if v_series is None or bz_series is None:
         return _error(
-            "invalid_external_params",
-            f"V={_describe_input(v_raw)} and Bz={_describe_input(bz_raw)} must both be numeric.",
+            "invalid_solar_wind",
+            "Solar-wind coupling needs a speed column 'V' and an IMF column 'Bz'.",
+            missing=[name for name, col in (("V", v_series), ("Bz", bz_series)) if col is None],
+            available=[str(c) for c in solar_wind.columns],
+            hint="Fetch the solar wind with fetch_solar_wind; it carries V and Bz.",
+        )
+
+    v_arr = v_series.to_numpy(dtype="float64")
+    bz_arr = bz_series.to_numpy(dtype="float64")
+    if v_arr.size != len(df) or bz_arr.size != len(df):
+        return _error(
+            "length_mismatch",
+            f"Solar wind has {v_arr.size} rows but the frame has {len(df)}.",
+            hint=(
+                "The system aligns solar wind with align_solar_wind; pass the aligned "
+                "frame, or a handle the handler can align."
+            ),
         )
 
     out = df.copy()
     out.attrs = dict(getattr(df, "attrs", {}))
 
-    # -- scalar path: one number for the whole frame (classic behaviour) ------
-    if not (v_vec or bz_vec):
-        if not (np.isfinite(v_val) and np.isfinite(bz_val)):
-            return _error(
-                "invalid_external_params",
-                "V and Bz must both be finite numbers.",
-                hint="Check that the solar-wind record has no gaps at this time.",
-            )
-        ey = float(v_val) * float(bz_val)
+    # -- scalar path: a constant frame yields one E_y for the whole frame -----
+    if np.unique(v_arr).size == 1 and np.unique(bz_arr).size == 1 and np.isfinite(v_arr[0]) and np.isfinite(bz_arr[0]):
+        ey = float(v_arr[0]) * float(bz_arr[0])
         out["E_y"] = ey
         out.attrs["ey_coupling"] = {
             "mode": "scalar",
-            "V": _jsonable(v_val, 1),
-            "Bz": _jsonable(bz_val, 2),
+            "V": _jsonable(v_arr[0], 1),
+            "Bz": _jsonable(bz_arr[0], 2),
             "E_y_mV_m": _jsonable(ey, 2),
         }
         return out
 
     # -- vector path: one E_y per observatory row -----------------------------
-    n_rows = len(df)
-    v_arr = np.full(n_rows, float(v_val)) if not v_vec else np.asarray(v_val, dtype="float64")
-    bz_arr = np.full(n_rows, float(bz_val)) if not bz_vec else np.asarray(bz_val, dtype="float64")
-    if (v_vec and v_arr.size != n_rows) or (bz_vec and bz_arr.size != n_rows):
-        return _error(
-            "length_mismatch",
-            f"V has {v_arr.size} values and Bz has {bz_arr.size}, but the frame has {n_rows} rows.",
-            hint=(
-                "Align the solar wind to the observatory first: "
-                "align_solar_wind(observatory_df, solar_wind_df) returns matching V and Bz."
-            ),
-        )
-
     ey = v_arr * bz_arr
     finite = np.isfinite(ey)
     if not finite.any():
         return _error(
-            "invalid_external_params",
+            "invalid_solar_wind",
             "No finite V/Bz pair survived alignment for this frame.",
             hint=(
                 "Check the date overlap and the interpolation limit; the solar-wind "
@@ -754,7 +747,7 @@ def calculate_coupling_function(
 
     out.attrs["ey_coupling"] = {
         "mode": "vector",
-        "n_samples": int(n_rows),
+        "n_samples": int(len(df)),
         "n_finite": int(finite.sum()),
         "V_mean": _reduce(v_arr, np.nanmean),
         "Bz_mean": _reduce(bz_arr, np.nanmean),
@@ -835,20 +828,11 @@ def detect_ssc(
 # --------------------------------------------------------------------------- #
 # 7. Burton coupling function (Dst prediction)
 # --------------------------------------------------------------------------- #
-def _scalar_param(params: dict[str, Any], aliases: tuple[str, ...]) -> float | None:
-    """First finite numeric parameter matching *aliases*, or ``None``."""
-    raw = _first_param(params, aliases)
-    if raw is None:
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    return value if np.isfinite(value) else None
-
 
 def calculate_burton_coupling(
-    df: pd.DataFrame, external_params: dict[str, Any] | None = None
+    df: pd.DataFrame,
+    solar_wind: Any = None,
+    indices: Any = None,
 ) -> pd.DataFrame | dict[str, Any]:
     """Burton et al. (1975) ring-current coupling and a one-step Dst forecast.
 
@@ -861,10 +845,16 @@ def calculate_burton_coupling(
 
     The injected term is the "coupling function"; the decay term closes the
     balance. A one-hour Euler step from the current ``Dst`` gives the predicted
-    value. Inputs come from ``external_params`` (case-insensitive keys): ``Np``
-    (or ``density``) in cm^-3, ``V`` in km/s, ``Bz`` in nT, and the current
-    ``Dst`` (or ``dst``) in nT; a stored solar-wind handle is accepted by the
-    caller and flattened to the same keys.
+    value.
+
+    Inputs are read from frames, not from a polymorphic mapping:
+
+    * ``solar_wind`` -- the aligned solar-wind frame (see
+      :func:`align_solar_wind`) carrying ``Np`` (cm^-3), ``V`` (km/s) and ``Bz``
+      (nT). A constant frame is reduced to its single value.
+    * ``indices`` -- optional frame carrying the current ``Dst`` (nT; e.g. a
+      ``fetch_geomagnetic_indices`` frame). When absent, ``Dst`` is taken as 0,
+      which still yields the injection term (a valid "still quiet" start).
 
     Writes the constant ``burton_coupling`` column (the injected dDst/dt term in
     nT/h) across the frame and records the forecast in ``attrs['burton']``.
@@ -873,34 +863,48 @@ def calculate_burton_coupling(
     problem = _validate_frame(df)
     if problem is not None:
         return problem
-    if external_params is None or not isinstance(external_params, dict):
+    if solar_wind is None or not isinstance(solar_wind, pd.DataFrame):
         return _error(
-            "missing_external_params",
-            "Burton coupling needs solar-wind data and a current Dst.",
+            "missing_solar_wind",
+            "Burton coupling needs solar-wind data (Np, V, Bz).",
             hint=(
-                "Provide Np (cm^-3), V (km/s), Bz (nT) and Dst (nT), e.g. "
-                "{'Np': 5, 'V': 450, 'Bz': -10, 'Dst': -30}."
+                "Pass 'solar_wind_handle' with a solar-wind frame handle "
+                "(e.g. 'sw:omni:2024-09-12'); the system aligns it automatically."
             ),
         )
 
-    np_val = _scalar_param(external_params, ("np", "n_p", "density", "n"))
-    v_val = _scalar_param(external_params, ("v", "v_sw", "vsw", "speed", "solar_wind_speed"))
-    bz_val = _scalar_param(external_params, ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"))
-    dst_val = _scalar_param(external_params, ("dst", "dst_current", "current_dst", "dst_now"))
+    def _mean(names: tuple[str, ...]) -> float | None:
+        column = _column_ci(solar_wind, *names)
+        if column is None:
+            return None
+        values = pd.to_numeric(solar_wind[column], errors="coerce")
+        values = values[np.isfinite(values)]
+        return float(values.mean()) if not values.empty else None
 
-    missing = [
-        name
-        for name, value in (("Np", np_val), ("V", v_val), ("Bz", bz_val), ("Dst", dst_val))
-        if value is None
-    ]
+    np_val = _mean(("Np", "n_p", "density", "n"))
+    v_val = _mean(("V", "V_sw", "Vx", "speed", "solar_wind_speed"))
+    bz_val = _mean(("Bz", "B_z", "Bz_gsm", "BzGSM", "bz_gsm", "B_z_gsm"))
+
+    missing = [name for name, value in (("Np", np_val), ("V", v_val), ("Bz", bz_val)) if value is None]
     if missing:
         return _error(
-            "invalid_external_params",
-            f"Burton coupling needs {missing} but they are missing or non-numeric.",
+            "invalid_solar_wind",
+            f"Burton coupling needs {missing} in the solar-wind frame.",
             missing=missing,
-            available=sorted(str(k) for k in external_params),
-            hint="Keys accepted: 'Np', 'V', 'Bz', 'Dst' (case-insensitive).",
+            available=[str(c) for c in solar_wind.columns],
+            hint="fetch_solar_wind frames carry Np, V and Bz.",
         )
+
+    dst_val: float | None = None
+    if isinstance(indices, pd.DataFrame):
+        column = _column_ci(indices, "Dst", "dst")
+        if column is not None:
+            values = pd.to_numeric(indices[column], errors="coerce")
+            values = values[np.isfinite(values)]
+            if not values.empty:
+                dst_val = float(values.mean())
+    if dst_val is None:
+        dst_val = 0.0
 
     bs = -float(bz_val) if float(bz_val) < 0 else 0.0
     coupling = BURTON_A * np.sqrt(max(float(np_val), 0.0)) * float(v_val) * bs
@@ -932,7 +936,7 @@ def calculate_burton_coupling(
 # 8. Akasofu epsilon parameter (energy input)
 # --------------------------------------------------------------------------- #
 def calculate_akasofu_epsilon(
-    df: pd.DataFrame, external_params: dict[str, Any] | None = None
+    df: pd.DataFrame, solar_wind: Any = None
 ) -> pd.DataFrame | dict[str, Any]:
     """Akasofu's epsilon parameter: the solar-wind energy input to the magnetosphere.
 
@@ -946,8 +950,11 @@ def calculate_akasofu_epsilon(
     ``V`` in m/s, ``B`` in tesla and ``l0`` in metres give epsilon in watts, the
     standard form. The ``sin^4(theta/2)`` factor couples the field orientation to
     the dayside reconnection geometry: it vanishes for a purely northward IMF and
-    peaks for a southward one. Solar-wind inputs come from ``external_params``
-    (case-insensitive): ``V`` in km/s, ``Bx``/``By``/``Bz`` in nT.
+    peaks for a southward one.
+
+    Inputs are read from the aligned solar-wind frame passed through
+    ``solar_wind`` (see :func:`align_solar_wind`): ``V`` in km/s and
+    ``Bx``/``By``/``Bz`` in nT. A constant frame is reduced to its single value.
 
     Writes the constant ``akasofu_epsilon`` column (in watts) across the frame and
     records both unit systems in ``attrs['akasofu']``. Returns the enriched
@@ -956,17 +963,28 @@ def calculate_akasofu_epsilon(
     problem = _validate_frame(df)
     if problem is not None:
         return problem
-    if external_params is None or not isinstance(external_params, dict):
+    if solar_wind is None or not isinstance(solar_wind, pd.DataFrame):
         return _error(
-            "missing_external_params",
-            "Akasofu epsilon needs the solar-wind vector and speed.",
-            hint="Provide V (km/s), Bx, By, Bz (nT), e.g. {'V': 450, 'Bx': 2, 'By': -3, 'Bz': -5}.",
+            "missing_solar_wind",
+            "Akasofu epsilon needs the solar-wind vector and speed (V, Bx, By, Bz).",
+            hint=(
+                "Pass 'solar_wind_handle' with a solar-wind frame handle "
+                "(e.g. 'sw:omni:2024-09-12'); the system aligns it automatically."
+            ),
         )
 
-    v_val = _scalar_param(external_params, ("v", "v_sw", "vsw", "speed", "solar_wind_speed"))
-    bx_val = _scalar_param(external_params, ("bx", "b_x", "bx_gsm", "bxgsm"))
-    by_val = _scalar_param(external_params, ("by", "b_y", "by_gsm", "bygsm"))
-    bz_val = _scalar_param(external_params, ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"))
+    def _mean(names: tuple[str, ...]) -> float | None:
+        column = _column_ci(solar_wind, *names)
+        if column is None:
+            return None
+        values = pd.to_numeric(solar_wind[column], errors="coerce")
+        values = values[np.isfinite(values)]
+        return float(values.mean()) if not values.empty else None
+
+    v_val = _mean(("V", "V_sw", "Vx", "speed", "solar_wind_speed"))
+    bx_val = _mean(("Bx", "B_x", "Bx_gsm", "BxGSM", "bx_gsm"))
+    by_val = _mean(("By", "B_y", "By_gsm", "ByGSM", "by_gsm"))
+    bz_val = _mean(("Bz", "B_z", "Bz_gsm", "BzGSM", "bz_gsm", "B_z_gsm"))
 
     missing = [
         name
@@ -975,11 +993,11 @@ def calculate_akasofu_epsilon(
     ]
     if missing:
         return _error(
-            "invalid_external_params",
-            f"Akasofu epsilon needs {missing} but they are missing or non-numeric.",
+            "invalid_solar_wind",
+            f"Akasofu epsilon needs {missing} in the solar-wind frame.",
             missing=missing,
-            available=sorted(str(k) for k in external_params),
-            hint="Keys accepted: 'V', 'Bx', 'By', 'Bz' (case-insensitive).",
+            available=[str(c) for c in solar_wind.columns],
+            hint="fetch_solar_wind frames carry V, Bx, By and Bz.",
         )
 
     b_total_nt = float(np.sqrt(bx_val**2 + by_val**2 + bz_val**2))
@@ -1175,7 +1193,7 @@ def detect_substorm_onset(
 # 11. equatorial electrojet (EEJ) index
 # --------------------------------------------------------------------------- #
 def calculate_eej_index(
-    df: pd.DataFrame, external_params: dict[str, Any] | None = None
+    df: pd.DataFrame, reference: Any = None
 ) -> pd.DataFrame | dict[str, Any]:
     """Equatorial electrojet strength: equatorial minus off-equator H.
 
@@ -1185,10 +1203,10 @@ def calculate_eej_index(
     usually computed from two INTERMAGNET stations.
 
     The equatorial frame is ``df``; the reference frame is passed through
-    ``external_params`` under ``reference`` (a stored frame handle or a mapping
-    with ``H``), or as a ready ``H_reference`` series/array. Writes the
-    ``eej_index`` column and records the mean, peak and peak time in
-    ``attrs['eej']``. Returns the enriched DataFrame, or an error dict.
+    ``reference`` -- either a resolved DataFrame carrying ``H`` (or ``X``/``Y``)
+    or a ready ``H_reference`` series/array. Writes the ``eej_index`` column and
+    records the mean, peak and peak time in ``attrs['eej']``. Returns the
+    enriched DataFrame, or an error dict.
     """
     problem = _validate_frame(df)
     if problem is not None:
@@ -1202,39 +1220,29 @@ def calculate_eej_index(
     ref_values: np.ndarray | None = None
     ref_label: str | None = None
 
-    if external_params is not None and isinstance(external_params, dict):
-        raw_ref = _first_param(external_params, ("h_reference", "reference_h", "reference_frame"))
-        if raw_ref is None:
-            raw_ref = _first_param(external_params, ("reference", "reference_df", "df2"))
-        if isinstance(raw_ref, pd.DataFrame):
-            if "H" in raw_ref.columns:
-                ref_values = pd.to_numeric(raw_ref["H"], errors="coerce").to_numpy(dtype="float64")
-                ref_label = "mapping:H"
-            elif {"X", "Y"} <= set(raw_ref.columns):
-                ref_values = _horizontal(raw_ref)
-                ref_label = "mapping:hypot(X,Y)"
-        elif isinstance(raw_ref, (pd.Series, pd.Index, np.ndarray, list, tuple)):
-            try:
-                ref_values = pd.to_numeric(pd.Series(list(raw_ref)), errors="coerce").to_numpy(
-                    dtype="float64"
-                )
-                ref_label = "array"
-            except (TypeError, ValueError):
-                ref_values = None
-        elif isinstance(raw_ref, str) and raw_ref.strip():
-            return _error(
-                "unresolved_reference",
-                "calculate_eej_index needs the resolved reference frame, not its handle.",
-                hint="Resolve the handle via the store, then pass its H column.",
+    if isinstance(reference, pd.DataFrame):
+        if "H" in reference.columns:
+            ref_values = pd.to_numeric(reference["H"], errors="coerce").to_numpy(dtype="float64")
+            ref_label = "frame:H"
+        elif {"X", "Y"} <= set(reference.columns):
+            ref_values = _horizontal(reference)
+            ref_label = "frame:hypot(X,Y)"
+    elif isinstance(reference, (pd.Series, pd.Index, np.ndarray, list, tuple)):
+        try:
+            ref_values = pd.to_numeric(pd.Series(list(reference)), errors="coerce").to_numpy(
+                dtype="float64"
             )
+            ref_label = "array"
+        except (TypeError, ValueError):
+            ref_values = None
 
     if ref_values is None:
         return _error(
-            "missing_external_params",
+            "missing_reference",
             "EEJ needs the reference station's H series (6-8 degrees off the equator).",
             hint=(
-                "Pass external_params={'reference': <ref frame with H>} or "
-                "{'H_reference': <array>}."
+                "Pass 'reference_handle' with the reference station's frame handle "
+                "(e.g. 'raw:abg:2023-09-12'); the system resolves it automatically."
             ),
         )
     if ref_values.size != n_rows:

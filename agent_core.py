@@ -836,8 +836,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "электроджет).\n"
                 "WHEN TO USE EACH METRIC (NOT detect_anomalies): "
                 "burton_coupling = 'Dst prediction', 'Burton function', 'storm "
-                "evolution' (needs Np/V/Bz/Dst); akasofu_epsilon = 'energy input', "
-                "'Akasofu function', 'magnetospheric power' (needs V/Bx/By/Bz). "
+                "evolution'; akasofu_epsilon = 'energy input', 'Akasofu function', "
+                "'magnetospheric power'. "
                 "metric='peak_dhdt' ('GIC risk', 'transformer risk', 'dH/dt peaks'): "
                 "ИСПОЛЬЗУЙ ЭТО для оценки риска GIC и поиска пиковых dH/dt; требует "
                 "высокого разрешения (1-сек/минутных). metric='substorm_onset' "
@@ -845,6 +845,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "времени начала суббури по резкому падению SML.\n"
                 "df_descriptor — точная строка из frame_handle предыдущего "
                 "результата (например, 'raw:irt:2024-09-10'); не придумывай её.\n"
+                "ДЛЯ СОЛНЕЧНЫХ МЕТРИК передай 'solar_wind_handle' (например, "
+                "'sw:omni:2024-09-12') — система выровняет данные автоматически. "
+                "Числа НЕ принимаются. Для 'eej_index' — 'reference_handle'.\n"
                 "WARNING: аргументы 'formula', 'ground_component', 'stations' НЕ "
                 "СУЩЕСТВУЮТ."
             ),
@@ -861,26 +864,27 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "eej_index",
                         ],
                         "description": (
-                            "Ровно одна строка enum: 'sq_baseline' (Sq), 'deltas', "
-                            "'gic'/'dH_dt' (скорость/GIC), 'dst_proxy', 'detect_ssc', "
-                            "'ey_coupling' (+external_params), 'burton_coupling', "
-                            "'akasofu_epsilon', 'peak_dhdt' (пик dH/dt для GIC), "
-                            "'substorm_onset' (суббуря по SML), 'eej_index'."
+                            "Ровно одна строка enum: 'sq_baseline', 'deltas', "
+                            "'gic'/'dH_dt', 'dst_proxy', 'detect_ssc', 'ey_coupling', "
+                            "'burton_coupling', 'akasofu_epsilon', 'peak_dhdt', "
+                            "'substorm_onset', 'eej_index'."
                         ),
                     },
-                    "external_params": {
-                        "type": "object",
+                    "solar_wind_handle": {
+                        "type": "string",
                         "description": (
-                            "Solar-wind and secondary inputs. For 'ey_coupling' a dict "
-                            "like {'solar_wind': 'sw:omni:<date>'} or scalars "
-                            "{'V': <km/s>, 'Bz': <nT>}. For 'burton_coupling': "
-                            "{'Np': <cm^-3>, 'V': <km/s>, 'Bz': <nT>, 'Dst': <nT>}. For "
-                            "'akasofu_epsilon': {'V': <km/s>, 'Bx': <nT>, 'By': <nT>, "
-                            "'Bz': <nT>}. For 'eej_index': {'reference': "
-                            "'raw:<station>:<date>'} (the off-equator station). A "
-                            "solar-wind handle may also be given as "
-                            "{'solar_wind': 'sw:omni:<date>'}. DO NOT put "
-                            "'ground_component'/'stations' inside it; ignored elsewhere."
+                            "Handle of the solar wind frame (e.g., "
+                            "'sw:omni:2024-09-12'). Required for metrics: "
+                            "ey_coupling, burton_coupling, akasofu_epsilon. "
+                            "The system will automatically align solar wind data "
+                            "with the ground station frame."
+                        ),
+                    },
+                    "reference_handle": {
+                        "type": "string",
+                        "description": (
+                            "Handle of the off-equator reference station frame for "
+                            "metric 'eej_index' (e.g., 'raw:abg:2023-09-12')."
                         ),
                     },
                     "window_seconds": {
@@ -4947,122 +4951,16 @@ _PHYSICS_METRICS: dict[str, Any] = {
     "eej_index": pengine.calculate_eej_index,
 }
 
-#: Metrics that read solar-wind scalars from ``external_params`` and therefore
-#: accept a stored solar-wind handle the same way ``ey_coupling`` does.
-_SOLAR_WIND_SCALAR_METRICS = ("burton_coupling", "akasofu_epsilon")
+#: Metrics that read the solar wind and therefore REQUIRE ``solar_wind_handle``.
+#: The handler resolves that handle, aligns the frame to the observatory clock
+#: with :func:`physics_engine.align_solar_wind`, and hands the aligned frame to
+#: the formula as ``solar_wind``. There is no scalar path any more: a number is
+#: not a frame and could not be aligned.
+_SOLAR_WIND_METRICS = ("ey_coupling", "burton_coupling", "akasofu_epsilon")
 
-#: Metrics that need a second frame (the off-equator reference station).
+#: Metrics that need a second frame (the off-equator reference station), supplied
+#: through the flat ``reference_handle`` argument.
 _TWO_FRAME_METRICS = ("eej_index",)
-
-#: Per-metric requirements on ``external_params``, checked before dispatch.
-#:
-#: A model that reached for these new metrics was still judged by the old
-#: ``ey_coupling`` rule, which only ever looked for ``V``/``Bz``. That silently
-#: accepted a Burton call missing ``Np``/``Dst`` and then failed deep in the
-#: engine, or refused an Akasofu call that legitimately wanted ``Bx``/``By``. The
-#: table below names, per metric, the aliases that satisfy each logical input and
-#: whether the input may instead be a column of ``df_descriptor`` (a string).
-#:
-#: * ``required`` maps a logical name -> the aliases that count as "present";
-#:   every logical name must be satisfied or the call is refused with a
-#:   ``missing_external_params`` that lists exactly what is missing.
-#: * any string value is allowed when it names a real column of the frame, so
-#:   ``{'V': 'V'}`` reads the observatory frame's own column (validated against
-#:   ``df.columns``); unknown strings are refused rather than forwarded.
-_EXTERNAL_PARAM_SPECS: dict[str, dict[str, Any]] = {
-    "burton_coupling": {
-        "required": {
-            "Np": ("np", "n_p", "density", "n"),
-            "V": ("v", "v_sw", "vsw", "speed", "solar_wind_speed"),
-            "Bz": ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"),
-            "Dst": ("dst", "dst_current", "current_dst", "dst_now"),
-        },
-        "allow_handle": True,
-    },
-    "akasofu_epsilon": {
-        "required": {
-            "V": ("v", "v_sw", "vsw", "speed", "solar_wind_speed"),
-            "Bx": ("bx", "b_x", "bx_gsm", "bxgsm", "b_x_gsm"),
-            "By": ("by", "b_y", "by_gsm", "bygsm", "b_y_gsm"),
-            "Bz": ("bz", "b_z", "bz_gsm", "bzgsm", "b_z_gsm"),
-        },
-        "allow_handle": True,
-    },
-    "peak_dhdt": {"required": {}, "allow_handle": False},
-    "substorm_onset": {"required": {}, "allow_handle": False},
-    "eej_index": {"required": {}, "allow_handle": False},
-}
-
-
-def _validate_external_params(
-    metric: str,
-    external: dict[str, Any] | None,
-    frame: pd.DataFrame,
-    *,
-    handle_provided: bool,
-) -> dict[str, Any] | None:
-    """Refuse an ``external_params`` payload that cannot satisfy *metric*.
-
-    Returns ``None`` when the payload is acceptable, else an error dict. The
-    accepted shapes are:
-
-    * a stored solar-wind handle (``{'solar_wind': 'sw:omni:...'}``) for the two
-      solar-wind metrics -- the handle supplies every input, so the per-key check
-      is skipped;
-    * numbers for each required input;
-    * column names of the frame the call targets, so ``{'V': 'V'}`` is legal when
-      the frame really has a ``V`` column.
-
-    A string that is neither a resolvable column nor a handle is refused: the
-    engine would otherwise treat it as a numeric literal and return a confusing
-    ``invalid_external_params`` far from the mistake.
-    """
-    spec = _EXTERNAL_PARAM_SPECS.get(metric)
-    if spec is None:
-        return None
-
-    required: dict[str, tuple[str, ...]] = spec.get("required", {})
-    if not required:
-        return None
-
-    external = external if isinstance(external, dict) else {}
-    if spec.get("allow_handle") and handle_provided:
-        return None
-
-    columns = {str(c).strip().lower() for c in frame.columns}
-    missing: list[str] = []
-    for logical, aliases in required.items():
-        value = pengine._first_param(external, aliases)
-        if value is None or (isinstance(value, str) and not value.strip()):
-            missing.append(logical)
-            continue
-        if isinstance(value, str):
-            # A string must name a real column; numbers stay numbers.
-            if value.strip().lower() not in columns:
-                return _error(
-                    "invalid_external_params",
-                    f"external_params['{logical}']={value!r} is not a number and "
-                    f"not a column of the frame.",
-                    missing=[logical],
-                    available=sorted(frame.columns),
-                    hint=(
-                        f"Pass a number for {logical!r} or the exact name of a "
-                        f"column of df_descriptor. Available columns: "
-                        f"{sorted(frame.columns)}."
-                    ),
-                )
-    if missing:
-        return _error(
-            "missing_external_params",
-            f"metric={metric!r} needs external_params with: {', '.join(missing)}.",
-            missing=missing,
-            hint=(
-                f"Provide {missing} as numbers, e.g. "
-                f"{{'Np': 5, 'V': 450, 'Bz': -10, 'Dst': -30}}, or point at a "
-                f"solar-wind handle with {{'solar_wind': 'sw:omni:<date>'}}."
-            ),
-        )
-    return None
 
 #: Spellings a model reaches for that mean the same metric. 'dH_dt' is the
 #: physical name of the GIC proxy, so it is accepted and folded onto 'gic'
@@ -5088,74 +4986,6 @@ _PHYSICS_METRIC_ALIASES: dict[str, str] = {
     "eej": "eej_index",
     "equatorial_electrojet": "eej_index",
 }
-
-
-#: Keys under ``external_params`` that name a stored solar-wind frame instead of
-#: carrying numbers. The model gets one obvious spelling plus a few synonyms.
-_SOLAR_WIND_HANDLE_KEYS = (
-    "solar_wind", "solar_wind_handle", "solar_wind_frame", "sw", "sw_handle",
-)
-
-
-def _external_handle_provided(args: dict[str, Any], external: dict[str, Any] | None) -> bool:
-    """True when the call points at a stored solar-wind frame by handle.
-
-    The handle can ride in ``external_params`` under one of
-    :data:`_SOLAR_WIND_HANDLE_KEYS` or as a top-level ``solar_wind``/
-    ``solar_wind_handle`` argument. When it does, the per-key requirement check
-    is skipped: the handle is what supplies ``Np``/``V``/``Bz``.
-    """
-    for key in ("solar_wind_handle", "solar_wind"):
-        candidate = args.get(key)
-        if isinstance(candidate, str) and candidate.strip():
-            return True
-    if isinstance(external, dict):
-        for key in _SOLAR_WIND_HANDLE_KEYS:
-            candidate = external.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                return True
-    return False
-
-
-def _resolve_coupling_external(
-    args: dict[str, Any],
-    external: dict[str, Any] | None,
-    frame: pd.DataFrame,
-    store: FrameStore,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Turn the many shapes of ``external_params`` into aligned V/Bz arrays.
-
-    Accepts (in priority order):
-
-    * a handle to a stored ``fetch_solar_wind`` frame, either as a top-level
-      ``solar_wind``/``solar_wind_handle`` argument or under one of
-      :data:`_SOLAR_WIND_HANDLE_KEYS` inside ``external_params`` -- the frame is
-      resolved and aligned to the observatory clock with
-      :func:`physics_engine.align_solar_wind`;
-    * plain scalars or arrays already keyed ``V``/``Bz`` -- passed straight to
-      the engine, which broadcasts a scalar and multiplies vectors elementwise.
-
-    Returns ``(external_params, None)`` on success, or ``(None, error_dict)`` when
-    a referenced handle cannot be resolved or aligned.
-    """
-    handle = args.get("solar_wind_handle") or args.get("solar_wind")
-    if not (isinstance(handle, str) and handle.strip()) and isinstance(external, dict):
-        for key in _SOLAR_WIND_HANDLE_KEYS:
-            candidate = external.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                handle = candidate
-                break
-
-    if not (isinstance(handle, str) and handle.strip()):
-        return external, None
-
-    sw_frame, sw_err = store.resolve(handle)
-    if sw_err:
-        return None, sw_err
-    aligned = pengine.align_solar_wind(frame, sw_frame)
-    if pengine.is_error(aligned):
-        return None, aligned
-    return {"V": aligned["V"], "Bz": aligned["Bz"]}, None
 
 
 def _strict_argument_check(
@@ -5224,111 +5054,74 @@ def _strict_argument_check(
     return None
 
 
-def _materialize_external_columns(
-    external: dict[str, Any] | None, frame: pd.DataFrame
-) -> dict[str, Any] | None:
-    """Replace string values that name frame columns with that column's mean.
+def _resolve_solar_wind_frame(
+    args: dict[str, Any], frame: pd.DataFrame, store: FrameStore
+) -> tuple[pd.DataFrame | None, dict[str, Any] | None]:
+    """Resolve ``solar_wind_handle`` and align it to ``frame``'s clock.
 
-    Task wording allows ``external_params`` to carry *either* numbers *or* the
-    names of columns of ``df_descriptor``. The scalar-based Burton/Akasofu
-    formulas cannot consume a whole column, so a column name is reduced to its
-    finite mean -- exactly the same treatment a stored solar-wind handle gets in
-    :func:`_resolve_scalar_solar_wind`. Numeric values pass through untouched.
+    This is the whole "Automatic Alignment" contract: the caller names a stored
+    solar-wind frame, the handler resolves it and calls
+    :func:`physics_engine.align_solar_wind`, so the formula never sees a handle
+    and never has to guess whether a value is a number or a column name.
+
+    Returns ``(aligned_frame, None)`` or ``(None, error_dict)``. A missing handle
+    is reported as ``missing_solar_wind_handle`` -- the one error that names the
+    fix, instead of a downstream "V is missing" from deep in the engine.
     """
-    if not isinstance(external, dict):
-        return external
-    lookup = {str(c).strip().lower(): c for c in frame.columns}
-    out: dict[str, Any] = {}
-    for key, value in external.items():
-        if isinstance(value, str) and value.strip():
-            column = lookup.get(value.strip().lower())
-            if column is not None:
-                numbers = pd.to_numeric(frame[column], errors="coerce")
-                numbers = numbers[np.isfinite(numbers)]
-                out[key] = float(numbers.mean()) if not numbers.empty else None
-                continue
-        out[key] = value
-    return out
-
-
-def _resolve_scalar_solar_wind(
-    args: dict[str, Any],
-    external: dict[str, Any] | None,
-    frame: pd.DataFrame,
-    store: FrameStore,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Flatten a stored solar-wind frame into the scalar keys Burton/Akasofu read.
-
-    The model can pass ready scalars (``{'Np': 5, 'V': 450, 'Bz': -10, ...}``) or
-    point at a ``fetch_solar_wind`` handle. In the handle case the frame is
-    resolved and reduced to representative values: the solar-wind speed ``V`` and
-    the field components are taken as the mean over the overlap with the
-    observatory clock, and ``Np``/``Bz`` likewise. That turns a whole day of L1
-    data into the single set of inputs the one-step Burton/Akasofu formulas need.
-    """
-    handle = args.get("solar_wind_handle") or args.get("solar_wind")
-    if not (isinstance(handle, str) and handle.strip()) and isinstance(external, dict):
-        for key in _SOLAR_WIND_HANDLE_KEYS:
-            candidate = external.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                handle = candidate
-                break
-
+    handle = args.get("solar_wind_handle")
     if not (isinstance(handle, str) and handle.strip()):
-        return external, None
+        return None, _error(
+            "missing_solar_wind_handle",
+            "This metric needs solar-wind data, but 'solar_wind_handle' was not passed.",
+            missing=["solar_wind_handle"],
+            required=["solar_wind_handle"],
+            hint=(
+                "Pass 'solar_wind_handle' argument with the handle of solar wind data "
+                "(e.g., 'sw:omni:2024-09-12')."
+            ),
+        )
 
     sw_frame, sw_err = store.resolve(handle)
     if sw_err:
         return None, sw_err
+    if not isinstance(sw_frame, pd.DataFrame):
+        return None, _error(
+            "unknown_frame",
+            f"Handle {handle!r} does not hold a solar-wind frame.",
+            available=store.names(),
+        )
 
-    def _mean(*names: str) -> float | None:
-        col = pengine._column_ci(sw_frame, *names)
-        if col is None:
-            return None
-        values = pd.to_numeric(sw_frame[col], errors="coerce")
-        values = values[np.isfinite(values)]
-        return float(values.mean()) if not values.empty else None
-
-    flat: dict[str, Any] = dict(external or {})
-    matrix = {
-        "V": ("V", "V_sw", "speed", "solar_wind_speed"),
-        "Np": ("Np", "density", "n_p"),
-        "Bx": ("Bx", "Bx_gsm"),
-        "By": ("By", "By_gsm"),
-        "Bz": ("Bz", "Bz_gsm"),
-    }
-    for target, names in matrix.items():
-        if target not in flat:
-            value = _mean(*names)
-            if value is not None:
-                flat[target] = value
-    return flat, None
+    aligned = pengine.align_solar_wind(frame, sw_frame)
+    if pengine.is_error(aligned):
+        return None, aligned
+    return aligned, None
 
 
 def _resolve_reference_frame(
-    external: dict[str, Any] | None,
-    store: FrameStore,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Resolve the EEJ reference-station handle (``external_params['reference']``).
+    args: dict[str, Any], store: FrameStore
+) -> tuple[pd.DataFrame | None, dict[str, Any] | None]:
+    """Resolve ``reference_handle`` for the two-frame metrics (EEJ).
 
-    A two-station index cannot be computed from one handle, so the reference is
-    carried the same way the solar wind is: a nested frame handle. The handle is
-    resolved here and dropped into ``external_params`` as a real DataFrame so the
-    engine never has to know about the store.
+    Same shape as :func:`_resolve_solar_wind_frame`: the handle is resolved here
+    so the engine only ever receives real frames.
     """
-    if not isinstance(external, dict):
-        return external, None
-
-    for key in ("reference", "reference_df", "df2", "reference_frame"):
-        candidate = external.get(key)
-        if isinstance(candidate, str) and candidate.strip():
-            ref_frame, ref_err = store.resolve(candidate)
-            if ref_err:
-                return None, ref_err
-            resolved = dict(external)
-            resolved[key] = ref_frame
-            return resolved, None
-    return external, None
+    handle = args.get("reference_handle")
+    if not (isinstance(handle, str) and handle.strip()):
+        return None, _error(
+            "missing_reference_handle",
+            "This metric needs a second (reference) frame, but 'reference_handle' "
+            "was not passed.",
+            missing=["reference_handle"],
+            required=["reference_handle"],
+            hint=(
+                "Pass 'reference_handle' with the reference station's frame handle "
+                "(e.g., 'raw:abg:2023-09-12')."
+            ),
+        )
+    ref_frame, ref_err = store.resolve(handle)
+    if ref_err:
+        return None, ref_err
+    return ref_frame, None
 
 
 def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
@@ -5338,11 +5131,19 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
     to remember six signatures, and a new metric should be a table row here, not
     a new schema in the prompt budget. The result is always a frame with the new
     physical columns, so it is plottable and can feed the next tool.
+
+    The contract is flat on purpose. There is no polymorphic ``external_params``
+    mapping: a metric that needs another dataset names it with a frame handle
+    (``solar_wind_handle`` / ``reference_handle``), this handler resolves it and
+    aligns it, and the engine reads named columns. One input shape, one code path.
     """
     strict = _strict_argument_check(
         "apply_physics_formula",
         args,
-        allowed=("df_descriptor", "metric", "external_params", "window_seconds"),
+        allowed=(
+            "df_descriptor", "metric", "solar_wind_handle",
+            "reference_handle", "window_seconds",
+        ),
         required=("df_descriptor",),
     )
     if strict is not None:
@@ -5351,8 +5152,6 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
     descriptor = str(args.get("df_descriptor") or "").strip()
     metric = str(args.get("metric") or "").strip().lower()
     metric = _PHYSICS_METRIC_ALIASES.get(metric, metric)
-    external = args.get("external_params")
-    external = external if isinstance(external, dict) else None
 
     func = _PHYSICS_METRICS.get(metric)
     if func is None:
@@ -5360,41 +5159,43 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
             "unknown_metric",
             f"metric={metric!r} is not supported.",
             available=sorted(_PHYSICS_METRICS),
-            hint="Pick one of the listed metrics; ey_coupling also needs external_params.",
+            hint="Pick one of the listed metrics.",
         ), f"apply_physics_formula refused metric {metric!r}."
 
     frame, err = store.resolve(descriptor)
     if err:
         return err, f"apply_physics_formula failed: {err.get('error')}"
 
-    # Validate external_params against the metric's own requirements before
-    # dispatch, so a missing Np/Dst is named here rather than surfacing as a
-    # generic engine error, and a bare column name is accepted as an input.
-    handle_provided = _external_handle_provided(args, external)
-    ext_err = _validate_external_params(
-        metric, external, frame, handle_provided=handle_provided
-    )
-    if ext_err is not None:
-        return ext_err, f"apply_physics_formula failed: {ext_err.get('error')}"
-
-    # ey_coupling is the only metric with a second, required argument. It accepts
-    # scalars, a stored solar-wind handle, or already-aligned V/Bz arrays.
-    if metric == "ey_coupling":
-        external, sw_err = _resolve_coupling_external(args, external, frame, store)
+    if metric in _SOLAR_WIND_METRICS:
+        # Every solar-wind metric takes the same aligned frame. Burton also reads
+        # the current Dst from a stored indices frame when one is available; the
+        # engine falls back to Dst=0 (a quiet start) when it is not.
+        solar_wind, sw_err = _resolve_solar_wind_frame(args, frame, store)
         if sw_err is not None:
             return sw_err, f"apply_physics_formula failed: {sw_err.get('error')}"
-        result = func(frame, external)
-    elif metric in _SOLAR_WIND_SCALAR_METRICS:
-        external = _materialize_external_columns(external, frame)
-        external, sw_err = _resolve_scalar_solar_wind(args, external, frame, store)
-        if sw_err is not None:
-            return sw_err, f"apply_physics_formula failed: {sw_err.get('error')}"
-        result = func(frame, external)
+        alignment = dict(solar_wind.attrs.get("solar_wind_alignment", {}))
+        if metric == "burton_coupling":
+            indices = None
+            for candidate in store.names():
+                if candidate.startswith("idx:"):
+                    resolved, _ = store.resolve(candidate)
+                    if isinstance(resolved, pd.DataFrame) and pengine._column_ci(
+                        resolved, "Dst"
+                    ):
+                        indices = resolved
+                        break
+            result = func(frame, solar_wind, indices)
+        else:
+            result = func(frame, solar_wind)
+        if not pengine.is_error(result):
+            # Keep the alignment facts on the result so the model (and a test)
+            # can see that the two clocks really were married, not assumed equal.
+            result.attrs["solar_wind_alignment"] = alignment
     elif metric in _TWO_FRAME_METRICS:
-        external, ref_err = _resolve_reference_frame(external, store)
+        reference, ref_err = _resolve_reference_frame(args, store)
         if ref_err is not None:
             return ref_err, f"apply_physics_formula failed: {ref_err.get('error')}"
-        result = func(frame, external)
+        result = func(frame, reference)
     elif metric == "peak_dhdt" and args.get("window_seconds") is not None:
         result = func(frame, args.get("window_seconds"))
     else:
@@ -5414,6 +5215,8 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
         "available_handles": store.names(),
         "result": note,
     }
+    if "solar_wind_alignment" in result.attrs:
+        payload["solar_wind_alignment"] = result.attrs["solar_wind_alignment"]
     return payload, note
 
 
@@ -5563,7 +5366,7 @@ def _handle_calculate_eej_index(
     if ref_err is not None:
         return ref_err, f"calculate_eej_index failed fetching {reference}: {ref_err.get('error')}"
 
-    result = pengine.calculate_eej_index(eq_frame, {"reference": ref_frame})
+    result = pengine.calculate_eej_index(eq_frame, ref_frame)
     if pengine.is_error(result):
         return result, f"calculate_eej_index failed: {result.get('error')}"
 

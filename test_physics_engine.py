@@ -2,6 +2,7 @@
 import numpy as np
 
 import physics_engine as pe
+from test_utils import create_mock_solar_wind_frame, make_solar_wind_frame
 
 
 def test_extract_sq_baseline_night_median():
@@ -36,17 +37,21 @@ def test_calculate_dst_proxy_basic():
     assert not pe.is_error(res)
     assert 'dst_proxy' in res.columns
 
-def test_calculate_coupling_function_needs_external():
+def test_calculate_coupling_function_needs_solar_wind():
     idx = pd.date_range('2024-09-10 00:00:00', periods=2, freq='min', tz='UTC')
     df = pd.DataFrame({'timestamp': idx, 'H': [100, 101]})
     res = pe.calculate_coupling_function(df)
     assert pe.is_error(res)
-    assert res.get('error') == 'missing_external_params'
+    assert res.get('error') == 'missing_solar_wind'
 
 def test_calculate_coupling_function_computes_ey():
     idx = pd.date_range('2024-09-10 00:00:00', periods=2, freq='min', tz='UTC')
     df = pd.DataFrame({'timestamp': idx, 'H': [100, 101]})
-    res = pe.calculate_coupling_function(df, {'V': 400, 'Bz': -5})
+    sw = pe.align_solar_wind(
+        df, make_solar_wind_frame(V=400.0, Bz=-5.0, periods=2, start='2024-09-10 00:00:00')
+    )
+    assert not pe.is_error(sw)
+    res = pe.calculate_coupling_function(df, sw)
     assert not pe.is_error(res)
     assert 'E_y' in res.columns
 
@@ -120,13 +125,19 @@ def test_align_solar_wind_requires_speed_and_bz():
 
 
 def test_calculate_coupling_function_vectorizes_ey():
-    """Vector V/Bz (the aligned columns) give per-row Ey and a peak summary."""
+    """The aligned frame's V/Bz columns give per-row Ey and a peak summary."""
     obs = _observatory(periods=5)
-    v = pd.Series([400.0, 410.0, 420.0, 430.0, 440.0])
-    bz = pd.Series([-1.0, -2.0, -3.0, -4.0, -5.0])
-    res = pe.calculate_coupling_function(obs, {'V': v, 'Bz': bz})
+    sw = make_solar_wind_frame(periods=5)
+    sw['V'] = [400.0, 410.0, 420.0, 430.0, 440.0]
+    sw['Bz'] = [-1.0, -2.0, -3.0, -4.0, -5.0]
+    aligned = pe.align_solar_wind(obs, sw)
+    assert not pe.is_error(aligned)
+    res = pe.calculate_coupling_function(obs, aligned)
     assert not pe.is_error(res)
-    np.testing.assert_allclose(res['E_y'].to_numpy(), (v * bz).to_numpy())
+    np.testing.assert_allclose(
+        res['E_y'].to_numpy(),
+        (aligned['V'] * aligned['Bz']).to_numpy(),
+    )
     info = res.attrs['ey_coupling']
     assert info['mode'] == 'vector'
     assert info['n_samples'] == 5
@@ -134,25 +145,19 @@ def test_calculate_coupling_function_vectorizes_ey():
     assert abs(info['E_y_mV_m_min'] + 2200.0) < 1e-9
 
 
-def test_calculate_coupling_function_broadcasts_a_scalar_against_a_vector():
-    obs = _observatory(periods=3)
-    res = pe.calculate_coupling_function(
-        obs, {'V': 400.0, 'Bz': pd.Series([-1.0, -2.0, -3.0])}
-    )
-    assert not pe.is_error(res)
-    np.testing.assert_allclose(res['E_y'].to_numpy(), [-400.0, -800.0, -1200.0])
-
-
-def test_calculate_coupling_function_vector_length_mismatch_is_an_error():
+def test_calculate_coupling_function_requires_an_aligned_frame():
+    """A raw (unaligned) solar-wind frame is refused, not silently reused."""
     obs = _observatory(periods=5)
-    res = pe.calculate_coupling_function(obs, {'V': [1.0, 2.0], 'Bz': [1.0] * 5})
+    res = pe.calculate_coupling_function(obs, _solar_wind(periods=2))
     assert pe.is_error(res)
     assert res.get('error') == 'length_mismatch'
 
 
-def test_calculate_coupling_function_scalar_records_summary():
+def test_calculate_coupling_function_constant_frame_records_scalar_summary():
     obs = _observatory(periods=2)
-    res = pe.calculate_coupling_function(obs, {'V': 400, 'Bz': -5})
+    aligned = pe.align_solar_wind(obs, make_solar_wind_frame(V=400.0, Bz=-5.0, periods=2))
+    assert not pe.is_error(aligned)
+    res = pe.calculate_coupling_function(obs, aligned)
     assert not pe.is_error(res)
     info = res.attrs['ey_coupling']
     assert info['mode'] == 'scalar'
@@ -161,15 +166,20 @@ def test_calculate_coupling_function_scalar_records_summary():
 
 # --- Phase 5.2: five more physics metrics -----------------------------------
 
-def test_burton_coupling_needs_external_params():
+def test_burton_coupling_needs_solar_wind():
     res = pe.calculate_burton_coupling(_observatory(periods=2))
     assert pe.is_error(res)
-    assert res.get('error') == 'missing_external_params'
+    assert res.get('error') == 'missing_solar_wind'
 
 
 def test_burton_coupling_reports_coupling_and_predicted_dst():
     obs = _observatory(periods=2)
-    res = pe.calculate_burton_coupling(obs, {'Np': 5.0, 'V': 450.0, 'Bz': -10.0, 'Dst': -30.0})
+    sw = make_solar_wind_frame(V=450.0, Bz=-10.0, Np=5.0, periods=2)
+    indices = pd.DataFrame({
+        'timestamp': obs['timestamp'],
+        'Dst': [-30.0, -30.0],
+    })
+    res = pe.calculate_burton_coupling(obs, sw, indices)
     assert not pe.is_error(res)
     assert 'burton_coupling' in res.columns
     info = res.attrs['burton']
@@ -182,32 +192,44 @@ def test_burton_coupling_reports_coupling_and_predicted_dst():
     assert abs(info['predicted_dst'] - (-30.0 + expected_ddst)) < 1e-2
 
 
+def test_burton_coupling_without_indices_starts_from_quiet_dst():
+    """No Dst frame: the forecast starts at 0 with the injection term only."""
+    obs = _observatory(periods=2)
+    res = pe.calculate_burton_coupling(obs, make_solar_wind_frame(Bz=-10.0, periods=2))
+    assert not pe.is_error(res)
+    info = res.attrs['burton']
+    assert info['Dst_input'] == 0.0
+    assert info['coupling_function'] > 0
+
+
 def test_burton_coupling_northward_bz_gives_zero_injection():
     obs = _observatory(periods=2)
-    res = pe.calculate_burton_coupling(obs, {'Np': 5, 'V': 450, 'Bz': 5, 'Dst': -30})
+    res = pe.calculate_burton_coupling(obs, make_solar_wind_frame(Bz=5.0, periods=2))
     assert not pe.is_error(res)
     info = res.attrs['burton']
     assert info['Bs'] == 0.0
     assert info['coupling_function'] == 0.0
 
 
-def test_burton_coupling_missing_key_is_an_error():
+def test_burton_coupling_missing_column_is_an_error():
     obs = _observatory(periods=2)
-    res = pe.calculate_burton_coupling(obs, {'Np': 5, 'V': 450, 'Bz': -10})  # no Dst
+    sw = make_solar_wind_frame(periods=2).drop(columns=['Np'])
+    res = pe.calculate_burton_coupling(obs, sw)
     assert pe.is_error(res)
-    assert res.get('error') == 'invalid_external_params'
-    assert 'Dst' in res['missing']
+    assert res.get('error') == 'invalid_solar_wind'
+    assert 'Np' in res['missing']
 
 
-def test_akasofu_epsilon_needs_external_params():
+def test_akasofu_epsilon_needs_solar_wind():
     res = pe.calculate_akasofu_epsilon(_observatory(periods=2))
     assert pe.is_error(res)
-    assert res.get('error') == 'missing_external_params'
+    assert res.get('error') == 'missing_solar_wind'
 
 
 def test_akasofu_epsilon_reports_both_units():
     obs = _observatory(periods=2)
-    res = pe.calculate_akasofu_epsilon(obs, {'V': 450.0, 'Bx': 2.0, 'By': -3.0, 'Bz': -5.0})
+    sw = make_solar_wind_frame(V=450.0, Bx=2.0, By=-3.0, Bz=-5.0, periods=2)
+    res = pe.calculate_akasofu_epsilon(obs, sw)
     assert not pe.is_error(res)
     assert 'akasofu_epsilon' in res.columns
     info = res.attrs['akasofu']
@@ -218,7 +240,9 @@ def test_akasofu_epsilon_reports_both_units():
 
 def test_akasofu_epsilon_northward_field_has_small_orientation_factor():
     obs = _observatory(periods=2)
-    res = pe.calculate_akasofu_epsilon(obs, {'V': 450, 'Bx': 0, 'By': 0, 'Bz': 5})
+    res = pe.calculate_akasofu_epsilon(
+        obs, make_solar_wind_frame(V=450, Bx=0, By=0, Bz=5, periods=2)
+    )
     assert not pe.is_error(res)
     # theta = arctan(0/5) = 0 -> sin^4(0) = 0
     assert res.attrs['akasofu']['epsilon_W'] == 0.0
@@ -282,14 +306,14 @@ def test_substorm_onset_quiet_period_has_no_onset():
 def test_eej_index_needs_reference():
     res = pe.calculate_eej_index(_observatory(periods=3))
     assert pe.is_error(res)
-    assert res.get('error') == 'missing_external_params'
+    assert res.get('error') == 'missing_reference'
 
 
 def test_eej_index_subtracts_the_reference_h():
     idx = pd.date_range('2024-09-10 00:00:00', periods=4, freq='min', tz='UTC')
     eq = pd.DataFrame({'timestamp': idx, 'H': [100.0, 120.0, 150.0, 130.0]})
     ref = pd.DataFrame({'timestamp': idx, 'H': [100.0, 105.0, 110.0, 110.0]})
-    res = pe.calculate_eej_index(eq, {'reference': ref})
+    res = pe.calculate_eej_index(eq, ref)
     assert not pe.is_error(res)
     np.testing.assert_allclose(res['eej_index'].to_numpy(), [0.0, 15.0, 40.0, 20.0])
     info = res.attrs['eej']
@@ -300,6 +324,6 @@ def test_eej_index_subtracts_the_reference_h():
 def test_eej_index_length_mismatch_is_an_error():
     idx = pd.date_range('2024-09-10 00:00:00', periods=4, freq='min', tz='UTC')
     eq = pd.DataFrame({'timestamp': idx, 'H': [100.0] * 4})
-    res = pe.calculate_eej_index(eq, {'H_reference': [1.0, 2.0]})
+    res = pe.calculate_eej_index(eq, [1.0, 2.0])
     assert pe.is_error(res)
     assert res.get('error') == 'length_mismatch'

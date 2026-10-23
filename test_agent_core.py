@@ -18,6 +18,7 @@ import pytest
 import agent_core as ac
 import geomag_analyzer as analyzer
 import geomag_plotter as plotter
+from test_utils import create_mock_solar_wind_frame
 
 
 DEMO_BLOCK = (
@@ -2547,22 +2548,33 @@ def test_apply_physics_formula_gic_reports_a_peak():
     assert "нТ/мин" in note
 
 
-def test_apply_physics_formula_ey_coupling_without_external_params_errors():
+def _mock_solar_wind(store, **kwargs):
+    """A mock solar-wind frame stored on the observatory's own clock."""
+    options = dict(V=450.0, Bz=-5.0, Np=5.0, Bx=0.0, By=0.0,
+                   periods=10, freq="min", start="2024-09-10 00:00:00", store=store)
+    options.update(kwargs)
+    return create_mock_solar_wind_frame(**options)
+
+
+def test_apply_physics_formula_ey_coupling_without_handle_errors():
     store = _physics_store()
     payload, note = ac.HANDLERS["apply_physics_formula"](
         {"df_descriptor": "raw:irt:2024-09-10", "metric": "ey_coupling"}, store
     )
     assert ac.is_error(payload)
-    assert payload["error"] == "missing_external_params"
+    assert payload["error"] == "missing_solar_wind_handle"
+    assert "solar_wind_handle" in payload["hint"]
+    assert payload["missing"] == ["solar_wind_handle"]
 
 
-def test_apply_physics_formula_ey_coupling_with_external_params_computes():
+def test_apply_physics_formula_ey_coupling_with_handle_computes():
     store = _physics_store()
+    handle = _mock_solar_wind(store, V=400.0, Bz=-5.0)
     payload, note = ac.HANDLERS["apply_physics_formula"](
         {
             "df_descriptor": "raw:irt:2024-09-10",
             "metric": "ey_coupling",
-            "external_params": {"V": 400, "Bz": -5},
+            "solar_wind_handle": handle,
         },
         store,
     )
@@ -2577,6 +2589,292 @@ def test_apply_physics_formula_unknown_metric_is_refused():
     )
     assert ac.is_error(payload)
     assert payload["error"] == "unknown_metric"
+
+
+def test_apply_physics_formula_burton_coupling_dispatches():
+    store = _physics_store()
+    handle = _mock_solar_wind(store, Np=5.0, V=450.0, Bz=-10.0)
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "burton_coupling",
+            "solar_wind_handle": handle,
+        },
+        store,
+    )
+    assert payload["ok"], payload
+    assert "burton_coupling" in store.get("derived:irt:2024-09-10").columns
+    assert "Бёртона" in note
+
+
+def test_apply_physics_formula_burton_coupling_alias_resolves():
+    store = _physics_store()
+    handle = _mock_solar_wind(store, Np=5.0, V=450.0, Bz=-10.0)
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "burton",
+            "solar_wind_handle": handle,
+        },
+        store,
+    )
+    assert payload["ok"], payload
+    assert payload["metric"] == "burton_coupling"
+
+
+def test_apply_physics_formula_akasofu_epsilon_dispatches():
+    store = _physics_store()
+    handle = _mock_solar_wind(store, V=450.0, Bx=2.0, By=-3.0, Bz=-5.0)
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "akasofu_epsilon",
+            "solar_wind_handle": handle,
+        },
+        store,
+    )
+    assert payload["ok"], payload
+    assert "akasofu_epsilon" in store.get("derived:irt:2024-09-10").columns
+
+
+def test_apply_physics_formula_peak_dhdt_accepts_window_seconds():
+    store = _physics_store()
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "peak_dhdt", "window_seconds": 5},
+        store,
+    )
+    assert payload["ok"], payload
+    assert "peak_dhdt" in store.get("derived:irt:2024-09-10").columns
+
+
+def test_apply_physics_formula_substorm_onset_needs_sml():
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "substorm_onset"}, store
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "missing_columns"
+
+
+def test_apply_physics_formula_eej_resolves_a_reference_handle():
+    store = _physics_store()
+    ref = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-09-10 00:00:00", periods=10, freq="min", tz="UTC"),
+            "H": [100.0] * 10,
+        }
+    )
+    store.put("raw:abc:2024-09-10", ref)
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "eej_index",
+            "reference_handle": "raw:abc:2024-09-10",
+        },
+        store,
+    )
+    assert payload["ok"], payload
+    assert "eej_index" in store.get("derived:irt:2024-09-10").columns
+
+
+def test_apply_physics_formula_eej_without_reference_handle_is_refused():
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "eej_index"}, store
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "missing_reference_handle"
+    assert "reference_handle" in payload["hint"]
+
+
+def test_apply_physics_formula_eej_unknown_reference_is_refused():
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "eej_index",
+            "reference_handle": "raw:abc:2099-01-01",
+        },
+        store,
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "unknown_frame"
+
+
+def test_apply_physics_formula_schema_advertises_all_new_metrics():
+    """The enum and the guidance must name every metric the dispatcher accepts."""
+    schema = next(t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == "apply_physics_formula")
+    enum = set(schema["function"]["parameters"]["properties"]["metric"]["enum"])
+    for metric in (
+        "burton_coupling", "akasofu_epsilon", "peak_dhdt", "substorm_onset", "eej_index",
+    ):
+        assert metric in enum, f"{metric} missing from the metric enum"
+        assert metric in ac._PHYSICS_METRICS, f"{metric} not dispatched"
+        assert metric in schema["function"]["description"], f"{metric} not described"
+
+
+def test_apply_physics_formula_description_maps_keywords_to_metrics():
+    """Problem 2: GIC/onset/Burton/Akasofu keywords must name their metric."""
+    desc = next(
+        t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == "apply_physics_formula"
+    )["function"]["description"]
+    assert "WHEN TO USE EACH METRIC" in desc
+    for keyword, metric in (
+        ("Dst prediction", "burton_coupling"),
+        ("Burton function", "burton_coupling"),
+        ("energy input", "akasofu_epsilon"),
+        ("Akasofu function", "akasofu_epsilon"),
+        ("GIC risk", "peak_dhdt"),
+        ("transformer risk", "peak_dhdt"),
+        ("substorm start", "substorm_onset"),
+        ("SML drop", "substorm_onset"),
+    ):
+        assert keyword in desc, f"{keyword!r} not advertised"
+        assert metric in desc, f"{metric!r} not advertised"
+
+
+def test_solar_wind_metrics_require_the_handle_not_numbers():
+    """The flat contract: numbers are gone, only a frame handle is accepted."""
+    store = _physics_store()
+    for metric in ("ey_coupling", "burton_coupling", "akasofu_epsilon"):
+        payload, _ = ac.HANDLERS["apply_physics_formula"](
+            {"df_descriptor": "raw:irt:2024-09-10", "metric": metric}, store
+        )
+        assert ac.is_error(payload), metric
+        assert payload["error"] == "missing_solar_wind_handle", metric
+
+
+def test_solar_wind_handle_errors_name_the_example():
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "burton_coupling"}, store
+    )
+    assert "sw:omni:" in payload["hint"]
+
+
+def test_solar_wind_handle_is_aligned_automatically():
+    """The handler resolves the handle and records the alignment it performed."""
+    store = _physics_store()
+    # The wind frame is on a 2-minute clock while the observatory is on 1-minute:
+    # only automatic interpolation can marry the two.
+    handle = _mock_solar_wind(store, V=450.0, Bz=-10.0, periods=5, freq="2min")
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "burton_coupling",
+            "solar_wind_handle": handle,
+        },
+        store,
+    )
+    assert payload["ok"], payload
+    alignment = payload["solar_wind_alignment"]
+    assert alignment["n_observatory"] == 10
+    assert alignment["n_solar_wind"] == 5
+    assert alignment["n_finite_V"] > 0
+    assert "Np" in alignment["aligned_extra_columns"]
+
+
+def test_akasofu_handle_supplies_the_full_vector():
+    store = _physics_store()
+    handle = _mock_solar_wind(store, V=450.0, Bx=2.0, By=-3.0, Bz=-5.0)
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "akasofu_epsilon",
+            "solar_wind_handle": handle,
+        },
+        store,
+    )
+    assert payload["ok"], payload
+    extras = set(payload["solar_wind_alignment"].get("aligned_extra_columns", []))
+    assert {"Bx", "By"} <= extras
+    assert payload["solar_wind_alignment"]["n_finite_Bz"] > 0
+
+
+def test_unknown_solar_wind_handle_is_refused():
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "burton_coupling",
+            "solar_wind_handle": "sw:omni:2099-01-01",
+        },
+        store,
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "unknown_frame"
+
+
+def test_external_params_is_no_longer_an_accepted_argument():
+    """The polymorphic mapping was removed from the contract, not just deprecated."""
+    store = _physics_store()
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "burton_coupling",
+            "external_params": {"Np": 5, "V": 450, "Bz": -10},
+        },
+        store,
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "unknown_arguments"
+    assert "external_params" in payload["received"]
+    assert "external_params" not in payload["allowed"]
+    assert "solar_wind_handle" in payload["allowed"]
+
+
+def test_calculate_eej_index_is_registered_and_advertised():
+    """Task 3: EEJ is its own tool, not a metric of apply_physics_formula."""
+    assert "calculate_eej_index" in ac.TOOLS_BY_NAME
+    assert "calculate_eej_index" in ac.HANDLERS
+    schema = next(t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == "calculate_eej_index")
+    props = schema["function"]["parameters"]["properties"]
+    for arg in ("equatorial_station", "reference_station", "start_date"):
+        assert arg in props
+        assert arg in schema["function"]["parameters"]["required"]
+    assert "electrojet" in schema["function"]["description"].lower()
+
+
+def test_calculate_eej_index_offline_returns_a_derived_frame():
+    store = ac.FrameStore()
+    payload, note = ac.HANDLERS["calculate_eej_index"](
+        {
+            "equatorial_station": "IRT",
+            "reference_station": "ABG",
+            "start_date": "2024-09-10",
+        },
+        store,
+    )
+    assert payload["ok"], payload
+    assert payload["frame_handle"] in store.names()
+
+
+def test_calculate_eej_index_refuses_missing_station():
+    store = ac.FrameStore()
+    payload, _ = ac.HANDLERS["calculate_eej_index"](
+        {"equatorial_station": "IRT", "start_date": "2024-09-10"}, store
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "missing_required_argument"
+    assert "reference_station" in payload["missing"]
+
+
+def test_eej_question_selects_the_dedicated_tool():
+    """Problem 3: an EEJ question must offer calculate_eej_index, not just physics."""
+    names = {t["function"]["name"] for t in ac.select_tools_for_query("EEJ для IRT и ABG")}
+    assert "calculate_eej_index" in names
+
+
+def test_gic_and_burton_questions_select_apply_physics_formula():
+    """Problem 2: these intents must not fall through to detect_anomalies only."""
+    for query in (
+        "оцени GIC риск для трансформатора",
+        "посчитай Burton function для бури",
+        "какой energy input по Akasofu",
+        "определи onset time суббури",
+    ):
+        names = {t["function"]["name"] for t in ac.select_tools_for_query(query)}
+        assert "apply_physics_formula" in names, query
 
 
 # --------------------------------------------------------------------------- #
@@ -2603,7 +2901,8 @@ def test_apply_physics_formula_rejects_hallucinated_arguments():
     assert payload["error"] == "unknown_arguments"
     assert set(payload["received"]) == {"formula", "ground_component"}
     assert "df_descriptor" in payload["allowed"]
-    assert "external_params" in payload["allowed"]
+    assert "solar_wind_handle" in payload["allowed"]
+    assert "external_params" not in payload["allowed"]
     assert "df_descriptor" in payload["hint"]  # tells the model what is required
 
 
