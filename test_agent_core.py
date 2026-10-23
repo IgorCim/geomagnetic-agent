@@ -1,4 +1,4 @@
-"""Verification suite for agent_core.
+﻿"""Verification suite for agent_core.
 
 The loop is exercised end to end with :class:`ScriptedBrain`, so nothing here
 needs the 5 GB model, a GPU or a network (except the two ``network`` tests).
@@ -2965,3 +2965,72 @@ def test_plot_space_weather_comparison_valid_args_pass_the_gate():
     )
     assert ac.is_error(payload)
     assert payload["error"] == "missing_dependency"
+
+
+
+# --------------------------------------------------------------------------- #
+# df_descriptor alias on the legacy math tools
+# --------------------------------------------------------------------------- #
+_LEGACY_FRAME_CALLS = {
+    "calculate_derived_components": {},
+    "get_statistics": {"components": ["X"]},
+    "detect_anomalies": {"component": "X"},
+    "calculate_derived_math": {"metric": "delta", "component": "X"},
+    "calculate_baseline": {"component": "X"},
+}
+
+
+def test_legacy_math_tools_accept_df_descriptor():
+    """A model that just used apply_physics_formula reaches for df_descriptor.
+
+    Before the alias this bounced as unknown_frame and the loop never closed.
+    """
+    for tool, extra in _LEGACY_FRAME_CALLS.items():
+        store = _physics_store()
+        args = {"df_descriptor": "raw:irt:2024-09-10", **extra}
+        payload, _ = ac.HANDLERS[tool](args, store)
+        assert not ac.is_error(payload), (tool, payload)
+        assert not isinstance(payload, dict) or payload, (tool, payload)
+
+
+def test_legacy_math_tools_still_accept_df():
+    for tool, extra in _LEGACY_FRAME_CALLS.items():
+        store = _physics_store()
+        args = {"df": "raw:irt:2024-09-10", **extra}
+        payload, _ = ac.HANDLERS[tool](args, store)
+        assert not ac.is_error(payload), (tool, payload)
+
+
+def test_legacy_alias_and_original_return_the_same_numbers():
+    """The alias is a spelling, not a behaviour: both paths must agree."""
+    for tool, extra in _LEGACY_FRAME_CALLS.items():
+        old, _ = ac.HANDLERS[tool](
+            {"df": "raw:irt:2024-09-10", **extra}, _physics_store()
+        )
+        new, _ = ac.HANDLERS[tool](
+            {"df_descriptor": "raw:irt:2024-09-10", **extra}, _physics_store()
+        )
+        assert not ac.is_error(old) and not ac.is_error(new), tool
+        for key in ("X", "delta", "baseline_value", "n_flagged", "frame_handle"):
+            if key in old or key in new:
+                assert old.get(key) == new.get(key), (tool, key)
+
+
+def test_legacy_math_tools_refuse_a_call_with_no_frame():
+    """Neither spelling -> missing_frame, not a confusing unknown_frame(None)."""
+    for tool, extra in _LEGACY_FRAME_CALLS.items():
+        payload, _ = ac.HANDLERS[tool](dict(extra), _physics_store())
+        assert ac.is_error(payload), tool
+        assert payload["error"] == "missing_frame", (tool, payload)
+        assert payload["missing"] == ["df"]
+        assert "raw:irt:2024-09-12" in payload["hint"]
+
+
+def test_legacy_tool_schemas_advertise_the_alias():
+    for tool in _LEGACY_FRAME_CALLS:
+        schema = next(t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == tool)
+        props = schema["function"]["parameters"]["properties"]
+        assert "df_descriptor" in props, tool
+        assert "df" in props, tool
+        note = schema["function"]["description"]
+        assert "df_descriptor" in note and "backward compatibility" in note, tool
