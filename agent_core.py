@@ -80,6 +80,7 @@ __all__ = [
     "download_model",
     "load_brain",
     "parse_tool_calls",
+    "code_revision",
     "run_agent",
     "run_agent_with_planner",
     "select_tools_for_task",
@@ -6292,6 +6293,37 @@ HANDLERS: dict[str, Handler] = {
 # --------------------------------------------------------------------------- #
 # the loop
 # --------------------------------------------------------------------------- #
+def code_revision() -> str:
+    """Short git hash of the checkout that is actually loaded, or ``"unknown"``.
+
+    A notebook kernel caches imported modules in ``sys.modules``. After a
+    ``git pull`` the files on disk can be new while the running ``agent_core``
+    and ``physics_engine`` are still the old ones, and the log then looks like a
+    physics regression rather than a stale process. Printing this at the start
+    of a verbose run makes that failure visible: the hash must match the commit
+    that was just pulled.
+    """
+    try:
+        import subprocess
+
+        out = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(Path(__file__).resolve().parent),
+                "rev-parse",
+                "--short",
+                "HEAD",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+        return out.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def run_agent(
     user_query: str,
     brain: Any = None,
@@ -6334,6 +6366,9 @@ def run_agent(
         return brain
     if brain is None or not hasattr(brain, "chat"):
         return _error("invalid_brain", "brain must expose a .chat(messages, tools) method")
+
+    if verbose:
+        print(f"[CODE] revision={code_revision()} module={Path(__file__).resolve()}")
 
     prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
     # Never hand a small model all 29 schemas: a free-form question gets the
@@ -6613,6 +6648,15 @@ def run_agent(
             if verbose:
                 status = "ok" if entry["ok"] else f"FAILED ({entry.get('error')})"
                 print(f"[agent] round {round_no}: {name}({_short(args)}) -> {status}")
+                # The note is the payload the model actually reads. Without it
+                # the log shows only "ok", and a wrong magnitude (epsilon in kW,
+                # a positive Dst forecast) is invisible until the model repeats
+                # it in prose. Print the evidence, not just the status.
+                note = entry.get("note")
+                if not note and not entry["ok"]:
+                    note = entry.get("message")
+                if note:
+                    print(f"[NOTE] {str(note)[:500]}")
                 print(
                     f"[SCRATCHPAD] Step {round_no}/{max_rounds}. "
                     f"Handle: {scratchpad.current_handle or 'none'}. "

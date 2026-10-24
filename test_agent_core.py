@@ -551,6 +551,34 @@ def test_parser_version_stamp_is_exposed():
     assert isinstance(ac.PARSER_VERSION, str) and ac.PARSER_VERSION
 
 
+def test_code_revision_is_exposed():
+    """The running checkout must name itself, even outside a git tree."""
+    rev = ac.code_revision()
+    assert isinstance(rev, str) and rev
+
+
+def test_verbose_run_prints_code_revision_and_tool_note(capsys, monkeypatch):
+    """A log must show the code that ran and the payload the model read.
+
+    The Kaggle failure this guards against: ``git pull`` updated the files, the
+    kernel kept the old module, and the log showed only ``-> ok`` -- so a wrong
+    epsilon and a positive Dst forecast looked like model hallucinations.
+    """
+    def fake_handler(args, store):
+        return {"ok": True}, "NOTE-MARKER: epsilon=7.1e10 W"
+
+    monkeypatch.setitem(ac.HANDLERS, "get_statistics", fake_handler)
+    brain = ac.ScriptedBrain([
+        T_OPEN + '{"name":"get_statistics","arguments":{"df":"raw"}}' + T_CLOSE,
+        "готово",
+    ])
+    out = ac.run_agent("q", brain=brain, verbose=True, tools=[])
+    assert out["ok"] is True
+    text = capsys.readouterr().out
+    assert "[CODE] revision=" in text
+    assert "[NOTE] NOTE-MARKER: epsilon=7.1e10 W" in text
+
+
 def test_parse_tool_calls_still_returns_a_tuple():
     calls, leftover = ac.parse_tool_calls(
         T_OPEN + '{"name":"f","arguments":{}}' + T_CLOSE, debug=False
