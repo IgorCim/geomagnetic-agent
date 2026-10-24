@@ -2665,6 +2665,31 @@ def test_apply_physics_formula_akasofu_epsilon_dispatches():
     assert "akasofu_epsilon" in store.get("derived:irt:2024-09-10").columns
 
 
+def test_apply_physics_formula_ssc_note_calls_events_candidates():
+    """A ground impulse is not a confirmed SSC without solar wind / a network.
+
+    The 2024-09-12 IRT run produced eight sustained steps, two of them ~60 nT.
+    The payload must present them as SI/SSC candidates with their amplitude,
+    not as eight confirmed storm commencements.
+    """
+    store = ac.FrameStore()
+    stamps = pd.date_range("2024-09-10 00:00:00", periods=10, freq="min", tz="UTC")
+    h = [100.0, 100.0, 140.0, 160.0, 160.0, 160.0, 160.0, 160.0, 160.0, 160.0]
+    df = pd.DataFrame({
+        "timestamp": stamps,
+        "X": h,
+        "Y": [0.0] * 10,
+        "Z": [-300.0] * 10,
+    })
+    store.put("raw:irt:2024-09-10", df)
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "detect_ssc"}, store
+    )
+    assert payload["ok"], payload
+    assert "SI/SSC-кандидаты" in note
+    assert "шаг" in note
+
+
 def test_apply_physics_formula_peak_dhdt_accepts_window_seconds():
     store = _physics_store()
     payload, note = ac.HANDLERS["apply_physics_formula"](

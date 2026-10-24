@@ -68,6 +68,7 @@ __all__ = [
     "is_error",
     "SSC_THRESHOLD_NT_PER_MIN",
     "SSC_MIN_SEPARATION_MIN",
+    "SSC_STEP_WINDOW_MIN",
     "DEFAULT_SQ_METHOD",
     "BURTON_A",
     "BURTON_TAU_HOURS",
@@ -95,6 +96,12 @@ SSC_THRESHOLD_NT_PER_MIN = 5.0
 #: threshold; without a separation window a single step was reported as two or
 #: three "events" and the count was meaningless.
 SSC_MIN_SEPARATION_MIN = 30.0
+
+#: Window used to measure the sustained step of an impulse, in minutes. A
+#: one-sample spike can have a huge dH/dt but no 5-minute step; this amplitude
+#: separates a real sudden impulse from a plotting artifact and lets the payload
+#: report "8 candidates, max step 62 nT" instead of calling every onset an SSC.
+SSC_STEP_WINDOW_MIN = 5.0
 
 #: Burton coupling constants (Burton, McPherron & Russell 1975): the ring-current
 #: injection efficiency ``a`` (nT per unit of the coupling function, per hour) and
@@ -798,8 +805,16 @@ def detect_ssc(
     Adds ``ssc_flag`` (1 where a sample is part of an onset) and ``dH_dt``, and
     records ALL onset events in ``attrs['ssc_count']``. The payload list
     ``attrs['ssc_events']`` keeps the first ten and sets
-    ``attrs['ssc_events_truncated']`` when there are more. Returns the enriched
-    DataFrame, or an error dict.
+    ``attrs['ssc_events_truncated']`` when there are more. Each event carries
+    ``dH_dt_nT_per_min`` (the steepest sample) and ``step_nT`` (the difference of
+    the 5-minute means after and before the onset).
+
+    ``step_nT`` is the amplitude, and it is what makes the output honest: a
+    one-sample spike has a huge rate but almost no step. The events are sudden
+    impulses -- SI/SSC *candidates*. A true sudden commencement additionally
+    needs a solar-wind shock or a multi-station coincidence, neither of which
+    this single-frame detector can supply. Returns the enriched DataFrame, or an
+    error dict.
     """
     problem = _validate_frame(df)
     if problem is not None:
@@ -818,7 +833,8 @@ def detect_ssc(
         )
 
     out = df.copy()
-    dh = _first_difference(_horizontal(out))
+    h = _horizontal(out)
+    dh = _first_difference(h)
 
     stamps = None
     if "timestamp" in df.columns:
@@ -878,12 +894,48 @@ def detect_ssc(
         last_time = stamp
         last_index = int(i)
 
+    # A steep dH/dt can be a one-sample spike. The 5-minute pre/post means give
+    # the sustained step -- the amplitude a human reads off the trace -- so the
+    # payload can say "8 candidates, max step 62 nT" instead of calling every
+    # onset a confirmed SSC.
+    def _step_nT(event: dict[str, Any]) -> float | None:
+        i = int(event["index"])
+        stamp = None
+        raw = event.get("timestamp")
+        if raw is not None:
+            try:
+                stamp = pd.Timestamp(raw)
+            except (TypeError, ValueError):
+                stamp = None
+        if stamp is not None and stamps is not None:
+            try:
+                window = pd.Timedelta(minutes=SSC_STEP_WINDOW_MIN)
+                pre = h[
+                    ((stamps >= stamp - window) & (stamps < stamp)).to_numpy()
+                ]
+                post = h[
+                    ((stamps >= stamp) & (stamps <= stamp + window)).to_numpy()
+                ]
+            except (TypeError, ValueError):
+                pre = h[max(0, i - 5):i]
+                post = h[i:i + 5]
+        else:
+            pre = h[max(0, i - 5):i]
+            post = h[i:i + 5]
+        if len(pre) == 0 or len(post) == 0:
+            return None
+        return float(np.nanmean(post) - np.nanmean(pre))
+
+    for event in events:
+        event["step_nT"] = _jsonable(_step_nT(event), 1)
+
     out.attrs = dict(getattr(df, "attrs", {}))
     out.attrs["ssc_events"] = events[:10]
     out.attrs["ssc_count"] = len(events)
     out.attrs["ssc_events_truncated"] = len(events) > 10
     out.attrs["ssc_threshold_nT_per_min"] = _jsonable(threshold, 2)
     out.attrs["ssc_min_separation_min"] = SSC_MIN_SEPARATION_MIN
+    out.attrs["ssc_step_window_min"] = SSC_STEP_WINDOW_MIN
     return out
 
 

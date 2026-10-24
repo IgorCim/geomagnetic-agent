@@ -73,6 +73,19 @@ def test_detect_ssc_clusters_one_step_into_one_event():
     first = res.attrs['ssc_events'][0]
     assert first['dH_dt_nT_per_min'] == 40.0
     assert first['index'] == 2
+    # +40 nT at the onset and +20 nT on the next sample: the sustained
+    # 5-minute step is 55 nT, not just the peak rate.
+    assert first['step_nT'] == 55.0
+
+
+def test_detect_ssc_step_amplitude_separates_a_spike_from_a_step():
+    """A one-sample spike has a big rate but almost no sustained step."""
+    idx = pd.date_range('2024-09-10 00:00:00', periods=6, freq='min', tz='UTC')
+    df = pd.DataFrame({'timestamp': idx, 'H': [100, 100, 120, 100, 100, 100]})
+    res = pe.detect_ssc(df, threshold_nT_per_min=5)
+    assert res.attrs['ssc_count'] == 1
+    # +20 nT for one minute is 20 nT/min, but the 5-minute step is only +5 nT.
+    assert res.attrs['ssc_events'][0]['step_nT'] < 10
 
 
 def test_detect_ssc_two_steps_an_hour_apart_are_two_events():

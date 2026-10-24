@@ -5662,18 +5662,33 @@ def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
     if metric == "detect_ssc":
         events = attrs.get("ssc_events") or []
         head = ""
+        tail = ""
         if events:
             first = events[0]
             when = first.get("timestamp", "время не указано")
+            step = first.get("step_nT")
+            step_txt = f", шаг {step} нТ" if step is not None else ""
             head = (
                 f" Первое: {when} "
-                f"({first.get('dH_dt_nT_per_min')} нТ/мин)."
+                f"({first.get('dH_dt_nT_per_min')} нТ/мин{step_txt})."
             )
+            strongest = max(
+                events,
+                key=lambda e: float(e.get("step_nT") or 0.0),
+            )
+            if strongest is not first and strongest.get("step_nT") is not None:
+                tail = (
+                    f" Максимум: {strongest.get('timestamp')} "
+                    f"({strongest.get('dH_dt_nT_per_min')} нТ/мин, "
+                    f"шаг {strongest.get('step_nT')} нТ)."
+                )
         trunc = " Показаны первые 10." if attrs.get("ssc_events_truncated") else ""
         return (
-            f"✅ SSC: событий {attrs.get('ssc_count', 0)} "
+            f"✅ Импульсы H (SI/SSC-кандидаты): {attrs.get('ssc_count', 0)} "
             f"(порог {attrs.get('ssc_threshold_nT_per_min')} нТ/мин)."
-            f"{head}{trunc} -> хэндл {slot!r}."
+            f"{head}{tail}{trunc} "
+            f"SSC подтверждается только по солнечному ветру/сети станций. "
+            f"-> хэндл {slot!r}."
         )
     if metric == "burton_coupling":
         info = attrs.get("burton", {})
