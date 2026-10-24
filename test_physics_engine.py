@@ -64,6 +64,49 @@ def test_detect_ssc_finds_jump():
     assert res['ssc_flag'].tolist()[2] == 1
 
 
+def test_detect_ssc_clusters_one_step_into_one_event():
+    """A one-minute step spans two samples; it is still one SSC, not two."""
+    idx = pd.date_range('2024-09-10 00:00:00', periods=6, freq='min', tz='UTC')
+    df = pd.DataFrame({'timestamp': idx, 'H': [100, 100, 140, 160, 160, 160]})
+    res = pe.detect_ssc(df, threshold_nT_per_min=5)
+    assert res.attrs['ssc_count'] == 1
+    first = res.attrs['ssc_events'][0]
+    assert first['dH_dt_nT_per_min'] == 40.0
+    assert first['index'] == 2
+
+
+def test_detect_ssc_two_steps_an_hour_apart_are_two_events():
+    idx = pd.date_range('2024-09-10 00:00:00', periods=125, freq='min', tz='UTC')
+    h = [100.0] * 125
+    for i in range(2, 125):
+        h[i] += 40.0
+    for i in range(62, 125):
+        h[i] += 40.0
+    res = pe.detect_ssc(pd.DataFrame({'timestamp': idx, 'H': h}), threshold_nT_per_min=5)
+    assert res.attrs['ssc_count'] == 2
+
+
+def test_detect_ssc_normalises_the_rate_to_minutes():
+    """+10 nT per 5-minute sample is 2 nT/min, not a 10 nT/min onset."""
+    idx = pd.date_range('2024-09-10 00:00:00', periods=5, freq='5min', tz='UTC')
+    df = pd.DataFrame({'timestamp': idx, 'H': [100, 100, 110, 120, 130]})
+    res = pe.detect_ssc(df, threshold_nT_per_min=5)
+    assert res.attrs['ssc_count'] == 0
+
+
+def test_detect_ssc_reports_the_true_count_when_the_payload_is_capped():
+    periods = 60 * 12 + 3
+    h = [100.0] * periods
+    for step in range(13):
+        for i in range(2 + step * 60, periods):
+            h[i] += 40.0
+    idx = pd.date_range('2024-09-10 00:00:00', periods=periods, freq='min', tz='UTC')
+    res = pe.detect_ssc(pd.DataFrame({'timestamp': idx, 'H': h}), threshold_nT_per_min=5)
+    assert res.attrs['ssc_count'] == 13
+    assert len(res.attrs['ssc_events']) == 10
+    assert res.attrs['ssc_events_truncated'] is True
+
+
 # --- Phase 6.2: solar-wind alignment and the vector coupling function -------
 
 def _observatory(day='2024-09-12 00:00:00', periods=6):
@@ -186,10 +229,26 @@ def test_burton_coupling_reports_coupling_and_predicted_dst():
     # Bs = -Bz = 10; coupling = 0.005 * sqrt(5) * 450 * 10
     expected_coupling = 0.005 * (5.0 ** 0.5) * 450.0 * 10.0
     assert abs(info['coupling_function'] - expected_coupling) < 1e-3
-    # dDst/dt = coupling - Dst/tau ; predicted = Dst + dDst/dt (1-hour Euler step)
-    expected_ddst = expected_coupling - (-30.0) / 8.0
+    # dDst/dt = -coupling - Dst/tau ; predicted = Dst + dDst/dt (1-hour Euler step)
+    expected_ddst = -expected_coupling - (-30.0) / 8.0
     assert abs(info['dDst_dt_nT_per_h'] - expected_ddst) < 1e-3
+    assert info['dDst_dt_nT_per_h'] < 0          # southward IMF deepens Dst
     assert abs(info['predicted_dst'] - (-30.0 + expected_ddst)) < 1e-2
+    assert info['predicted_dst'] < -30.0
+
+
+def test_burton_quiet_field_recovers_toward_zero():
+    obs = _observatory(periods=2)
+    sw = make_solar_wind_frame(V=450.0, Bz=5.0, Np=5.0, periods=2)
+    indices = pd.DataFrame({
+        'timestamp': obs['timestamp'],
+        'Dst': [-30.0, -30.0],
+    })
+    res = pe.calculate_burton_coupling(obs, sw, indices)
+    info = res.attrs['burton']
+    assert info['coupling_function'] == 0.0
+    assert info['dDst_dt_nT_per_h'] > 0          # decay drives Dst back to zero
+    assert abs(info['predicted_dst'] - (-26.25)) < 1e-2
 
 
 def test_burton_coupling_without_indices_starts_from_quiet_dst():
@@ -233,7 +292,18 @@ def test_akasofu_epsilon_reports_both_units():
     assert not pe.is_error(res)
     assert 'akasofu_epsilon' in res.columns
     info = res.attrs['akasofu']
-    assert info['epsilon_W'] > 0
+    # The SI value is V * B^2 * l0^2 * sin^4(theta/2) / mu0, i.e. watts.
+    b_total_nt = (2.0**2 + 3.0**2 + 5.0**2) ** 0.5
+    theta = np.arctan2(-3.0, -5.0)
+    expected = (
+        450e3
+        * (b_total_nt * 1e-9) ** 2
+        * (7 * 6.371e6) ** 2
+        * np.sin(theta / 2.0) ** 4
+        / pe.MU_0_H_PER_M
+    )
+    assert abs(info['epsilon_W'] - expected) / expected < 1e-6
+    assert 1e8 < info['epsilon_W'] < 1e12     # a storm-time power, not 1e5 W
     # W -> erg/s is a fixed 1e7 factor; attrs are rounded, so compare loosely
     assert abs(info['epsilon_erg_s'] - info['epsilon_W'] * 1e7) < 1e-2 * info['epsilon_erg_s']
 

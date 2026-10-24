@@ -67,10 +67,12 @@ __all__ = [
     # contract + constants
     "is_error",
     "SSC_THRESHOLD_NT_PER_MIN",
+    "SSC_MIN_SEPARATION_MIN",
     "DEFAULT_SQ_METHOD",
     "BURTON_A",
     "BURTON_TAU_HOURS",
     "AKASOFU_L0_RE",
+    "MU_0_H_PER_M",
     "PEAK_DHDT_WINDOW_SECONDS",
     "SUBSTORM_DROP_NT_PER_MIN",
     "SUBSTORM_MIN_DURATION_MIN",
@@ -88,6 +90,12 @@ DEFAULT_SQ_METHOD = "night_median"
 #: of the horizontal field, conventionally a jump of a few nT/min upwards.
 SSC_THRESHOLD_NT_PER_MIN = 5.0
 
+#: Two upward onsets closer than this belong to the same sudden commencement.
+#: An SSC is a step, so a one-minute step spans two or three samples above the
+#: threshold; without a separation window a single step was reported as two or
+#: three "events" and the count was meaningless.
+SSC_MIN_SEPARATION_MIN = 30.0
+
 #: Burton coupling constants (Burton, McPherron & Russell 1975): the ring-current
 #: injection efficiency ``a`` (nT per unit of the coupling function, per hour) and
 #: the ring-current decay time ``tau`` in hours.
@@ -96,6 +104,12 @@ BURTON_TAU_HOURS = 8.0
 
 #: Akasofu's ``l0`` length scale in Earth radii, used by the epsilon parameter.
 AKASOFU_L0_RE = 7.0
+
+#: Vacuum permeability, H/m. The SI epsilon is a Poynting flux times an area:
+#: ``V * B^2 * l0^2`` is not a power until it is divided by mu0. Omitting it
+#: made the result low by exactly ``1/mu0`` = 7.958e5 (89.5 kW instead of the
+#: 71.2 GW a 450 km/s, 10 nT wind actually delivers).
+MU_0_H_PER_M = 4e-7 * np.pi
 
 #: Default rolling window (seconds) for the peak dH/dt GIC metric. INTERMAGNET
 #: minute means make 10 samples a ten-minute window.
@@ -775,10 +789,17 @@ def detect_ssc(
     ``dH/dt`` exceeding ``threshold_nT_per_min`` (default 5 nT/min), on the
     upward side.
 
+    ``dH/dt`` is normalised to nT per MINUTE from the real timestamp cadence, so
+    a 5-minute station is not read as a five-times steeper jump. Onsets closer
+    than :data:`SSC_MIN_SEPARATION_MIN` are clustered into one event and the
+    steepest sample is kept: one SSC is a step, not every sample above the
+    threshold.
+
     Adds ``ssc_flag`` (1 where a sample is part of an onset) and ``dH_dt``, and
-    records up to ten onset events in ``attrs['ssc_events']`` with their index,
-    timestamp (when available) and rate. Returns the enriched DataFrame, or an
-    error dict.
+    records ALL onset events in ``attrs['ssc_count']``. The payload list
+    ``attrs['ssc_events']`` keeps the first ten and sets
+    ``attrs['ssc_events_truncated']`` when there are more. Returns the enriched
+    DataFrame, or an error dict.
     """
     problem = _validate_frame(df)
     if problem is not None:
@@ -797,31 +818,72 @@ def detect_ssc(
         )
 
     out = df.copy()
-    dh_dt = _first_difference(_horizontal(out))
-    onset = np.zeros(dh_dt.shape, dtype="int64")
-    onset[(dh_dt > threshold) & np.isfinite(dh_dt)] = 1
-
-    out["dH_dt"] = dh_dt
-    out["ssc_flag"] = onset
+    dh = _first_difference(_horizontal(out))
 
     stamps = None
     if "timestamp" in df.columns:
         stamps = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
 
+    # dH/dt must be per MINUTE, not per sample. Minute means make the two
+    # identical; a 5-minute station read a 3 nT/min rise as 15 and tripped the
+    # threshold. When there is no usable clock, assume one sample per minute.
+    rate = dh
+    if stamps is not None and len(stamps) > 1 and stamps.notna().all():
+        dt_min = stamps.diff().dt.total_seconds().to_numpy() / 60.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rate = np.where(dt_min > 0, dh / dt_min, np.nan)
+
+    onset = np.zeros(rate.shape, dtype="int64")
+    onset[(rate > threshold) & np.isfinite(rate)] = 1
+
+    out["dH_dt"] = rate
+    out["ssc_flag"] = onset
+
+    # One SSC is a step, not every sample above the threshold. Cluster onsets
+    # that fall within SSC_MIN_SEPARATION_MIN of the previous one and keep the
+    # steepest sample as the event: a two-sample step used to be two events.
     events: list[dict[str, Any]] = []
-    for i in np.where(onset == 1)[0][:10]:
+    last_time: pd.Timestamp | None = None
+    last_index: int | None = None
+    for i in np.where(onset == 1)[0]:
+        stamp = None
+        if stamps is not None and not pd.isna(stamps.iloc[i]):
+            stamp = stamps.iloc[i]
+        close = False
+        if events:
+            if last_time is not None and stamp is not None:
+                close = (stamp - last_time) < pd.Timedelta(
+                    minutes=SSC_MIN_SEPARATION_MIN
+                )
+            elif last_time is None and stamp is None and last_index is not None:
+                close = (int(i) - last_index) <= 2
+        if close:
+            if float(rate[i]) > float(events[-1]["dH_dt_nT_per_min"]):
+                events[-1].update({
+                    "index": int(i),
+                    "dH_dt_nT_per_min": _jsonable(rate[i], 2),
+                })
+                if stamp is not None:
+                    events[-1]["timestamp"] = _jsonable(stamp)
+            last_time = stamp if stamp is not None else last_time
+            last_index = int(i)
+            continue
         event: dict[str, Any] = {
             "index": int(i),
-            "dH_dt_nT_per_min": _jsonable(dh_dt[i], 2),
+            "dH_dt_nT_per_min": _jsonable(rate[i], 2),
         }
-        if stamps is not None and not pd.isna(stamps.iloc[i]):
-            event["timestamp"] = _jsonable(stamps.iloc[i])
+        if stamp is not None:
+            event["timestamp"] = _jsonable(stamp)
         events.append(event)
+        last_time = stamp
+        last_index = int(i)
 
     out.attrs = dict(getattr(df, "attrs", {}))
-    out.attrs["ssc_events"] = events
+    out.attrs["ssc_events"] = events[:10]
     out.attrs["ssc_count"] = len(events)
+    out.attrs["ssc_events_truncated"] = len(events) > 10
     out.attrs["ssc_threshold_nT_per_min"] = _jsonable(threshold, 2)
+    out.attrs["ssc_min_separation_min"] = SSC_MIN_SEPARATION_MIN
     return out
 
 
@@ -837,15 +899,18 @@ def calculate_burton_coupling(
     """Burton et al. (1975) ring-current coupling and a one-step Dst forecast.
 
     The classic first-order ring-current model integrates the injection of
-    energy from a southward IMF against the ring current's own decay::
+    energy from a southward IMF against the ring current's own decay. ``Dst``
+    here is the SIGNED index (negative during a storm), so a southward IMF
+    drives it further negative while decay drives it back toward zero::
 
-        dDst/dt = a * sqrt(Np) * V * Bs - Dst / tau
+        dDst/dt = -a * sqrt(Np) * V * Bs - Dst / tau
         Bs      = -Bz   (Bz < 0, i.e. southward; 0 otherwise)
         a       = 0.005, tau = 8 h
 
-    The injected term is the "coupling function"; the decay term closes the
-    balance. A one-hour Euler step from the current ``Dst`` gives the predicted
-    value.
+    The injected term is the "coupling function" (positive, in nT/h); the decay
+    term closes the balance. A one-hour Euler step from the current ``Dst``
+    gives the estimate -- a local step, not a storm forecast, and it starts from
+    ``Dst = 0`` when no indices frame was supplied.
 
     Inputs are read from frames, not from a polymorphic mapping:
 
@@ -908,8 +973,13 @@ def calculate_burton_coupling(
 
     bs = -float(bz_val) if float(bz_val) < 0 else 0.0
     coupling = BURTON_A * np.sqrt(max(float(np_val), 0.0)) * float(v_val) * bs
-    decay = float(dst_val) / BURTON_TAU_HOURS
-    ddst_dt = coupling - decay
+    # Dst is the SIGNED index (negative during a storm). The injection drives it
+    # more negative; the decay drives it back toward zero:
+    #     dDst/dt = -coupling - Dst/tau
+    # The previous form (+coupling - Dst/tau) flipped both terms, so a southward
+    # IMF "recovered" the field to +24 nT instead of deepening it to -77 nT.
+    decay = -float(dst_val) / BURTON_TAU_HOURS
+    ddst_dt = -coupling + decay
     predicted = float(dst_val) + ddst_dt  # one-hour Euler step
 
     out = df.copy()
@@ -927,7 +997,8 @@ def calculate_burton_coupling(
         "decay_term": _jsonable(decay, 4),
         "dDst_dt_nT_per_h": _jsonable(ddst_dt, 4),
         "predicted_dst": _jsonable(predicted, 2),
-        "mode": "one_hour_step",
+        "convention": "Dst is the signed index (negative during a storm)",
+        "mode": "one_hour_step_from_Dst_input",
     }
     return out
 
@@ -942,15 +1013,16 @@ def calculate_akasofu_epsilon(
 
     ::
 
-        epsilon = V * B_total^2 * l0^2 * sin^4(theta/2)
+        epsilon = V * B_total^2 * l0^2 * sin^4(theta/2) / mu_0
         B_total = sqrt(Bx^2 + By^2 + Bz^2)
         theta   = arctan(By / Bz)
         l0      = 7 RE
 
-    ``V`` in m/s, ``B`` in tesla and ``l0`` in metres give epsilon in watts, the
-    standard form. The ``sin^4(theta/2)`` factor couples the field orientation to
-    the dayside reconnection geometry: it vanishes for a purely northward IMF and
-    peaks for a southward one.
+    ``V`` in m/s, ``B`` in tesla and ``l0`` in metres give epsilon in watts
+    after division by the vacuum permeability ``mu_0``: ``V * B^2 * l0^2`` has
+    the units of T^2 m^3/s, not watts. The ``sin^4(theta/2)`` factor couples the
+    field orientation to the dayside reconnection geometry: it vanishes for a
+    purely northward IMF and peaks for a southward one.
 
     Inputs are read from the aligned solar-wind frame passed through
     ``solar_wind`` (see :func:`align_solar_wind`): ``V`` in km/s and
@@ -1009,7 +1081,9 @@ def calculate_akasofu_epsilon(
     b_si = b_total_nt * 1e-9             # nT   -> T
     l0_m = AKASOFU_L0_RE * _RE_METRES    # RE   -> m
 
-    epsilon_w = v_si * (b_si**2) * (l0_m**2) * orientation
+    epsilon_w = (
+        v_si * (b_si**2) * (l0_m**2) * orientation / MU_0_H_PER_M
+    )
     epsilon_erg_s = epsilon_w / _ERG_PER_S_IN_W  # W -> erg/s
 
     out = df.copy()

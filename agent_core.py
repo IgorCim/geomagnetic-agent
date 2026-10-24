@@ -5659,22 +5659,36 @@ def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
             )
         return f"✅ Функция связи Ey рассчитана: E_y = {attrs.get('ey_coupling', {}).get('E_y_mV_m')} мВ/м -> хэндл {slot!r}."
     if metric == "detect_ssc":
+        events = attrs.get("ssc_events") or []
+        head = ""
+        if events:
+            first = events[0]
+            when = first.get("timestamp", "время не указано")
+            head = (
+                f" Первое: {when} "
+                f"({first.get('dH_dt_nT_per_min')} нТ/мин)."
+            )
+        trunc = " Показаны первые 10." if attrs.get("ssc_events_truncated") else ""
         return (
-            f"✅ Детектирование SSC выполнено. Найдено событий: "
-            f"{attrs.get('ssc_count', 0)} -> хэндл {slot!r}."
+            f"✅ SSC: событий {attrs.get('ssc_count', 0)} "
+            f"(порог {attrs.get('ssc_threshold_nT_per_min')} нТ/мин)."
+            f"{head}{trunc} -> хэндл {slot!r}."
         )
     if metric == "burton_coupling":
         info = attrs.get("burton", {})
         return (
-            f"✅ Функция связи Бёртона: coupling={info.get('coupling_function')} нТ/ч, "
-            f"прогноз Dst={info.get('predicted_dst')} нТ (dDst/dt="
-            f"{info.get('dDst_dt_nT_per_h')} нТ/ч) -> хэндл {slot!r}."
+            f"✅ Функция связи Бёртона: инжекция coupling="
+            f"{info.get('coupling_function')} нТ/ч; "
+            f"dDst/dt={info.get('dDst_dt_nT_per_h')} нТ/ч; "
+            f"Dst через 1 ч = {info.get('predicted_dst')} нТ "
+            f"(старт Dst={info.get('Dst_input')} нТ) -> хэндл {slot!r}."
         )
     if metric == "akasofu_epsilon":
         info = attrs.get("akasofu", {})
         return (
-            f"✅ Параметр Акасофу epsilon={info.get('epsilon_W')} Вт "
-            f"({info.get('epsilon_erg_s')} эрг/с) -> хэндл {slot!r}."
+            f"✅ Акасофу: epsilon={info.get('epsilon_W')} Вт "
+            f"({info.get('epsilon_erg_s')} эрг/с), V={info.get('V_kms')} км/с, "
+            f"B={info.get('B_total_nT')} нТ -> хэндл {slot!r}."
         )
     if metric == "peak_dhdt":
         info = attrs.get("peak_dhdt", {})
