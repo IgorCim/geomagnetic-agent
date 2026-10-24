@@ -1753,16 +1753,41 @@ _LOOP_FIX_HINT_DEFAULT = (
 )
 
 
+#: How many live handles the scratchpad shows. A long matrix run can create
+#: dozens; the newest ones are what the next step needs. The active handle is
+#: always repeated on its own line, so it stays visible even when it is older
+#: than the display window.
+HANDLE_DISPLAY_LIMIT = 12
+
+#: How many recent tool exchanges stay verbatim in the LLM history. Older ones
+#: are elided; their handles, completed steps and errors survive in the
+#: Scratchpad, so the model keeps the state without re-reading old payloads.
+HISTORY_KEEP_EXCHANGES = 6
+
+
 class Scratchpad:
     """Persistent working memory for the agent during a single user query.
 
-    Tracks active handle, completed steps, encountered errors (with hints),
-    and an optional plan. Injected into the context before each LLM call
-    to prevent losing state between rounds and to enable lightweight self-learning.
+    Tracks a registry of every live frame handle, the active handle, completed
+    steps, encountered errors (with hints), and an optional plan. Injected into
+    the context before each LLM call to prevent losing state between rounds and
+    to enable lightweight self-learning.
+
+    The registry matters because one ``current_handle`` slot is not enough: a
+    solar-wind fetch creates ``sw:omni:...``, then a ground fetch makes
+    ``raw:...`` active and the wind handle disappears from the injected state.
+    The model may need it again for a second coupling metric; guessing the name
+    happens to work while naming is deterministic, but it is not state.
     """
 
     def __init__(self) -> None:
         self.current_handle: str = ""
+        #: Exact store handle -> compact provenance (family, tool, rows, metrics).
+        self.handles: dict[str, dict[str, Any]] = {}
+        self._handle_seq = 0
+        #: Count of old chat messages dropped by the history cap. Kept as a
+        #: visible state note so the model does not hunt for elided results.
+        self.elided_messages = 0
         self.completed_steps: list[str] = []
         self.errors: list[dict] = []
         self.plan: list[str] = []
@@ -1773,6 +1798,9 @@ class Scratchpad:
 
     def reset(self) -> None:
         self.current_handle = ""
+        self.handles.clear()
+        self._handle_seq = 0
+        self.elided_messages = 0
         self.completed_steps.clear()
         self.errors.clear()
         self.plan.clear()
@@ -1784,6 +1812,104 @@ class Scratchpad:
         new_handle = new_handle.strip()
         if new_handle:
             self.current_handle = new_handle
+
+    def register_handle(
+        self,
+        handle: Any,
+        *,
+        tool: str = "",
+        payload: dict[str, Any] | None = None,
+        metric: str = "",
+        round_no: int = 0,
+    ) -> None:
+        """Remember a live frame handle and what produced it.
+
+        Keyed by the exact store key, so a shared ``derived:`` slot accumulates
+        the metrics written into it instead of spawning duplicate entries.
+        """
+        if not isinstance(handle, str):
+            return
+        handle = handle.strip()
+        if not handle:
+            return
+
+        family = handle.split(":", 1)[0].lower() if ":" in handle else ""
+        info = self.handles.get(handle)
+        if info is None:
+            self._handle_seq += 1
+            info = {
+                "handle": handle,
+                "family": family,
+                "tool": "",
+                "order": self._handle_seq,
+                "last_round": 0,
+                "metrics": [],
+                "rows": None,
+            }
+            self.handles[handle] = info
+
+        if tool:
+            info["tool"] = str(tool)
+        if round_no:
+            info["last_round"] = int(round_no)
+        if isinstance(payload, dict):
+            rows = payload.get("rows")
+            if isinstance(rows, int):
+                info["rows"] = rows
+        if metric:
+            metric = str(metric).strip().lower()
+            if metric and metric not in info["metrics"]:
+                info["metrics"].append(metric)
+
+    def note_elided(self, count: int) -> None:
+        """Record how many old chat messages the history cap removed."""
+        if count > 0:
+            self.elided_messages += int(count)
+
+    @staticmethod
+    def _describe_handle(info: dict[str, Any]) -> str:
+        """One compact, copyable handle line: exact name first, provenance after."""
+        handle = str(info.get("handle") or "")
+        facts: list[str] = []
+        rows = info.get("rows")
+        if isinstance(rows, int):
+            facts.append(f"{rows}r")
+
+        metrics = [str(m) for m in (info.get("metrics") or [])]
+        family = str(info.get("family") or "")
+        if metrics:
+            shown = ", ".join(metrics[-4:])
+            if len(metrics) > 4:
+                shown = f"+{len(metrics) - 4} more: {shown}"
+            facts.append(shown)
+        elif family == "sw":
+            facts.append("OMNI")
+        elif family == "idx":
+            facts.append("Dst/Kp")
+        elif family == "raw":
+            parts = handle.split(":")
+            if len(parts) > 1 and parts[1]:
+                facts.append(parts[1].upper())
+        else:
+            tool = str(info.get("tool") or "")
+            if tool:
+                facts.append(_SCRATCHPAD_STEP_BY_TOOL.get(tool, tool))
+
+        return f"{handle} ({'; '.join(facts)})" if facts else handle
+
+    def _displayed_handles(
+        self, limit: int = HANDLE_DISPLAY_LIMIT
+    ) -> list[dict[str, Any]]:
+        """The newest handles, one per produced slot, capped for the prompt."""
+        ordered = sorted(
+            self.handles.values(),
+            key=lambda info: (
+                int(info.get("last_round") or 0),
+                int(info.get("order") or 0),
+            ),
+            reverse=True,
+        )
+        return ordered[: max(1, int(limit))]
 
     def add_completed_step(self, step: str) -> None:
         if not isinstance(step, str):
@@ -1841,8 +1967,20 @@ class Scratchpad:
         keeps the window small and this must not eat into it.
         """
         parts: list[str] = []
+        if self.handles:
+            shown = self._displayed_handles()
+            rendered = "; ".join(self._describe_handle(info) for info in shown)
+            hidden = len(self.handles) - len(shown)
+            if hidden > 0:
+                rendered += f"; +{hidden} older"
+            parts.append(f"Handles: {rendered}")
         if self.current_handle:
             parts.append(f"Active handle: {self.current_handle}")
+        if self.elided_messages:
+            parts.append(
+                f"Context: {self.elided_messages} older tool messages elided "
+                "(live handles above)"
+            )
         if self.completed_steps:
             parts.append(f"Completed: {', '.join(self.completed_steps)}")
         if self.errors:
@@ -1900,6 +2038,42 @@ class Scratchpad:
         ):
             return "continue towards the requested result (analyse / plot)."
         return "summarise the result for the user; do not repeat completed steps."
+
+
+def _trim_history(
+    messages: list[dict[str, Any]],
+    keep_exchanges: int = HISTORY_KEEP_EXCHANGES,
+) -> int:
+    """Drop the oldest tool exchanges from the LLM context.
+
+    The system + user preamble is never touched. Only whole exchanges are
+    removed: an ``assistant`` message carrying ``tool_calls`` plus the ``tool``
+    messages that follow it must stay together, otherwise the Qwen chat template
+    renders a result with no call it belongs to. Old payloads are redundant --
+    the Scratchpad's handle registry and completed-step list are the durable
+    memory -- and dropping them keeps a 25-call run from filling the window with
+    results the model has already used.
+
+    Returns the number of messages removed.
+    """
+    if len(messages) <= 2:
+        return 0
+    keep = max(1, int(keep_exchanges))
+    starts = [
+        index
+        for index, message in enumerate(messages)
+        if index >= 2
+        and message.get("role") == "assistant"
+        and message.get("tool_calls")
+    ]
+    if len(starts) <= keep:
+        return 0
+    cut = starts[-keep]
+    if cut <= 2:
+        return 0
+    removed = cut - 2
+    del messages[2:cut]
+    return removed
 
 
 #: Friendly progress label recorded on the scratchpad for each successful tool.
@@ -6420,6 +6594,16 @@ def run_agent(
     format_retries = 0
 
     for round_no in range(1, max_rounds + 1):
+        # Drop the oldest whole tool exchanges before the next call. The
+        # Scratchpad keeps every live handle and completed step, so the model
+        # loses stale payload text, not the state it needs to continue.
+        removed = _trim_history(messages)
+        if removed:
+            scratchpad.note_elided(removed)
+            print(
+                f"[HISTORY] elided {removed} older messages; "
+                f"{len(messages)} remain in the context"
+            )
         # Inject the scratchpad into the system message before every LLM call.
         # Rebuilt from the immutable base prompt each round, so the dynamic hint
         # replaces the previous one instead of accumulating and growing the
@@ -6434,6 +6618,7 @@ def run_agent(
             print(
                 f"[SCRATCHPAD] Step {round_no}/{max_rounds}. "
                 f"Handle: {scratchpad.current_handle or 'none'}. "
+                f"Handles: {len(scratchpad.handles)}. "
                 f"Completed: {', '.join(scratchpad.completed_steps) or 'none'}."
             )
         try:
@@ -6597,6 +6782,27 @@ def run_agent(
 
             entry["ok"] = not is_error(payload)
             entry["executed"] = True
+            # Keep every live handle, not just the active one. A wind fetch is
+            # auxiliary and never becomes active, yet a second coupling metric
+            # needs its exact name; the registry is what carries it to the next
+            # round instead of relying on the model guessing the date.
+            if entry["ok"] and isinstance(payload, dict):
+                produced: list[str] = []
+                frame_handle = payload.get("frame_handle")
+                if isinstance(frame_handle, str):
+                    produced.append(frame_handle)
+                frame_handles = payload.get("frame_handles")
+                if isinstance(frame_handles, list):
+                    produced.extend(h for h in frame_handles if isinstance(h, str))
+                metric = str(args.get("metric") or payload.get("metric") or "")
+                for produced_handle in dict.fromkeys(produced):
+                    scratchpad.register_handle(
+                        produced_handle,
+                        tool=name,
+                        payload=payload,
+                        metric=metric,
+                        round_no=round_no,
+                    )
             # Handlers describe what they actually did in their note -- which
             # handle they derived, what they saved. That note used to be returned
             # and dropped on the floor, so work the agent did silently was
@@ -6675,6 +6881,7 @@ def run_agent(
                 print(
                     f"[SCRATCHPAD] Step {round_no}/{max_rounds}. "
                     f"Handle: {scratchpad.current_handle or 'none'}. "
+                    f"Handles: {len(scratchpad.handles)}. "
                     f"Completed: {', '.join(scratchpad.completed_steps) or 'none'}. "
                     f"Errors: {len(scratchpad.errors)}."
                 )

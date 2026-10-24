@@ -801,6 +801,172 @@ def test_run_agent_keeps_arguments_as_dicts():
     assert all(isinstance(a, dict) for a in seen)
 
 
+def test_scratchpad_registry_keeps_auxiliary_handles():
+    """The active slot alone loses the solar-wind handle; the registry keeps it."""
+    pad = ac.Scratchpad()
+    pad.register_handle(
+        "sw:omni:2024-09-12",
+        tool="fetch_solar_wind",
+        payload={"rows": 1440},
+        round_no=1,
+    )
+    pad.register_handle(
+        "raw:irt:2024-09-12",
+        tool="fetch_observatory_data",
+        payload={"rows": 1440},
+        round_no=1,
+    )
+    pad.update_handle("raw:irt:2024-09-12")
+    pad.register_handle(
+        "derived:irt:2024-09-12",
+        tool="apply_physics_formula",
+        metric="burton_coupling",
+        round_no=1,
+    )
+    pad.register_handle(
+        "derived:irt:2024-09-12",
+        tool="apply_physics_formula",
+        metric="akasofu_epsilon",
+        round_no=1,
+    )
+
+    text = pad.to_prompt_injection()
+    assert "sw:omni:2024-09-12" in text
+    assert "raw:irt:2024-09-12" in text
+    assert "derived:irt:2024-09-12" in text
+    assert "burton_coupling" in text and "akasofu_epsilon" in text
+    assert "Active handle: raw:irt:2024-09-12" in text
+
+
+def test_scratchpad_registry_always_shows_the_active_handle():
+    """When the display cap hides old slots, the active name is still injected."""
+    pad = ac.Scratchpad()
+    for day in range(1, 21):
+        pad.register_handle(
+            f"raw:irt:2024-09-{day:02d}",
+            tool="fetch_observatory_data",
+            payload={"rows": 10},
+            round_no=day,
+        )
+    pad.update_handle("raw:irt:2024-09-01")
+
+    text = pad.to_prompt_injection()
+    assert "raw:irt:2024-09-01" in text
+    assert "Active handle: raw:irt:2024-09-01" in text
+    assert "older" in text, "the display must say that older handles are hidden"
+
+
+def test_trim_history_removes_only_whole_old_exchanges():
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "q"},
+    ]
+    for i in range(8):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": f"c{i}"}],
+            }
+        )
+        messages.append({"role": "tool", "content": f"result {i}"})
+
+    removed = ac._trim_history(messages, keep_exchanges=3)
+    assert removed == 10
+    assert len(messages) == 8
+    assert messages[0]["role"] == "system"
+    assert messages[1]["content"] == "q"
+    # No tool result may survive without the assistant call it belongs to.
+    assert all(
+        messages[i]["role"] != "tool" or messages[i - 1]["role"] == "assistant"
+        for i in range(2, len(messages))
+    )
+
+
+def test_run_agent_injects_all_live_handles_even_auxiliary(monkeypatch):
+    """A wind fetch is never active, but the next round must still see it."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+
+    class Spy(ac.ScriptedBrain):
+        def __init__(self, script):
+            super().__init__(script)
+            self.system_messages = []
+
+        def chat(self, messages, tools):
+            self.system_messages.append(messages[0]["content"])
+            return super().chat(messages, tools)
+
+    sw = _text_call(
+        "fetch_solar_wind",
+        '{"start_date": "2024-09-12", "end_date": "2024-09-12"}',
+    )
+    ground = _text_call(
+        "fetch_observatory_data",
+        '{"station_code": "IRT", "start_date": "2024-09-12", "end_date": "2024-09-12"}',
+    )
+    ssc = _text_call(
+        "apply_physics_formula",
+        '{"df_descriptor": "raw:irt:2024-09-12", "metric": "detect_ssc"}',
+    )
+    brain = Spy(
+        [
+            {"content": "\n".join([sw, ground, ssc])},
+            {"content": "готово"},
+        ]
+    )
+    result = ac.run_agent(
+        "проанализируй IRT за 2024-09-12",
+        brain=brain,
+        tools=[],
+        verbose=False,
+    )
+
+    assert result["ok"], result
+    second_round = brain.system_messages[1]
+    assert "sw:omni:2024-09-12" in second_round
+    assert "raw:irt:2024-09-12" in second_round
+    assert "derived:irt:2024-09-12" in second_round
+    assert "detect_ssc" in second_round
+
+
+def test_run_agent_bounds_history_and_keeps_the_active_handle(monkeypatch):
+    """Eight one-call rounds must not grow the context without bound."""
+    def fake_fetch(args, store):  # noqa: ARG001
+        day = args["day"]
+        return {
+            "ok": True,
+            "frame_handle": f"raw:irt:{day}",
+            "rows": 10,
+        }, f"fetched {day}"
+
+    monkeypatch.setitem(ac.HANDLERS, "fake_fetch", fake_fetch)
+    script = [
+        {"content": _text_call("fake_fetch", json.dumps({"day": f"2024-09-{i:02d}"}))}
+        for i in range(1, 9)
+    ]
+    script.append({"content": "готово"})
+
+    class Spy(ac.ScriptedBrain):
+        def __init__(self, script):
+            super().__init__(script)
+            self.sizes = []
+            self.system_messages = []
+
+        def chat(self, messages, tools):
+            self.sizes.append(len(messages))
+            self.system_messages.append(messages[0]["content"])
+            return super().chat(messages, tools)
+
+    brain = Spy(script)
+    result = ac.run_agent(
+        "тест", brain=brain, tools=[], max_rounds=12, verbose=False
+    )
+
+    assert result["ok"], result
+    assert max(brain.sizes) <= 2 + ac.HISTORY_KEEP_EXCHANGES * 2
+    assert "raw:irt:2024-09-08" in brain.system_messages[-1]
+
+
 # --------------------------------------------------------------------------- #
 # FrameStore
 # --------------------------------------------------------------------------- #
