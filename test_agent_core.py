@@ -2879,6 +2879,106 @@ def test_gic_and_burton_questions_select_apply_physics_formula():
 
 
 # --------------------------------------------------------------------------- #
+# tool routing: the schema set must contain the tool the question needs
+# --------------------------------------------------------------------------- #
+def _selected(query: str) -> set[str]:
+    return {t["function"]["name"] for t in ac.select_tools_for_query(query)}
+
+
+def test_multistep_kaggle_query_gets_solar_wind_and_physics():
+    """The live Kaggle cell: three explicit steps, explicit metric names.
+
+    Regression: "станции" was a bulk keyword, so five matrix schemas filled the
+    cap and fetch_solar_wind was evicted. Step 2 (Burton/Akasofu) then had no
+    loader and no schema, and the run could only fail or hallucinate.
+    """
+    query = (
+        "Проанализируй геомагнитную обстановку за 12 сентября 2024 года. "
+        "Действуй по шагам:\n"
+        "1. Скачай данные солнечного ветра OMNI и данные наземной станции IRT "
+        "за эту дату.\n"
+        "2. Рассчитай функцию связи Бёртона (burton_coupling) и параметр "
+        "Акасофу (akasofu_epsilon), используя скачанные данные солнечного ветра.\n"
+        "3. Рассчитай флаг внезапного начала бури (detect_ssc) для данных "
+        "станции IRT."
+    )
+    names = _selected(query)
+    assert {
+        "fetch_solar_wind",
+        "fetch_observatory_data",
+        "apply_physics_formula",
+    } <= names
+    assert not {"create_task_matrix", "process_matrix_batch"} & names
+    assert len(names) <= ac.TOOLS_PER_TASK
+
+
+def test_station_word_alone_is_not_a_bulk_job():
+    names = _selected("Построй график H по станции IRT за 10 сентября 2024")
+    assert "plot_components" in names
+    assert not {"create_task_matrix", "process_matrix_batch"} & names
+
+
+def test_median_selects_statistics_without_matrix_noise():
+    names = _selected(
+        "Найди медиану горизонтальной составляющей H обсерватории IRT отдельно "
+        "за 10 сентября 2024 и за 11 сентября 2024."
+    )
+    assert "get_statistics" in names
+    assert "create_task_matrix" not in names
+
+
+def test_range_selects_derived_math():
+    names = _selected(
+        "Посчитай размах полной компоненты F обсерватории IRT за 10 сентября 2024"
+    )
+    assert "calculate_derived_math" in names
+
+
+def test_substorm_selects_physics_and_supermag():
+    names = _selected("Определи начало суббури 10 сентября 2024")
+    assert {"apply_physics_formula", "fetch_supermag_data"} <= names
+
+
+def test_a_real_bulk_job_still_gets_the_matrix():
+    names = _selected("Обработай 26 станций за 10 дат: скачай, построй графики")
+    assert {"create_task_matrix", "process_matrix_batch"} <= names
+
+
+def test_project_batch_is_a_project_not_a_matrix():
+    names = _selected(
+        "Собери проект: скачай данные обсерваторий IRT и BOU за 10 и 11 сентября "
+        "2024 одним пакетным запросом, построй графики H и выложи всё в архив."
+    )
+    assert {"create_project", "fetch_many"} <= names
+    assert "create_task_matrix" not in names
+
+
+def test_unmatched_question_gets_a_safe_core_not_the_catalog_head():
+    names = _selected("что там с погодой в космосе?")
+    assert {"fetch_observatory_data", "plot_components", "get_statistics"} <= names
+    assert "create_project" not in names
+
+
+def test_every_physics_metric_has_a_source_tool_and_a_trigger():
+    """The router and the metric registry must not drift apart."""
+    for metric in ac._PHYSICS_METRICS:
+        assert metric in ac._METRIC_SOURCE_TOOLS, metric
+        assert metric in ac._METRIC_QUERY_PATTERNS, metric
+    for alias, metric in ac._PHYSICS_METRIC_ALIASES.items():
+        assert metric in ac._PHYSICS_METRICS, (alias, metric)
+
+
+def test_every_e2e_scenario_sees_the_tool_it_must_call():
+    """E2E green must not depend on the model inventing an unseen tool."""
+    import scenarios_e2e as e2e
+
+    for scenario in e2e.SCENARIOS:
+        names = _selected(scenario.query)
+        missing = set(scenario.must_call) - names
+        assert not missing, (scenario.name, sorted(missing), sorted(names))
+
+
+# --------------------------------------------------------------------------- #
 # strict argument validation: the anti-hallucination gate
 # --------------------------------------------------------------------------- #
 def test_apply_physics_formula_missing_df_descriptor_is_refused():

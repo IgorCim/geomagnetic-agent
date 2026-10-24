@@ -83,6 +83,8 @@ __all__ = [
     "run_agent",
     "run_agent_with_planner",
     "select_tools_for_task",
+    "select_tools_for_query",
+    "explain_tool_selection",
     "build_dynamic_prompt",
     "is_error",
 ]
@@ -1337,9 +1339,11 @@ def select_tools_for_task(tool_name: str) -> list[dict[str, Any]]:
     return [t for t in TOOL_SCHEMAS if t["function"]["name"] in needed]
 
 
-#: Upper bound on the schemas a single free-form ``run_agent`` question may see.
-#: The full 21-schema list is what filled the 8192-token window to ~200 tokens of
-#: headroom; a question only ever needs a handful.
+#: Upper bound on the *optional* schemas a single free-form ``run_agent``
+#: question may see. The full 29-schema list is what filled the 8192-token window
+#: to ~200 tokens of headroom; a question only ever needs a handful. A tool the
+#: question makes mandatory (its metric's loader or its decisive computer) is
+#: never dropped to satisfy this budget -- correctness first, then the cap.
 TOOLS_PER_TASK = 6
 
 #: The frame summary handed back to the model is capped at this many characters,
@@ -1352,115 +1356,13 @@ FRAME_SUMMARY_MAX_CHARS = 400
 #: with exactly the ambiguity that made it loop.
 FALLBACK_HINT_MAX_CHARS = 800
 
-#: Keywords -> the tools a free-form question about them can need. The selector
-#: unions every match, always keeps the data source, and caps the result so the
-#: full schema list can never be sent by accident.
-_QUERY_TOOL_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    (
-        # Official NOAA SWPC context first: a question about warnings/flares must
-        # not have the tool squeezed out by the generic "bur/storm/kp" physics
-        # keywords below, which also match it.
-        ("noaa", "swpc", "алерт", "alert", "предупрежд", "warning", "вспышк",
-         "flare", "прогноз", "forecast", "шкал", "g1", "g2", "g3", "g4", "g5"),
-        ("get_noaa_space_weather_context",),
-    ),
-    (
-        # Substorm questions are SuperMAG's own product, so they rank with the
-        # other specialised sources: the Kyoto keywords below also match ("индекс")
-        # and would otherwise offer only Dst/Kp for what is really an SME/SML/SMU
-        # question about the auroral electrojet.
-        ("суббур", "substorm", "sme", "sml", "smu", "аврор", "auror",
-         "электроджет", "electrojet", "supermag"),
-        ("fetch_supermag_data",),
-    ),
-    (
-        # The ISWA pair ranks with the other specialised sources. The word
-        # "iswa" is there because a question that names the source must get its
-        # tools; the physics words ("возмущен", "карта", "прогноз") are here
-        # because those are what the question is actually about.
-        ("iswa", "возмущен", "perturbation", "карта возмущений", "карта",
-         "map", "глобальн", "global", "прогноз", "forecast", "предсказан",
-         "kp_kind"),
-        ("get_iswa_perturbation_map", "get_iswa_forecast"),
-    ),
-    (
-        # Kyoto indices / scientific validation come first as well: "compare the
-        # station's dst_proxy with the official Dst" would otherwise fill the cap
-        # with the generic plot keywords and drop the index downloader.
-        ("dst", "kp", "kyoto", "индекс", "index", "валидац"),
-        ("fetch_geomagnetic_indices", "plot_components", "apply_physics_formula"),
-    ),
-    (
-        # "Земля vs космос" charts come first: the generic plot keywords below
-        # would otherwise fill the cap with plot_comparison/plot_overlay, which
-        # cannot mix a magnetometer frame with solar-wind columns.
-        ("земля", "космос", "space weather", "солнечный ветер", "космическ",
-         "причина бури", "причина магнитной бури", "earth vs", "vs space"),
-        ("fetch_solar_wind", "plot_space_weather_comparison", "apply_physics_formula"),
-    ),
-    (
-        ("график", "построй", "нарисуй", "chart", "plot", "визуализ", "наложи", "overlay",
-         "сравни", "comparison"),
-        ("calculate_derived_components", "plot_components"),
-    ),
-    (
-        ("сравн", "два дня", "comparison"),
-        ("plot_comparison",),
-    ),
-    (
-        ("наложи", "несколько станц", "overlay"),
-        ("plot_overlay",),
-    ),
-    (
-        ("статистик", "statistic", "средн", "минимум", "максимум", "mean", "min", "max",
-         "разброс", "std"),
-        ("get_statistics",),
-    ),
-    (
-        ("аномали", "anomal", "выброс", "базовая линия", "baseline", "baseline_value"),
-        ("detect_anomalies", "calculate_baseline"),
-    ),
-    (
-        ("дельта", "delta", "dH_dt", "dh/dt", "производн", "скорость изменен",
-         "формул", "formula", "выражен", "expression"),
-        ("calculate_derived_math", "evaluate_custom_formula"),
-    ),
-    (
-        ("sq", "gic", "dst", "coupling", "ssc", "физик", "индекс", "ey", "bz", "связи",
-         "спокойн", "базис", "космической погод", "solar", "буря", "storm", "kp",
-         "omni", "солнечн", "burton", "бёртон", "акaсофу", "akasofu", "epsilon",
-         "эпсилон", "энерговклад", "энергия", "substorm_onset", "onset", "gic_risk",
-         "трансформатор", "power grid", "dh/dt", "dH/dt", "суббуря старт", "sml drop"),
-        ("apply_physics_formula", "fetch_solar_wind", "fetch_geomagnetic_indices"),
-    ),
-    (
-        # EEJ is a two-station product with its own tool; the generic "электроджет"
-        # keyword above points at SuperMAG, which cannot compute an H difference, so
-        # this entry maps the electrojet/EEJ/equatorial words onto the dedicated tool.
-        ("eej", "экваториальный электроджет", "equatorial electrojet",
-         "h-разниц", "электроджет", "electrojet"),
-        ("calculate_eej_index",),
-    ),
-    (
-        ("mlt", "магнитное время", "локальн", "гражданск", "местное время", "координ",
-         "широт", "долгот", "geomagnetic", "latitude"),
-        ("get_station_geomagnetic_coords", "calculate_mlt", "calculate_local_time",
-         "group_stations_by_mlt"),
-    ),
-    (
-        ("проект", "project", "список", "архив", "zip"),
-        ("list_projects", "create_project", "export_project", "fetch_many"),
-    ),
-)
-
-#: Words that mean "this is a bulk job": the matrix pair must always ride along.
-_MASS_TASK_KEYWORDS = (
-    "матриц", "matrix", "станций", "станции", "событий", "пакет", "batch", "массов",
-    "обработа", "все станции", "много", "десять", "несколько дат", "по одной",
-)
-
-#: The matrix pair plus the pipeline a bulk job runs; the selector always adds
-#: these when it sees a bulk request, whatever else matched.
+#: Structural evidence that a request is a bulk job. The old trigger list
+#: contained the bare word "станции", which in Russian is also the dative /
+#: prepositional singular ("по станции IRT"). Every ordinary station question
+#: was therefore read as a 260-cell matrix job, five matrix schemas filled the
+#: cap, and the schema the question actually needed was evicted: fetch_solar_wind
+#: for Burton, get_statistics for a median, apply_physics_formula for a substorm.
+#: Bulk now needs evidence, not a preposition.
 _MATRIX_TOOLS = (
     "create_task_matrix",
     "process_matrix_batch",
@@ -1469,40 +1371,313 @@ _MATRIX_TOOLS = (
     "plot_components",
 )
 
+#: Tools that bring a frame into the store.
+_SOURCE_TOOLS = frozenset({
+    "fetch_observatory_data",
+    "fetch_solar_wind",
+    "fetch_geomagnetic_indices",
+    "fetch_supermag_data",
+})
 
-def select_tools_for_query(query: str, cap: int = TOOLS_PER_TASK) -> list[dict[str, Any]]:
-    """Pick the few schemas a free-form question can need.
+#: Tools that consume a frame but never create one. A question that asks for one
+#: of these without naming a source is given the ground loader as a default.
+_COMPUTE_TOOLS = frozenset({
+    "calculate_derived_components",
+    "calculate_derived_math",
+    "calculate_baseline",
+    "calculate_eej_index",
+    "detect_anomalies",
+    "evaluate_custom_formula",
+    "get_statistics",
+    "plot_components",
+    "plot_comparison",
+    "plot_overlay",
+    "plot_space_weather_comparison",
+})
 
-    The full 21-schema list overflows a small model's window; a question only
-    needs the data source plus the handful of tools its intent implies. Mass
-    requests always carry the matrix pair (:data:`_MATRIX_TOOLS`), because
-    evicting them would strand the bulk algorithm. When nothing matches, the
-    first *cap* schemas are returned -- never the whole list.
+#: Which frame(s) a physics metric reads. This is the same knowledge that
+#: ``_METRIC_DATA_REQUIREMENTS`` encodes for validation; keeping one registry per
+#: concern means a new metric cannot be routable-but-unfetchable. Solar-wind
+#: metrics also need the ground frame: it is the primary ``df_descriptor``.
+_METRIC_SOURCE_TOOLS: dict[str, tuple[str, ...]] = {
+    "sq_baseline": ("fetch_observatory_data",),
+    "deltas": ("fetch_observatory_data",),
+    "gic": ("fetch_observatory_data",),
+    "dst_proxy": ("fetch_observatory_data",),
+    "ey_coupling": ("fetch_observatory_data", "fetch_solar_wind"),
+    "detect_ssc": ("fetch_observatory_data",),
+    "burton_coupling": ("fetch_observatory_data", "fetch_solar_wind"),
+    "akasofu_epsilon": ("fetch_observatory_data", "fetch_solar_wind"),
+    "peak_dhdt": ("fetch_observatory_data",),
+    "substorm_onset": ("fetch_supermag_data",),
+    "eej_index": ("fetch_observatory_data",),
+}
+
+#: The tool that computes each metric. EEJ is the one metric with a dedicated
+#: handler; everything else goes through apply_physics_formula.
+_METRIC_DECISIVE_TOOL: dict[str, str] = {"eej_index": "calculate_eej_index"}
+
+#: Phrasings that name a metric without its identifier. Latin identifiers and
+#: aliases are added automatically from the registries; only genuinely new
+#: Russian/English wording belongs here.
+_METRIC_QUERY_EXTRA: dict[str, tuple[str, ...]] = {
+    "sq_baseline": (r"спокойн[а-я]*\s+вариац",),
+    "deltas": (r"дельт",),
+    "gic": (r"трансформатор", r"\bpower\s+grid\b"),
+    "dst_proxy": (r"dst-?прокси", r"\bdst\s+proxy\b"),
+    "ey_coupling": (r"конвекц",),
+    "detect_ssc": (
+        r"внезапн[а-я]*\s+начал[а-я]*\s+бури",
+        r"внезапное\s+начало",
+    ),
+    "burton_coupling": (r"бёртон", r"бертон"),
+    "akasofu_epsilon": (r"акасофу", r"эпсилон"),
+    "peak_dhdt": (r"peak\s*dh\s*/?\s*dt", r"пик[а-я]*\s+dh"),
+    "substorm_onset": (r"суббур",),
+    "eej_index": (
+        r"экваториальн[а-я]*\s+электроджет",
+        r"h-?разниц",
+    ),
+}
+
+
+def _build_metric_query_patterns() -> dict[str, tuple[str, ...]]:
+    """One regex list per metric, derived from the metric registry itself.
+
+    Called after the registry is declared, so a metric added later is picked up
+    without touching the router.
+    """
+    patterns: dict[str, list[str]] = {
+        metric: [r"\b" + re.escape(metric) + r"\b"] for metric in _PHYSICS_METRICS
+    }
+    for alias, metric in _PHYSICS_METRIC_ALIASES.items():
+        patterns.setdefault(metric, []).append(r"\b" + re.escape(alias) + r"\b")
+    for metric, extra in _METRIC_QUERY_EXTRA.items():
+        patterns.setdefault(metric, []).extend(extra)
+    return {metric: tuple(items) for metric, items in patterns.items()}
+
+
+#: Non-metric intents, most specific first. Cyrillic stems are matched without
+#: word boundaries because Russian inflects; short Latin tokens stay anchored so
+#: "ey" cannot match "key". Order matters: the cap is filled top-down, so the
+#: decisive product of a question must appear before its presentation.
+_CAPABILITY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        r"\bnoaa\b|\bswpc\b|алерт|\balert\b|предупрежд|\bwarning\b|вспышк|"
+        r"\bflare\b|шкал[аы]?\s*g[1-5]\b|\bg[1-5]\b",
+        ("get_noaa_space_weather_context",),
+    ),
+    (
+        r"\biswa\b[^.]{0,40}(прогноз|forecast|предсказ)|"
+        r"(прогноз|forecast)[^.]{0,40}\biswa\b|\bkp_kind\b",
+        ("get_iswa_forecast",),
+    ),
+    (
+        r"\biswa\b|возмущен|perturbation|глобальн[а-я]*\s+карт",
+        ("get_iswa_perturbation_map", "get_iswa_forecast"),
+    ),
+    (
+        r"\bsupermag\b|\bsme\b|\bsml\b|\bsmu\b|аврор|\bauror|электроджет|"
+        r"\belectrojet",
+        ("fetch_supermag_data",),
+    ),
+    (
+        r"\bkyoto\b|\bdst\b|\bkp\b|индекс",
+        ("fetch_geomagnetic_indices",),
+    ),
+    (
+        r"\bomni\b|солнечн[а-я]*\s+ветер|\bsolar\s+wind\b|\bimf\b",
+        ("fetch_solar_wind",),
+    ),
+    (
+        r"станц|обсерватор|магнитометр|наземн|"
+        r"горизонтальн[а-я]*\s+составляющ|\b[xyz]\b\s*-?\s*компонент",
+        ("fetch_observatory_data",),
+    ),
+    (
+        r"статист|\bstatistic|средн|медиан|\bmedian|минимум|максимум|\bmean\b|"
+        r"\bmin\b|\bmax\b|разброс|\bstd\b|квартил|перцентил",
+        ("get_statistics",),
+    ),
+    (
+        r"аномали|\banomal|выброс|базов[а-я]*\s+лини|\bbaseline\b",
+        ("detect_anomalies", "calculate_baseline"),
+    ),
+    (
+        r"размах|дельт|\bdelta\b|d[hz]_?dt|производн|скорость\s+изменен",
+        ("calculate_derived_math",),
+    ),
+    (
+        r"формул|\bformula\b|выражен|\bexpression\b",
+        ("calculate_derived_math", "evaluate_custom_formula"),
+    ),
+    (
+        r"\bmlt\b|магнитное\s+время|местное\s+время|гражданск|координ|"
+        r"широт|долгот",
+        (
+            "get_station_geomagnetic_coords",
+            "calculate_mlt",
+            "calculate_local_time",
+            "group_stations_by_mlt",
+        ),
+    ),
+    (
+        r"сравн|\bcomparison\b|два\s+дня",
+        ("calculate_derived_components", "plot_comparison"),
+    ),
+    (
+        r"наложи|\boverlay\b|несколько\s+станц",
+        ("calculate_derived_components", "plot_overlay"),
+    ),
+    (
+        r"(список|какие|покажи)\s+проект|\blist\s+projects?\b",
+        ("list_projects",),
+    ),
+    (
+        r"проект|\bproject\b|\bzip\b|архив",
+        ("create_project", "fetch_many", "export_project"),
+    ),
+    (
+        r"график|\bplot\b|\bchart\b|построй|нарисуй|визуализ",
+        ("calculate_derived_components", "plot_components"),
+    ),
+)
+
+
+def _ordered_unique(names: Sequence[str]) -> list[str]:
+    """De-duplicate while preserving priority order."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in names:
+        if name in TOOLS_BY_NAME and name not in seen:
+            seen.add(name)
+            ordered.append(name)
+    return ordered
+
+
+def _bulk_units(text: str) -> int:
+    """Estimate (station x date) work units from an explicit count in the query."""
+    stations = [int(n) for n in re.findall(r"(\d{1,3})\s*(?:станц|обсерватор)", text)]
+    dates = [int(n) for n in re.findall(r"(\d{1,3})\s*(?:дат|дней|суток|событи)", text)]
+    return (max(stations) if stations else 1) * (max(dates) if dates else 1)
+
+
+def _is_bulk_query(text: str) -> bool:
+    """True only when the request itself asks for matrix-scale work.
+
+    ``MATRIX_THRESHOLD`` is the same cut-off the matrix generator uses, so the
+    router cannot send a four-cell project down the 260-cell path.
+    """
+    if re.search(r"\bматриц|\bmatrix\b", text):
+        return True
+    if _bulk_units(text) >= MATRIX_THRESHOLD:
+        return True
+    if re.search(r"\b(все|всех|несколько|много)\s+(станц|обсерватор)", text):
+        return True
+    if re.search(r"\bbatch\b|\bпакет", text) and not re.search(
+        r"проект|\bproject\b|архив|\bzip\b", text
+    ):
+        return True
+    return False
+
+
+def _selection_plan(
+    query: str, cap: int = TOOLS_PER_TASK
+) -> tuple[list[str], dict[str, Any]]:
+    """Decide which tool names a free-form question gets, and why.
+
+    Two sets, not one list: ``mandatory`` is derived from the physics-metric
+    registry and is never truncated -- a decisive tool that loses a race with a
+    presentation tool is exactly the bug this replaces. ``optional`` fills the
+    remaining room up to *cap*.
     """
     text = str(query or "").lower()
-    chosen: list[str] = ["fetch_observatory_data"]
 
-    if any(word in text for word in _MASS_TASK_KEYWORDS):
-        chosen.extend(_MATRIX_TOOLS)
+    metrics = [
+        metric
+        for metric, patterns in _METRIC_QUERY_PATTERNS.items()
+        if any(re.search(pattern, text) for pattern in patterns)
+    ]
 
-    for words, tools in _QUERY_TOOL_KEYWORDS:
-        if any(word in text for word in words):
-            chosen.extend(tools)
+    mandatory: list[str] = []
+    for metric in metrics:
+        mandatory.extend(_METRIC_SOURCE_TOOLS.get(metric, ()))
+        mandatory.append(_METRIC_DECISIVE_TOOL.get(metric, "apply_physics_formula"))
 
-    # Ordered, de-duplicated, capped; the data source is always first.
-    ordered: list[str] = []
-    for name in chosen:
-        if name in TOOLS_BY_NAME and name not in ordered:
-            ordered.append(name)
+    optional: list[str] = []
+    for pattern, tools in _CAPABILITY_RULES:
+        if re.search(pattern, text):
+            optional.extend(tools)
 
-    if len(ordered) <= 1:  # only the data source matched -> arbitrary safe set
-        return list(TOOL_SCHEMAS[:cap])
+    bulk = _is_bulk_query(text)
+    if bulk:
+        mandatory = list(_MATRIX_TOOLS) + mandatory
 
-    keep = set(ordered[:cap])
-    # The matrix pair is mandatory for a bulk job even if the cap would drop it.
-    if any(word in text for word in _MASS_TASK_KEYWORDS):
-        keep.update({"create_task_matrix", "process_matrix_batch"})
+    mandatory_unique = _ordered_unique(mandatory)
+    optional_unique = [
+        name for name in _ordered_unique(optional) if name not in mandatory_unique
+    ]
+
+    fallback = not mandatory_unique and not optional_unique
+    if fallback:
+        mandatory_unique = [
+            "fetch_observatory_data",
+            "calculate_derived_components",
+            "plot_components",
+            "get_statistics",
+        ]
+    elif not (set(mandatory_unique) | set(optional_unique)) & _SOURCE_TOOLS:
+        if set(optional_unique) & _COMPUTE_TOOLS:
+            optional_unique.insert(0, "fetch_observatory_data")
+
+    room = max(cap, len(mandatory_unique)) - len(mandatory_unique)
+    selected = mandatory_unique + optional_unique[:room]
+
+    info: dict[str, Any] = {
+        "metrics": metrics,
+        "mandatory": mandatory_unique,
+        "optional": optional_unique[:room],
+        "bulk": bulk,
+        "units": _bulk_units(text),
+        "fallback": fallback,
+    }
+    return selected, info
+
+
+def select_tools_for_query(query: str, cap: int = TOOLS_PER_TASK) -> list[dict[str, Any]]:
+    """Pick the schemas a free-form question can need.
+
+    The selector answers one question: *which tool must the model be able to
+    call for this sentence?* It is a router, not a keyword dump:
+
+    * a named physics metric pulls in the frame sources the metric actually
+      reads (:data:`_METRIC_SOURCE_TOOLS`) plus the tool that computes it;
+    * non-metric intents are matched by :data:`_CAPABILITY_RULES`, most
+      specific first;
+    * a station question is not a bulk job: the matrix pair only appears when
+      the request itself asks for matrix-scale work (:func:`_is_bulk_query`);
+    * the mandatory set is never truncated by the cap, so the decisive tool
+      cannot be evicted by presentation tools;
+    * when nothing matches, a safe computational core is returned instead of
+      the first *cap* schemas in catalog order (which were project tools).
+
+    The returned list stays in catalog order so the prompt is byte-stable for a
+    given selection.
+    """
+    ordered, _ = _selection_plan(query, cap)
+    keep = set(ordered)
     return [t for t in TOOL_SCHEMAS if t["function"]["name"] in keep]
+
+
+def explain_tool_selection(query: str, cap: int = TOOLS_PER_TASK) -> dict[str, Any]:
+    """The selection plus the evidence behind it, for verbose logs and tests."""
+    ordered, info = _selection_plan(query, cap)
+    keep = set(ordered)
+    schemas = [t for t in TOOL_SCHEMAS if t["function"]["name"] in keep]
+    info["tools"] = [t["function"]["name"] for t in schemas]
+    info["est_tokens"] = prompt_budget(SYSTEM_PROMPT, schemas)["est_tokens"]
+    return info
+
 
 
 def estimate_tokens(text: str) -> int:
@@ -5034,6 +5209,10 @@ _PHYSICS_METRIC_ALIASES: dict[str, str] = {
     "equatorial_electrojet": "eej_index",
 }
 
+#: Query triggers for every physics metric, built from the registry above so a
+#: metric cannot be nameable by the model but invisible to the router.
+_METRIC_QUERY_PATTERNS = _build_metric_query_patterns()
+
 
 def _strict_argument_check(
     tool: str,
@@ -6143,10 +6322,24 @@ def run_agent(
         return _error("invalid_brain", "brain must expose a .chat(messages, tools) method")
 
     prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
-    # Never hand a small model all 21 schemas: a free-form question gets the
-    # few tools its intent needs. Planner subtasks pass an explicit, already
-    # narrow list; the free-form path narrows by query here.
-    schemas = tools if tools is not None else select_tools_for_query(user_query)
+    # Never hand a small model all 29 schemas: a free-form question gets the
+    # tools its intent needs. Planner subtasks pass an explicit, already narrow
+    # list; the free-form path routes by query here. Under verbose the routing
+    # evidence is printed, so a failed run can be diagnosed from the log alone
+    # (which metrics were recognised, whether it was read as a bulk job, how
+    # many tokens the schemas cost).
+    if tools is not None:
+        schemas = tools
+        selection = None
+    else:
+        schemas = select_tools_for_query(user_query)
+        selection = explain_tool_selection(user_query)
+    if verbose and selection is not None:
+        print(
+            "[TOOL SELECTION] "
+            f"{selection['tools']} metrics={selection['metrics']} "
+            f"bulk={selection['bulk']} est_tokens={selection['est_tokens']}"
+        )
     store = store or FrameStore()
     plots: list[str] = []
     log: list[dict[str, Any]] = []
