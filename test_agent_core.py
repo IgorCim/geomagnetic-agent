@@ -114,6 +114,21 @@ def test_system_prompt_forbids_inventing_numbers():
     assert "raw" in ac.SYSTEM_PROMPT and "derived" in ac.SYSTEM_PROMPT
 
 
+def test_system_prompt_teaches_ssc_candidates_not_confirmed_ssc():
+    """A single station cannot confirm an SSC; the prompt must say so."""
+    sp = ac.SYSTEM_PROMPT
+    assert "SI/SSC-кандидаты" in sp
+    assert "Одна станция не подтверждает" in sp
+    assert "ИЛИ сеть станций" in sp
+    assert "не подтверждённый SSC" in sp
+
+
+def test_system_prompt_forbids_latex_and_names_the_canonical_frame_argument():
+    sp = ac.SYSTEM_PROMPT
+    assert "Без LaTeX" in sp
+    assert "df_descriptor" in sp
+
+
 def test_system_prompt_advertises_every_registered_tool():
     """A tool the prompt never mentions is a tool the model will not reach for.
 
@@ -856,6 +871,49 @@ def test_scratchpad_registry_always_shows_the_active_handle():
     assert "older" in text, "the display must say that older handles are hidden"
 
 
+def test_scratchpad_result_memory_survives_history_trimming():
+    """Handles are not enough: the numeric answer must outlive the payload."""
+    pad = ac.Scratchpad()
+    pad.add_result(
+        "get_statistics",
+        "Statistics — H[min 18147.93, max 18332.99, mean 18244.18, "
+        "med 18248.47, sd 40.63 nT].",
+    )
+    pad.note_elided(12)
+
+    text = pad.to_prompt_injection()
+    assert "Results:" in text
+    assert "min 18147.93" in text
+    assert "12 older tool messages elided" in text
+
+
+def test_scratchpad_result_memory_is_bounded_and_deduplicated():
+    pad = ac.Scratchpad()
+    for i in range(ac.RESULT_MEMORY_LIMIT + 2):
+        pad.add_result(f"tool_{i}", f"value {i}")
+    assert len(pad.results) == ac.RESULT_MEMORY_LIMIT
+    assert "tool_0" not in " ".join(pad.results)
+
+    pad.add_result(f"tool_{ac.RESULT_MEMORY_LIMIT + 1}", "value refreshed")
+    assert len(pad.results) == ac.RESULT_MEMORY_LIMIT
+    assert sum("value refreshed" in entry for entry in pad.results) == 1
+
+
+def test_statistics_note_puts_h_first_and_keeps_the_numbers():
+    note = ac._compact_statistics_note(
+        {
+            "X": {"min": 1.0, "max": 2.0, "mean": 1.5, "median": 1.5,
+                  "std": 0.5, "unit": "nT"},
+            "H": {"min": 18147.93, "max": 18332.99, "mean": 18244.18,
+                  "median": 18248.47, "std": 40.63, "unit": "nT"},
+        }
+    )
+    assert note.startswith("Statistics — H[")
+    assert "min 18147.93" in note
+    assert "sd 40.63 nT" in note
+    assert note.index("H[") < note.index("X[")
+
+
 def test_trim_history_removes_only_whole_old_exchanges():
     messages = [
         {"role": "system", "content": "s"},
@@ -880,6 +938,53 @@ def test_trim_history_removes_only_whole_old_exchanges():
     assert all(
         messages[i]["role"] != "tool" or messages[i - 1]["role"] == "assistant"
         for i in range(2, len(messages))
+    )
+
+
+def test_run_agent_keeps_a_numeric_result_after_history_trimming(monkeypatch):
+    """The first statistics call is elided, but its H numbers are not lost."""
+    def fake_stats(args, store):  # noqa: ARG001
+        return {"ok": True}, (
+            "Statistics — H[min 18147.93, max 18332.99, mean 18244.18, "
+            "med 18248.47, sd 40.63 nT]."
+        )
+
+    def fake_fetch(args, store):  # noqa: ARG001
+        day = args["day"]
+        return {
+            "ok": True,
+            "frame_handle": f"raw:irt:{day}",
+            "rows": 10,
+        }, f"fetched {day}"
+
+    monkeypatch.setitem(ac.HANDLERS, "get_statistics", fake_stats)
+    monkeypatch.setitem(ac.HANDLERS, "fake_fetch", fake_fetch)
+    script = [
+        {"content": _text_call("get_statistics", '{"df_descriptor": "raw:irt:2024-09-12"}')}
+    ]
+    script += [
+        {"content": _text_call("fake_fetch", json.dumps({"day": f"2024-09-{i:02d}"}))}
+        for i in range(1, 8)
+    ]
+    script.append({"content": "готово"})
+
+    class Spy(ac.ScriptedBrain):
+        def __init__(self, script):
+            super().__init__(script)
+            self.system_messages = []
+
+        def chat(self, messages, tools):
+            self.system_messages.append(messages[0]["content"])
+            return super().chat(messages, tools)
+
+    brain = Spy(script)
+    result = ac.run_agent("тест", brain=brain, tools=[], max_rounds=12, verbose=False)
+
+    assert result["ok"], result
+    last = brain.system_messages[-1]
+    assert "older tool messages elided" in last, "the test did not reach the cap"
+    assert "Results:" in last and "min 18147.93" in last, (
+        "the numeric result did not survive the history cap"
     )
 
 

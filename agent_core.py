@@ -151,60 +151,64 @@ HANDLE_CASE_RULE = (
 BASE_PROMPT_COMPACT = (
     "Ты — профессиональный геофизический ассистент. Не выдумывай цифры — "
     "вызывай инструменты.\n\n"
-    "БАЗОВЫЕ ПРАВИЛА:\n"
-    "ПРАВИЛО 0 (ДЕКОМПОЗИЦИЯ): ЕСЛИ запрос содержит несколько разных задач или "
-    "источников — СНАЧАЛА напиши нумерованный ПЛАН (1, 2, 3...), затем выполняй "
-    "инструменты строго по одному пункту. НИКОГДА не объединяй разные метрики или "
-    "источники в один вызов.\n"
-    "1. Отвечай по-русски, кратко. Числа — только из инструмента.\n"
-    "2. Данные бери fetch_observatory_data, код IAGA. "
+    "ПРАВИЛО 0: несколько задач → план, по одному.\n"
+    "1. По-русски, кратко. Числа — только из инструмента. "
+    "Единицы: 'nT', 'nT/min'. Без LaTeX и $...$.\n"
+    "2. Данные — fetch_observatory_data, код IAGA. "
     f"Известны: {STATION_HINT}.\n"
     "3. Хэндл — только из frame_handle. "
-    f"{HANDLE_CASE_RULE}\n"
-    "4. Физику — ТОЛЬКО через apply_physics_formula metric. calculate_dst_proxy "
-    "НЕ существует. Для солнечных метрик передавай solar_wind_handle с "
-    "хэндлом фрейма. EEJ — calculate_eej_index.\n"
-    "5. Метрики calculate_derived_math: 'delta', 'dH_dt', 'anomaly'. "
-    "Метрики 'range' НЕ СУЩЕСТВУЕТ.\n"
-    "6. Ошибку перескажи, предложи шаг; файлы; "
-    "единицы 'nT'.\n\n"
-    "ГРАФИКИ (ЕСЛИ → ТО):\n"
-    "4a. ОДНА СТАНЦИЯ: ЕСЛИ нужен график станции → fetch_observatory_data, "
-    "затем plot_components/plot_comparison/plot_overlay.\n"
-    "4b. ЗЕМЛЯ vs КОСМОС: ЕСЛИ сравниваешь станцию с ветром → "
-    "fetch_observatory_data + fetch_solar_wind, затем "
+    f"{HANDLE_CASE_RULE} "
+    "Фрейм — df_descriptor; raw/derived — семейства.\n"
+    "4. Физика — только apply_physics_formula metric. calculate_dst_proxy "
+    "НЕ существует. Солнечные метрики — solar_wind_handle; "
+    "EEJ — calculate_eej_index.\n"
+    "5. calculate_derived_math: 'delta', 'dH_dt', 'anomaly'; "
+    "Метрики 'range' НЕ СУЩЕСТВУЕТ. anomaly требует baseline_value из "
+    "calculate_baseline.\n"
+    "6. Не путай: calculate_derived_components — H/D/I; get_statistics — "
+    "min/max/mean/median/std; evaluate_custom_formula — безопасное выражение "
+    "(не исполняется как код); apply_physics_formula — физика.\n"
+    "7. Ошибку перескажи.\n\n"
+    "SSC:\n"
+    "8. detect_ssc — SI/SSC-кандидаты (импульсы H), не подтверждённый SSC. "
+    "Одна станция не подтверждает; подтверждение — солнечный ветер "
+    "(удар/скачок) ИЛИ сеть станций. Не говори «подтверждено только по солнцу».\n\n"
+    "ГРАФИКИ:\n"
+    "4a. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data, иначе unknown_frame; "
+    "далее calculate_derived_components → "
+    "plot_components/plot_comparison/plot_overlay.\n"
+    "4b. Земля vs космос: fetch_observatory_data + fetch_solar_wind → "
     "plot_space_weather_comparison(ground_component='H', "
-    "solar_wind_components=['Bz','V']). ground_df_descriptor — хэндл СТАНЦИИ "
-    "('raw:irt:2024-09-12'), НЕ idx:supermag/idx:kyoto.\n"
-    "4c. ИНДЕКСЫ: ЕСЛИ работаешь с индексами → fetch_supermag_data 'indices' "
-    "(SME/SML/SMU) или fetch_geomagnetic_indices, затем plot_components.\n"
-    "4d. ПЕРЕД ЛЮБЫМ из них — fetch_observatory_data, иначе unknown_frame.\n"
-    "4f. idx:... как ground_df_descriptor НЕЛЬЗЯ — только raw:...\n\n"
+    "solar_wind_components=['Bz','V']); ground_df_descriptor — "
+    "raw:irt:2024-09-12.\n"
+    "4c. Индексы: fetch_supermag_data('indices') или "
+    "fetch_geomagnetic_indices → plot_components.\n"
+    "4f. idx:supermag/idx:kyoto как ground_df_descriptor НЕЛЬЗЯ.\n\n"
     "КОСМИЧЕСКАЯ ПОГОДА:\n"
-    "7. Бури, алерты — get_noaa_space_weather_context "
+    "7a. Бури/алерты — get_noaa_space_weather_context "
     "('alerts'|'forecast'|'solar_events').\n"
     "4e. Dst/Kp — get_iswa_forecast; карта get_iswa_perturbation_map "
     "ДЕКОМИССИРОВАНА → fetch_supermag_data('indices').\n\n"
-    "ИНСТРУМЕНТЫ: Данные — fetch_observatory_data, fetch_many, list_projects, "
-    "create_project, export_project, fetch_solar_wind, "
-    "fetch_geomagnetic_indices. Пакетно — create_task_matrix, "
-    "process_matrix_batch. Математика — calculate_derived_components, "
-    "get_statistics, detect_anomalies, calculate_baseline (baseline_value), "
-    "evaluate_custom_formula (не исполняется как код), apply_physics_formula. "
-    "Магнетизм — get_station_geomagnetic_coords, calculate_mlt, "
+    "ИНСТРУМЕНТЫ:\n"
+    "Данные: fetch_observatory_data, fetch_many, list_projects, create_project, "
+    "export_project, fetch_solar_wind, fetch_geomagnetic_indices, "
+    "fetch_supermag_data. Пакетно: create_task_matrix, process_matrix_batch. "
+    "Математика: calculate_derived_components, get_statistics, detect_anomalies, "
+    "calculate_baseline, evaluate_custom_formula, apply_physics_formula. "
+    "Магнетизм: get_station_geomagnetic_coords, calculate_mlt, "
     "calculate_local_time, group_stations_by_mlt.\n\n"
-    "ФОРМАТ ОТВЕТА:\n"
-    "8. Ты НЕ API-сервер: не отвечай {'content':..., 'tool_calls':...}. "
+    "ФОРМАТ:\n"
+    "9. Ты НЕ API-сервер: не отвечай {'content':..., 'tool_calls':...}. "
     "Вызов — теги:\n"
     '      <tool_call>{"name": "fetch_observatory_data", "arguments": '
     '{"station_code": "IRT", "start_date": "2024-09-10"}}</tool_call>\n'
-    "Данных достаточно — текст без тегов.\n\n"
+    "Достаточно данных — без тегов.\n\n"
     "АЛГОРИТМ ДЛЯ МАССОВЫХ ЗАДАЧ:\n"
     "1) create_task_matrix; 2) ОДИН process_matrix_batch с "
     "run_until_complete=True; 3) проверь 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА' "
     "(экспорт делается автоматически); 4) сводка. НЕ вызывай больше никаких "
-    "инструментов. НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА не "
-    "вызывай create_task_matrix повторно."
+    "инструментов. НИКОГДА не вызывай process_matrix_batch в цикле и НИКОГДА "
+    "не вызывай create_task_matrix повторно."
 )
 
 #: The base prompt the ordinary single-question loop uses. ``run_agent_with_planner``
@@ -1731,6 +1735,12 @@ HANDLE_DISPLAY_LIMIT = 12
 #: Scratchpad, so the model keeps the state without re-reading old payloads.
 HISTORY_KEEP_EXCHANGES = 6
 
+#: How many numeric tool results the scratchpad keeps after their chat messages
+#: are elided. The notes are already the model-facing digest; the cap only stops
+#: a long run from turning that digest into a second context window.
+RESULT_MEMORY_LIMIT = 6
+RESULT_MEMORY_CHARS = 280
+
 
 class Scratchpad:
     """Persistent working memory for the agent during a single user query.
@@ -1756,6 +1766,9 @@ class Scratchpad:
         #: visible state note so the model does not hunt for elided results.
         self.elided_messages = 0
         self.completed_steps: list[str] = []
+        #: Compact ``tool: note`` results whose chat messages may be elided.
+        #: Handles survive in ``handles``; numbers have no other durable home.
+        self.results: list[str] = []
         self.errors: list[dict] = []
         self.plan: list[str] = []
         #: ``(tool, args_signature, error)`` for every failed call, newest last.
@@ -1769,6 +1782,7 @@ class Scratchpad:
         self._handle_seq = 0
         self.elided_messages = 0
         self.completed_steps.clear()
+        self.results.clear()
         self.errors.clear()
         self.plan.clear()
         self.failed_calls.clear()
@@ -1832,6 +1846,29 @@ class Scratchpad:
         """Record how many old chat messages the history cap removed."""
         if count > 0:
             self.elided_messages += int(count)
+
+    def add_result(self, tool: str, text: str) -> None:
+        """Keep the numeric digest of a completed tool across history trimming.
+
+        The full payload is deliberately not stored: it can be hundreds of rows
+        and the next call does not need it. The handler's note is the compact,
+        already-human-readable summary, so it is the right unit of memory. A
+        repeated identical result is refreshed rather than duplicated, and the
+        oldest distinct results fall off after :data:`RESULT_MEMORY_LIMIT`.
+        """
+        if not isinstance(text, str):
+            return
+        text = " ".join(text.split())
+        if not text:
+            return
+        if len(text) > RESULT_MEMORY_CHARS:
+            text = text[: RESULT_MEMORY_CHARS - 1].rstrip() + "…"
+        entry = f"{str(tool) if tool else '?'}: {text}"
+        if entry in self.results:
+            self.results.remove(entry)
+        self.results.append(entry)
+        if len(self.results) > RESULT_MEMORY_LIMIT:
+            del self.results[:-RESULT_MEMORY_LIMIT]
 
     @staticmethod
     def _describe_handle(info: dict[str, Any]) -> str:
@@ -1950,6 +1987,8 @@ class Scratchpad:
             )
         if self.completed_steps:
             parts.append(f"Completed: {', '.join(self.completed_steps)}")
+        if self.results:
+            parts.append(f"Results: {' | '.join(self.results)}")
         if self.errors:
             recent: list[str] = []
             for err in self.errors[-3:]:  # only the freshest mistakes matter
@@ -2067,6 +2106,23 @@ _SCRATCHPAD_STEP_BY_TOOL: dict[str, str] = {
     "create_project": "create_project",
     "export_project": "export_project",
 }
+
+#: Tools whose notes carry a number the user may ask about after the payload has
+#: been elided. Frame fetches are excluded: their durable state is the handle,
+#: already kept in the registry.
+_RESULT_MEMORY_TOOLS = frozenset(
+    {
+        "get_statistics",
+        "detect_anomalies",
+        "calculate_derived_math",
+        "calculate_baseline",
+        "evaluate_custom_formula",
+        "apply_physics_formula",
+        "calculate_eej_index",
+        "get_noaa_space_weather_context",
+        "get_iswa_forecast",
+    }
+)
 
 #: Frame families that are auxiliary inputs (space weather) rather than the
 #: working magnetometer frame. Kept out of the Scratchpad's "Active handle".
@@ -3973,6 +4029,41 @@ def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     return summary, f"Computed {', '.join(summary['computed'])} -> handle {slot!r}."
 
 
+def _compact_statistics_note(result: dict[str, Any]) -> str:
+    """Put the requested numbers in the note, not just the component names.
+
+    The payload already carries every statistic, but the note is what survives
+    in the scratchpad after the history cap drops the payload. ``H`` is listed
+    first because it is the storm-relevant component; a truncation then keeps
+    the number the model is most likely to quote, rather than the tail of a
+    five-component line.
+    """
+    preferred = ("H", "X", "Y", "Z", "F")
+    ordered = [c for c in preferred if c in result]
+    ordered += [c for c in result if c not in ordered]
+    chunks: list[str] = []
+    for component in ordered:
+        entry = result.get(component)
+        if not isinstance(entry, dict):
+            continue
+        facts = [
+            f"{label} {entry[key]}"
+            for key, label in (
+                ("min", "min"),
+                ("max", "max"),
+                ("mean", "mean"),
+                ("median", "med"),
+                ("std", "sd"),
+            )
+            if entry.get(key) is not None
+        ]
+        if facts:
+            unit = entry.get("unit") or ""
+            suffix = f" {unit}" if unit else ""
+            chunks.append(f"{component}[{', '.join(facts)}{suffix}]")
+    return "Statistics — " + "; ".join(chunks) + "." if chunks else "Statistics computed."
+
+
 @_accepts_legacy_df("get_statistics")
 def _handle_stats(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     handle, missing = _frame_handle("get_statistics", args)
@@ -3991,7 +4082,7 @@ def _handle_stats(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     summary = dict(result)
     summary["available_handles"] = store.names()
     summary["handle_aliases"] = store.aliases()
-    return summary, f"Statistics for {', '.join(result)}."
+    return summary, _compact_statistics_note(result)
 
 
 @_accepts_legacy_df("detect_anomalies")
@@ -5904,8 +5995,8 @@ def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
             f"✅ Импульсы H (SI/SSC-кандидаты): {attrs.get('ssc_count', 0)} "
             f"(порог {attrs.get('ssc_threshold_nT_per_min')} нТ/мин)."
             f"{head}{tail}{trunc} "
-            f"SSC подтверждается только по солнечному ветру/сети станций. "
-            f"-> хэндл {slot!r}."
+            f"Подтверждение SSC — солнечный ветер (удар/скачок) ИЛИ сеть "
+            f"станций; одна станция не подтверждает. -> хэндл {slot!r}."
         )
     if metric == "burton_coupling":
         info = attrs.get("burton", {})
@@ -6895,6 +6986,8 @@ def run_agent(
                     metric = str(args.get("metric") or "").strip()
                     if metric:
                         scratchpad.add_completed_step(f"physics_{metric}")
+                if name in _RESULT_MEMORY_TOOLS and note:
+                    scratchpad.add_result(name, note)
             else:
                 entry["error"] = payload.get("error")
                 entry["message"] = payload.get("message")
