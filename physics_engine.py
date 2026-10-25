@@ -509,6 +509,25 @@ def _column_ci(df: pd.DataFrame, *names: str) -> str | None:
     return None
 
 
+def _coverage(stamps: pd.Series) -> dict[str, Any] | None:
+    """UTC first/last valid timestamp, or ``None`` when there are none.
+
+    An alignment failure must say *which* windows were compared; "no coverage"
+    alone sent the model back to the same date it had already fetched.
+    """
+    valid = pd.to_datetime(stamps, errors="coerce", utc=True).dropna()
+    if valid.empty:
+        return None
+    return {
+        "start": valid.min().isoformat(),
+        "end": valid.max().isoformat(),
+        "n_samples": int(valid.size),
+    }
+
+
+def _finite_count(series: pd.Series) -> int:
+    """How many real (non-NaN, non-inf) numbers a column carries."""
+    return int(np.isfinite(series.to_numpy(dtype="float64")).sum())
 
 
 def align_solar_wind(
@@ -598,6 +617,24 @@ def align_solar_wind(
         return _error("invalid_input", f"lag_minutes={lag_minutes!r} must be a number.")
     sw_ts = sw_ts + lag
 
+    obs_coverage = _coverage(obs_ts)
+    sw_coverage = _coverage(sw_ts)
+    overlap: dict[str, str] | None = None
+    if obs_coverage is not None and sw_coverage is not None:
+        overlap_start = max(
+            pd.Timestamp(obs_coverage["start"]),
+            pd.Timestamp(sw_coverage["start"]),
+        )
+        overlap_end = min(
+            pd.Timestamp(obs_coverage["end"]),
+            pd.Timestamp(sw_coverage["end"]),
+        )
+        if overlap_start <= overlap_end:
+            overlap = {
+                "start": overlap_start.isoformat(),
+                "end": overlap_end.isoformat(),
+            }
+
     def _one(col: str) -> pd.Series:
         values = pd.to_numeric(solar_wind_df[col], errors="coerce")
         series = pd.Series(values.to_numpy(dtype="float64"), index=pd.DatetimeIndex(sw_ts))
@@ -609,8 +646,47 @@ def align_solar_wind(
     bz_series = _one(bz_col)
     if v_series.empty or bz_series.empty:
         return _error(
-            "no_data",
-            "The solar-wind frame has no usable V/Bz samples to align.",
+            "solar_wind_no_finite_values",
+            "The solar-wind frame has no valid timestamps after applying the lag; "
+            "V/Bz cannot be aligned.",
+            reason="no_valid_timestamps",
+            observatory_coverage=obs_coverage,
+            solar_wind_coverage=sw_coverage,
+            lag_minutes=_jsonable(float(lag_minutes), 1),
+        )
+
+    v_source_finite = _finite_count(v_series)
+    bz_source_finite = _finite_count(bz_series)
+    if v_source_finite == 0 or bz_source_finite == 0:
+        columns = {
+            "V": {
+                "source_column": str(v_col),
+                "source_finite": v_source_finite,
+                "source_rows": int(len(v_series)),
+            },
+            "Bz": {
+                "source_column": str(bz_col),
+                "source_finite": bz_source_finite,
+                "source_rows": int(len(bz_series)),
+            },
+        }
+        empty = [name for name, info in columns.items() if info["source_finite"] == 0]
+        return _error(
+            "solar_wind_no_finite_values",
+            f"The solar-wind frame has columns V and Bz, but the required "
+            f"column(s) {', '.join(empty)} have no finite values "
+            f"({v_source_finite} finite V, {bz_source_finite} finite Bz). "
+            "Nothing can be aligned.",
+            empty=empty,
+            columns=columns,
+            observatory_coverage=obs_coverage,
+            solar_wind_coverage=sw_coverage,
+            overlap=overlap,
+            lag_minutes=_jsonable(float(lag_minutes), 1),
+            hint=(
+                "The wind frame was fetched but its V/Bz samples are all NaN. "
+                "Re-fetch the solar wind for this date and check the loader output."
+            ),
         )
 
     obs_index_unique = pd.DatetimeIndex(sorted(set(obs_valid)))
@@ -626,6 +702,64 @@ def align_solar_wind(
 
     v_aligned = _resample(v_series)
     bz_aligned = _resample(bz_series)
+    v_aligned_finite = int(np.isfinite(v_aligned).sum())
+    bz_aligned_finite = int(np.isfinite(bz_aligned).sum())
+    if v_aligned_finite == 0 or bz_aligned_finite == 0:
+        columns = {
+            "V": {
+                "source_column": str(v_col),
+                "source_finite": v_source_finite,
+                "aligned_finite": v_aligned_finite,
+                "n_observatory": int(len(observatory_df)),
+            },
+            "Bz": {
+                "source_column": str(bz_col),
+                "source_finite": bz_source_finite,
+                "aligned_finite": bz_aligned_finite,
+                "n_observatory": int(len(observatory_df)),
+            },
+        }
+        empty = [
+            name for name, info in columns.items() if info["aligned_finite"] == 0
+        ]
+        if overlap is None:
+            return _error(
+                "solar_wind_no_time_overlap",
+                "The observatory frame and the solar-wind frame do not overlap in "
+                f"time: station {obs_coverage['start'] if obs_coverage else '?'} to "
+                f"{obs_coverage['end'] if obs_coverage else '?'}, wind "
+                f"{sw_coverage['start'] if sw_coverage else '?'} to "
+                f"{sw_coverage['end'] if sw_coverage else '?'} "
+                f"(lag {float(lag_minutes):g} min). V/Bz cannot be aligned.",
+                observatory_coverage=obs_coverage,
+                solar_wind_coverage=sw_coverage,
+                overlap=None,
+                lag_minutes=_jsonable(float(lag_minutes), 1),
+                hint=(
+                    "Fetch solar wind for the station's UTC date (for example "
+                    "fetch_solar_wind(start_date='2024-09-12', "
+                    "end_date='2024-09-12')), or use a station frame inside the "
+                    "wind coverage."
+                ),
+            )
+        return _error(
+            "solar_wind_no_aligned_values",
+            "The windows overlap "
+            f"({overlap['start']} to {overlap['end']}) and the source has finite "
+            "V/Bz, but no observatory row received a finite value "
+            f"({v_aligned_finite} finite V, {bz_aligned_finite} finite Bz of "
+            f"{len(observatory_df)} rows).",
+            empty=empty,
+            columns=columns,
+            observatory_coverage=obs_coverage,
+            solar_wind_coverage=sw_coverage,
+            overlap=overlap,
+            lag_minutes=_jsonable(float(lag_minutes), 1),
+            hint=(
+                "The wind timestamps fall between the station samples; use a "
+                "station frame whose minutes lie inside the wind coverage."
+            ),
+        )
 
     out = observatory_df.copy()
     out["V"] = v_aligned
@@ -658,6 +792,9 @@ def align_solar_wind(
         "n_solar_wind": int(len(solar_wind_df)),
         "n_finite_V": int(np.isfinite(v_aligned).sum()),
         "n_finite_Bz": int(np.isfinite(bz_aligned).sum()),
+        "observatory_coverage": obs_coverage,
+        "solar_wind_coverage": sw_coverage,
+        "overlap": overlap,
         "aligned_extra_columns": sorted(aligned_extra),
         "source": "OMNI (L1)",
     }
@@ -710,13 +847,32 @@ def calculate_coupling_function(
 
     v_series = _solar_wind_series(solar_wind, df, "V", "V_sw", "Vx", "speed", "solar_wind_speed")
     bz_series = _solar_wind_series(solar_wind, df, "Bz", "Bz_gsm", "BzGSM", "B_z", "bz_gsm", "B_z_gsm")
-    if v_series is None or bz_series is None:
+    v_finite = None if v_series is None else _finite_count(v_series)
+    bz_finite = None if bz_series is None else _finite_count(bz_series)
+    missing = [
+        name for name, count in (("V", v_finite), ("Bz", bz_finite)) if count is None
+    ]
+    empty = [
+        name for name, count in (("V", v_finite), ("Bz", bz_finite)) if count == 0
+    ]
+    if missing or empty:
+        details: list[str] = []
+        if missing:
+            details.append(f"missing columns {missing}")
+        if empty:
+            details.append(f"columns with no finite values {empty}")
         return _error(
-            "invalid_solar_wind",
-            "Solar-wind coupling needs a speed column 'V' and an IMF column 'Bz'.",
-            missing=[name for name, col in (("V", v_series), ("Bz", bz_series)) if col is None],
+            "invalid_solar_wind" if missing else "solar_wind_no_finite_values",
+            "Solar-wind coupling needs finite V and Bz: " + "; ".join(details) + ".",
+            missing=missing or None,
+            empty=empty or None,
             available=[str(c) for c in solar_wind.columns],
-            hint="Fetch the solar wind with fetch_solar_wind; it carries V and Bz.",
+            hint=(
+                "Fetch the solar wind with fetch_solar_wind; it carries V and Bz."
+                if missing
+                else "The wind frame has V/Bz columns but no finite values; "
+                "re-fetch it for this date and check the loader output."
+            ),
         )
 
     v_arr = v_series.to_numpy(dtype="float64")
@@ -751,8 +907,11 @@ def calculate_coupling_function(
     finite = np.isfinite(ey)
     if not finite.any():
         return _error(
-            "invalid_solar_wind",
-            "No finite V/Bz pair survived alignment for this frame.",
+            "solar_wind_no_aligned_values",
+            "V and Bz carry source values, but no finite V/Bz pair survived "
+            "alignment for this frame.",
+            n_samples=int(len(df)),
+            n_finite=0,
             hint=(
                 "Check the date overlap and the interpolation limit; the solar-wind "
                 "record may have no coverage over these observatory minutes."
@@ -990,24 +1149,52 @@ def calculate_burton_coupling(
             ),
         )
 
-    def _mean(names: tuple[str, ...]) -> float | None:
+    def _column(names: tuple[str, ...]) -> tuple[str | None, np.ndarray]:
         column = _column_ci(solar_wind, *names)
         if column is None:
-            return None
-        values = pd.to_numeric(solar_wind[column], errors="coerce")
-        values = values[np.isfinite(values)]
-        return float(values.mean()) if not values.empty else None
+            return None, np.array([], dtype="float64")
+        values = pd.to_numeric(solar_wind[column], errors="coerce").to_numpy(
+            dtype="float64"
+        )
+        return column, values
 
-    np_val = _mean(("Np", "n_p", "density", "n"))
-    v_val = _mean(("V", "V_sw", "Vx", "speed", "solar_wind_speed"))
-    bz_val = _mean(("Bz", "B_z", "Bz_gsm", "BzGSM", "bz_gsm", "B_z_gsm"))
+    def _mean(values: np.ndarray) -> float | None:
+        finite = values[np.isfinite(values)]
+        return float(finite.mean()) if finite.size else None
 
-    missing = [name for name, value in (("Np", np_val), ("V", v_val), ("Bz", bz_val)) if value is None]
-    if missing:
+    np_col, np_values = _column(("Np", "n_p", "density", "n"))
+    v_col, v_values = _column(("V", "V_sw", "Vx", "speed", "solar_wind_speed"))
+    bz_col, bz_values = _column(
+        ("Bz", "B_z", "Bz_gsm", "BzGSM", "bz_gsm", "B_z_gsm")
+    )
+    np_val = _mean(np_values)
+    v_val = _mean(v_values)
+    bz_val = _mean(bz_values)
+
+    required = (
+        ("Np", np_col, np_values),
+        ("V", v_col, v_values),
+        ("Bz", bz_col, bz_values),
+    )
+    missing = [name for name, column, _ in required if column is None]
+    empty = [
+        name
+        for name, column, values in required
+        if column is not None and not np.isfinite(values).any()
+    ]
+    if missing or empty:
+        details: list[str] = []
+        if missing:
+            details.append(f"missing columns {missing}")
+        if empty:
+            details.append(f"columns with no finite values {empty}")
         return _error(
-            "invalid_solar_wind",
-            f"Burton coupling needs {missing} in the solar-wind frame.",
-            missing=missing,
+            "invalid_solar_wind" if missing else "solar_wind_no_finite_values",
+            "Burton coupling needs finite Np, V and Bz: "
+            + "; ".join(details)
+            + ".",
+            missing=missing or None,
+            empty=empty or None,
             available=[str(c) for c in solar_wind.columns],
             hint="fetch_solar_wind frames carry Np, V and Bz.",
         )
@@ -1097,29 +1284,55 @@ def calculate_akasofu_epsilon(
             ),
         )
 
-    def _mean(names: tuple[str, ...]) -> float | None:
+    def _column(names: tuple[str, ...]) -> tuple[str | None, np.ndarray]:
         column = _column_ci(solar_wind, *names)
         if column is None:
-            return None
-        values = pd.to_numeric(solar_wind[column], errors="coerce")
-        values = values[np.isfinite(values)]
-        return float(values.mean()) if not values.empty else None
+            return None, np.array([], dtype="float64")
+        values = pd.to_numeric(solar_wind[column], errors="coerce").to_numpy(
+            dtype="float64"
+        )
+        return column, values
 
-    v_val = _mean(("V", "V_sw", "Vx", "speed", "solar_wind_speed"))
-    bx_val = _mean(("Bx", "B_x", "Bx_gsm", "BxGSM", "bx_gsm"))
-    by_val = _mean(("By", "B_y", "By_gsm", "ByGSM", "by_gsm"))
-    bz_val = _mean(("Bz", "B_z", "Bz_gsm", "BzGSM", "bz_gsm", "B_z_gsm"))
+    def _mean(values: np.ndarray) -> float | None:
+        finite = values[np.isfinite(values)]
+        return float(finite.mean()) if finite.size else None
 
-    missing = [
+    v_col, v_values = _column(("V", "V_sw", "Vx", "speed", "solar_wind_speed"))
+    bx_col, bx_values = _column(("Bx", "B_x", "Bx_gsm", "BxGSM", "bx_gsm"))
+    by_col, by_values = _column(("By", "B_y", "By_gsm", "ByGSM", "by_gsm"))
+    bz_col, bz_values = _column(
+        ("Bz", "B_z", "Bz_gsm", "BzGSM", "bz_gsm", "B_z_gsm")
+    )
+    v_val = _mean(v_values)
+    bx_val = _mean(bx_values)
+    by_val = _mean(by_values)
+    bz_val = _mean(bz_values)
+
+    required = (
+        ("V", v_col, v_values),
+        ("Bx", bx_col, bx_values),
+        ("By", by_col, by_values),
+        ("Bz", bz_col, bz_values),
+    )
+    missing = [name for name, column, _ in required if column is None]
+    empty = [
         name
-        for name, value in (("V", v_val), ("Bx", bx_val), ("By", by_val), ("Bz", bz_val))
-        if value is None
+        for name, column, values in required
+        if column is not None and not np.isfinite(values).any()
     ]
-    if missing:
+    if missing or empty:
+        details: list[str] = []
+        if missing:
+            details.append(f"missing columns {missing}")
+        if empty:
+            details.append(f"columns with no finite values {empty}")
         return _error(
-            "invalid_solar_wind",
-            f"Akasofu epsilon needs {missing} in the solar-wind frame.",
-            missing=missing,
+            "invalid_solar_wind" if missing else "solar_wind_no_finite_values",
+            "Akasofu epsilon needs finite V, Bx, By and Bz: "
+            + "; ".join(details)
+            + ".",
+            missing=missing or None,
+            empty=empty or None,
             available=[str(c) for c in solar_wind.columns],
             hint="fetch_solar_wind frames carry V, Bx, By and Bz.",
         )

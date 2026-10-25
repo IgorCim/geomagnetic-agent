@@ -31,6 +31,30 @@ def _text_call(name: str, arguments: str = "{}") -> str:
     return f'<tool_call>{{"name": "{name}", "arguments": {arguments}}}</tool_call>'
 
 
+def _real_schemas(*names: str) -> list[dict]:
+    """The production schemas for *names*, for tests that pass ``tools=``."""
+    wanted = set(names)
+    return [t for t in ac.TOOL_SCHEMAS if t["function"]["name"] in wanted]
+
+
+def _test_schema(
+    name: str, properties: dict | None = None, required: tuple[str, ...] = ()
+) -> dict:
+    """A minimal valid schema for a monkeypatched test-only handler."""
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": f"test handler {name}",
+            "parameters": {
+                "type": "object",
+                "properties": properties or {},
+                "required": list(required),
+            },
+        },
+    }
+
+
 T_OPEN = "<tool_call>"
 T_CLOSE = "</tool_call>"
 
@@ -587,7 +611,12 @@ def test_verbose_run_prints_code_revision_and_tool_note(capsys, monkeypatch):
         T_OPEN + '{"name":"get_statistics","arguments":{"df":"raw"}}' + T_CLOSE,
         "готово",
     ])
-    out = ac.run_agent("q", brain=brain, verbose=True, tools=[])
+    out = ac.run_agent(
+        "q",
+        brain=brain,
+        verbose=True,
+        tools=_real_schemas("get_statistics"),
+    )
     assert out["ok"] is True
     text = capsys.readouterr().out
     assert "[CODE] revision=" in text
@@ -899,6 +928,70 @@ def test_scratchpad_result_memory_is_bounded_and_deduplicated():
     assert sum("value refreshed" in entry for entry in pad.results) == 1
 
 
+def test_scratchpad_detects_an_identical_failure_loop():
+    pad = ac.Scratchpad()
+    for _ in range(ac.LOOP_THRESHOLD):
+        pad.add_failure("get_statistics", '{"df": "raw"}', "unknown_frame")
+
+    loop = pad.repeated_failure()
+    assert loop == ac.FailureLoop(
+        "get_statistics", "unknown_frame", ac.LOOP_THRESHOLD, True
+    )
+    text = pad.to_prompt_injection()
+    assert "CRITICAL LOOP DETECTED" in text
+    assert "теми же аргументами" in text
+
+
+def test_scratchpad_detects_the_same_error_with_changing_arguments():
+    """Re-naming the handle while the error never changes is still a dead end."""
+    pad = ac.Scratchpad()
+    for day in range(1, ac.SEMANTIC_LOOP_THRESHOLD + 1):
+        pad.add_failure(
+            "get_statistics",
+            f'{{"df": "raw:irt:2024-09-{day:02d}"}}',
+            "unknown_frame",
+        )
+
+    loop = pad.repeated_failure()
+    assert loop is not None
+    assert loop.count == ac.SEMANTIC_LOOP_THRESHOLD
+    assert loop.identical_arguments is False
+    text = pad.to_prompt_injection()
+    assert "CRITICAL LOOP DETECTED" in text
+    assert "разными аргументами" in text
+
+
+def test_scratchpad_does_not_call_different_errors_a_loop():
+    pad = ac.Scratchpad()
+    for error in ("unknown_frame", "missing_columns", "no_data", "invalid_input"):
+        pad.add_failure("get_statistics", '{"df": "raw"}', error)
+    assert pad.repeated_failure() is None
+
+
+def test_a_success_clears_the_consecutive_failure_streak():
+    pad = ac.Scratchpad()
+    pad.add_failure("get_statistics", '{"df": "a"}', "unknown_frame")
+    pad.add_failure("get_statistics", '{"df": "b"}', "unknown_frame")
+    pad.clear_failures()
+    pad.add_failure("get_statistics", '{"df": "c"}', "unknown_frame")
+    assert pad.repeated_failure() is None
+
+
+def test_self_correction_hint_prefers_the_offered_tool():
+    hint = ac._self_correction_hint(
+        "get_statistic", {"get_statistics", "fetch_observatory_data"}
+    )
+    assert "get_statistics" in hint
+    assert "fetch_observatory_data" not in hint
+
+
+def test_self_correction_hint_maps_a_hallucinated_loader():
+    hint = ac._self_correction_hint(
+        "fetch_omni", {"fetch_solar_wind", "get_statistics"}
+    )
+    assert "fetch_solar_wind" in hint
+
+
 def test_statistics_note_puts_h_first_and_keeps_the_numbers():
     note = ac._compact_statistics_note(
         {
@@ -978,7 +1071,14 @@ def test_run_agent_keeps_a_numeric_result_after_history_trimming(monkeypatch):
             return super().chat(messages, tools)
 
     brain = Spy(script)
-    result = ac.run_agent("тест", brain=brain, tools=[], max_rounds=12, verbose=False)
+    result = ac.run_agent(
+        "тест",
+        brain=brain,
+        tools=_real_schemas("get_statistics")
+        + [_test_schema("fake_fetch", {"day": {"type": "string"}}, ("day",))],
+        max_rounds=12,
+        verbose=False,
+    )
 
     assert result["ok"], result
     last = brain.system_messages[-1]
@@ -1022,7 +1122,11 @@ def test_run_agent_injects_all_live_handles_even_auxiliary(monkeypatch):
     result = ac.run_agent(
         "проанализируй IRT за 2024-09-12",
         brain=brain,
-        tools=[],
+        tools=_real_schemas(
+            "fetch_solar_wind",
+            "fetch_observatory_data",
+            "apply_physics_formula",
+        ),
         verbose=False,
     )
 
@@ -1064,7 +1168,11 @@ def test_run_agent_bounds_history_and_keeps_the_active_handle(monkeypatch):
 
     brain = Spy(script)
     result = ac.run_agent(
-        "тест", brain=brain, tools=[], max_rounds=12, verbose=False
+        "тест",
+        brain=brain,
+        tools=[_test_schema("fake_fetch", {"day": {"type": "string"}}, ("day",))],
+        max_rounds=12,
+        verbose=False,
     )
 
     assert result["ok"], result
@@ -1167,6 +1275,116 @@ def test_unknown_tool_is_reported_and_the_model_recovers(tmp_path, monkeypatch):
     assert "unknown_tool" in result["text"]
 
 
+def test_dispatcher_refuses_a_registered_tool_that_was_not_offered():
+    """A real handler outside this task's schema list must not execute."""
+    brain = ac.ScriptedBrain(ac._unwrap([
+        {"_text": _text_call("get_statistics", '{"df_descriptor": "raw"}')},
+        {"content": "Использую только предложенный инструмент."},
+    ]))
+    result = ac.run_agent(
+        "загрузи станцию",
+        brain=brain,
+        tools=_real_schemas("fetch_observatory_data"),
+        verbose=False,
+    )
+
+    first = result["tool_calls"][0]
+    assert first["ok"] is False
+    assert first["error"] == "tool_not_available"
+    assert "fetch_observatory_data" in first["hint"]
+    assert first["available"] == ["fetch_observatory_data"]
+
+
+def test_empty_schema_list_refuses_calls_instead_of_executing_them():
+    """No offered schemas means no executable calls, not an implicit bypass."""
+    brain = ac.ScriptedBrain(ac._unwrap([
+        {"_text": _text_call("get_statistics", '{"df_descriptor": "raw"}')},
+        {"content": "Инструменты не предложены."},
+    ]))
+    result = ac.run_agent(
+        "без инструментов", brain=brain, tools=[], max_rounds=2, verbose=False
+    )
+
+    first = result["tool_calls"][0]
+    assert first["error"] == "tool_not_available"
+    assert first["available"] == []
+    assert "No tools were offered" in first["hint"]
+
+
+def test_semantic_loop_breaker_fires_on_changing_handles():
+    """Four different dead handles with one error are one dead end."""
+    class Spy(ac.ScriptedBrain):
+        def __init__(self, script):
+            super().__init__(script)
+            self.system_messages = []
+
+        def chat(self, messages, tools):
+            self.system_messages.append(messages[0]["content"])
+            return super().chat(messages, tools)
+
+    script = [
+        {"content": _text_call(
+            "get_statistics", f'{{"df_descriptor": "raw:irt:2024-09-0{day}"}}'
+        )}
+        for day in range(1, 5)
+    ]
+    script.append({"content": "Не могу найти данные."})
+    brain = Spy(script)
+
+    result = ac.run_agent(
+        "посчитай статистику",
+        brain=brain,
+        tools=_real_schemas("get_statistics"),
+        max_rounds=6,
+        verbose=False,
+    )
+
+    assert result["ok"], result
+    assert any(
+        "CRITICAL LOOP DETECTED" in message
+        and "разными аргументами" in message
+        for message in brain.system_messages
+    ), brain.system_messages[-1]
+
+
+def test_a_success_between_failures_does_not_trip_the_loop_breaker(monkeypatch):
+    """The streak is consecutive: a successful call resets it."""
+    def flaky(args, store):  # noqa: ARG001
+        if args["day"] in ("01", "02", "04", "05"):
+            return ac._error("unknown_frame", "no such frame"), "failed"
+        return {"ok": True, "frame_handle": "raw:irt:2024-09-03"}, "ok"
+
+    monkeypatch.setitem(ac.HANDLERS, "fake_flaky", flaky)
+    script = [
+        {"content": _text_call("fake_flaky", json.dumps({"day": f"0{day}"}))}
+        for day in (1, 2, 3, 4, 5)
+    ]
+    script.append({"content": "готово"})
+
+    class Spy(ac.ScriptedBrain):
+        def __init__(self, script):
+            super().__init__(script)
+            self.system_messages = []
+
+        def chat(self, messages, tools):
+            self.system_messages.append(messages[0]["content"])
+            return super().chat(messages, tools)
+
+    brain = Spy(script)
+    result = ac.run_agent(
+        "тест",
+        brain=brain,
+        tools=[_test_schema("fake_flaky", {"day": {"type": "string"}}, ("day",))],
+        max_rounds=8,
+        verbose=False,
+    )
+
+    assert result["ok"], result
+    assert not any(
+        "CRITICAL LOOP DETECTED" in message for message in brain.system_messages
+    ), brain.system_messages[-1]
+
+
 def test_unknown_frame_handle_is_reported(tmp_path, monkeypatch):
     monkeypatch.setattr(ac, "OFFLINE", True)
     brain = ac.ScriptedBrain(ac._unwrap([
@@ -1186,6 +1404,27 @@ def test_malformed_tool_call_does_not_crash():
     assert result["tool_calls"][0]["error"] == "malformed_tool_call"
     assert result["text"].startswith("не понял")
     assert "malformed_tool_call" in result["text"]
+
+
+def test_compact_error_payload_stays_valid_json():
+    """A long error must lose diagnostics, never become unparseable JSON."""
+    payload = ac._error(
+        "solar_wind_no_time_overlap",
+        "The observatory and solar-wind windows do not overlap: " + "x" * 700,
+        hint="fetch_solar_wind for the station's UTC date",
+        solar_wind_handle="sw:omni:2024-09-13",
+        observatory_coverage={"start": "2024-09-12T00:00:00Z"},
+        solar_wind_coverage={"start": "2024-09-13T00:00:00Z"},
+        columns={"V": {"source_finite": 1440, "aligned_finite": 0}},
+        overlap=None,
+    )
+    text = ac._compact_tool_message(payload)
+
+    parsed = json.loads(text)
+    assert parsed["error"] == "solar_wind_no_time_overlap"
+    assert parsed["solar_wind_handle"] == "sw:omni:2024-09-13"
+    assert "fetch_solar_wind" in parsed["hint"]
+    assert len(text) <= ac.ERROR_PAYLOAD_MAX_CHARS
 
 
 def test_tool_exception_is_caught(monkeypatch):
@@ -3076,6 +3315,42 @@ def test_solar_wind_handle_errors_name_the_example():
         {"df_descriptor": "raw:irt:2024-09-10", "metric": "burton_coupling"}, store
     )
     assert "sw:omni:" in payload["hint"]
+
+
+def test_missing_solar_wind_handle_lists_live_wind_handles():
+    """The fix is a handle the store really has, not a generic example."""
+    store = _physics_store()
+    handle = _mock_solar_wind(store)
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df_descriptor": "raw:irt:2024-09-10", "metric": "burton_coupling"}, store
+    )
+
+    assert payload["error"] == "missing_solar_wind_handle"
+    assert payload["available_handles"] == [handle]
+    assert handle in payload["hint"]
+
+
+def test_apply_physics_formula_reports_disjoint_wind_windows():
+    """The real Kaggle trap: a wind handle for another day, with V/Bz present."""
+    store = _physics_store()
+    handle = _mock_solar_wind(store, start="2024-09-11 00:00:00")
+    payload, note = ac.HANDLERS["apply_physics_formula"](
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "metric": "ey_coupling",
+            "solar_wind_handle": handle,
+        },
+        store,
+    )
+
+    assert ac.is_error(payload), payload
+    assert payload["error"] == "solar_wind_no_time_overlap"
+    assert payload["solar_wind_handle"] == handle
+    assert payload["observatory_coverage"]["start"].startswith("2024-09-10")
+    assert payload["solar_wind_coverage"]["start"].startswith("2024-09-11")
+    assert "fetch_solar_wind" in payload["hint"]
+    assert "missing" not in payload or payload.get("missing") is None
+    assert "no_time_overlap" in note
 
 
 def test_solar_wind_handle_is_aligned_automatically():

@@ -410,3 +410,90 @@ def test_eej_index_length_mismatch_is_an_error():
     res = pe.calculate_eej_index(eq, [1.0, 2.0])
     assert pe.is_error(res)
     assert res.get('error') == 'length_mismatch'
+
+
+# --- Step 5: alignment failures must name the actual cause -------------------
+
+def test_align_solar_wind_reports_disjoint_windows_with_dates():
+    """A wind frame for another day is 'no overlap', not 'missing Np/V/Bz'."""
+    obs = _observatory(day='2024-09-12 00:00:00', periods=6)
+    sw = make_solar_wind_frame(periods=6, start='2024-09-13 00:00:00')
+    res = pe.align_solar_wind(obs, sw)
+
+    assert pe.is_error(res)
+    assert res['error'] == 'solar_wind_no_time_overlap'
+    assert res['overlap'] is None
+    assert res['observatory_coverage']['start'].startswith('2024-09-12')
+    assert res['solar_wind_coverage']['start'].startswith('2024-09-13')
+    assert '2024-09-12' in res['message'] and '2024-09-13' in res['message']
+    assert 'fetch_solar_wind' in res['hint']
+    # The old misleading payload claimed the columns were missing.
+    assert res.get('missing') is None
+
+
+def test_align_solar_wind_reports_all_nan_columns():
+    """Columns exist but carry no numbers: say that, not 'missing columns'."""
+    obs = _observatory(periods=6)
+    sw = make_solar_wind_frame(periods=6)
+    sw['V'] = float('nan')
+    sw['Bz'] = float('nan')
+    res = pe.align_solar_wind(obs, sw)
+
+    assert pe.is_error(res)
+    assert res['error'] == 'solar_wind_no_finite_values'
+    assert res['empty'] == ['V', 'Bz']
+    assert res['columns']['V']['source_finite'] == 0
+    assert res['columns']['Bz']['source_finite'] == 0
+    assert 'no finite values' in res['message']
+
+
+def test_align_solar_wind_reports_no_aligned_samples_between_station_rows():
+    """Overlap exists, but the single wind stamp falls between station minutes."""
+    obs = _observatory(periods=6)
+    sw = pd.DataFrame({
+        'timestamp': [pd.Timestamp('2024-09-12 00:00:30', tz='UTC')],
+        'V': [400.0],
+        'Bz': [-5.0],
+    })
+    res = pe.align_solar_wind(obs, sw)
+
+    assert pe.is_error(res)
+    assert res['error'] == 'solar_wind_no_aligned_values'
+    assert res['overlap'] is not None
+    assert res['columns']['V']['aligned_finite'] == 0
+    assert res['columns']['V']['source_finite'] == 1
+
+
+def test_coupling_reports_all_nan_wind_as_no_finite_values():
+    obs = _observatory(periods=6)
+    sw = make_solar_wind_frame(periods=6)
+    sw['V'] = float('nan')
+    sw['Bz'] = float('nan')
+    res = pe.calculate_coupling_function(obs, sw)
+
+    assert pe.is_error(res)
+    assert res['error'] == 'solar_wind_no_finite_values'
+    assert res['empty'] == ['V', 'Bz']
+
+
+def test_burton_reports_all_nan_np_as_no_finite_values():
+    obs = _observatory(periods=2)
+    sw = make_solar_wind_frame(V=450.0, Bz=-10.0, periods=2)
+    sw['Np'] = float('nan')
+    res = pe.calculate_burton_coupling(obs, sw)
+
+    assert pe.is_error(res)
+    assert res['error'] == 'solar_wind_no_finite_values'
+    assert res['empty'] == ['Np']
+    assert res.get('missing') is None
+
+
+def test_akasofu_reports_all_nan_bx_as_no_finite_values():
+    obs = _observatory(periods=2)
+    sw = make_solar_wind_frame(V=450.0, Bx=0.0, By=-3.0, Bz=-5.0, periods=2)
+    sw['Bx'] = float('nan')
+    res = pe.calculate_akasofu_epsilon(obs, sw)
+
+    assert pe.is_error(res)
+    assert res['error'] == 'solar_wind_no_finite_values'
+    assert res['empty'] == ['Bx']

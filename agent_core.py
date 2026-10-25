@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import difflib
 import json
 import os
 import re
@@ -46,7 +47,7 @@ import traceback
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
@@ -1318,9 +1319,14 @@ def select_tools_for_task(tool_name: str) -> list[dict[str, Any]]:
 #: never dropped to satisfy this budget -- correctness first, then the cap.
 TOOLS_PER_TASK = 6
 
-#: The frame summary handed back to the model is capped at this many characters,
+#: A frame summary handed back to the model is capped at this many characters,
 #: so a 1440-row frame cannot dump columns/statistics into the context.
 FRAME_SUMMARY_MAX_CHARS = 400
+
+#: Error payloads carry the fix (the actual coverage dates, the allowed argument
+#: names, the live handles). Truncating at the frame-summary cap cut that hint
+#: off exactly when the model needed it, so failures get a roomier hard cap.
+ERROR_PAYLOAD_MAX_CHARS = 1000
 
 #: A payload whose ``fallback_hint`` is the point (the decommissioned ISWA map)
 #: is kept whole up to this cap instead of being truncated mid-instruction. The
@@ -1511,7 +1517,7 @@ _CAPABILITY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         r"график|\bplot\b|\bchart\b|построй|нарисуй|визуализ",
-        ("calculate_derived_components", "plot_components"),
+        ("calculate_derived_components", "plot_components", "get_statistics"),
     ),
 )
 
@@ -1683,11 +1689,14 @@ def prompt_budget(
 #: Fields a tool result must keep when it is too big to send whole: the model
 #: needs the outcome, the handle to reuse, and any number it is meant to quote.
 _MODEL_PAYLOAD_KEYS = (
-    "ok", "error", "message", "hint", "rows", "n_missing", "frame_handle",
-    "available_handles", "handle_aliases", "path", "plot", "metric", "result",
+    "ok", "error", "message", "hint", "solar_wind_handle", "available",
+    "available_handles", "rows", "n_missing", "frame_handle",
+    "handle_aliases", "path", "plot", "metric", "result",
     "station", "date", "computed", "offline", "publication_state", "source",
     "query_type", "count", "summary", "max_kp", "max_scale", "max_scale_time",
-    "map_path", "metadata", "warnings", "fallback_hint",
+    "map_path", "metadata", "warnings", "fallback_hint", "allowed",
+    "required", "missing", "empty", "columns", "reason", "observatory_coverage",
+    "solar_wind_coverage", "overlap", "lag_minutes",
 )
 
 
@@ -1697,6 +1706,21 @@ LOOP_THRESHOLD = 3
 
 #: How many recent failures the Scratchpad keeps for the loop check.
 LOOP_WINDOW = 8
+
+#: Same tool + same error with *different* arguments repeated this many times is
+#: the same dead end as a byte-identical retry. A model that keeps changing a
+#: handle or a date while the error never changes is not making progress.
+SEMANTIC_LOOP_THRESHOLD = 4
+
+
+class FailureLoop(NamedTuple):
+    """Why the loop breaker fired: tool, error code, count and retry shape."""
+
+    tool: str
+    error: str
+    count: int
+    identical_arguments: bool
+
 
 #: Tool-specific "what to fix" advice shown when a loop is detected. A model
 #: that re-sends a broken call needs the concrete argument, not "try again".
@@ -1949,19 +1973,37 @@ class Scratchpad:
         if len(self.failed_calls) > LOOP_WINDOW:
             del self.failed_calls[:-LOOP_WINDOW]
 
-    def repeated_failure(self) -> tuple[str, str] | None:
-        """The identical failing call seen :data:`LOOP_THRESHOLD` times in a row.
+    def clear_failures(self) -> None:
+        """A successful call is progress: the consecutive-failure streak ends."""
+        self.failed_calls.clear()
 
-        Returns ``(tool, error)`` when the last ``LOOP_THRESHOLD`` entries share
-        the same tool, argument fingerprint and error -- the signature of a model
-        stuck re-emitting one broken call -- and ``None`` otherwise.
+    def repeated_failure(self) -> FailureLoop | None:
+        """The failing call the model is stuck on, or ``None``.
+
+        Two shapes count as a loop:
+
+        * the identical call -- same tool, arguments and error -- seen
+          :data:`LOOP_THRESHOLD` times in a row;
+        * the same tool and the same error :data:`SEMANTIC_LOOP_THRESHOLD` times
+          in a row even though the arguments changed. Re-naming a handle or a
+          date while the error stays identical is still one dead end, and the
+          byte-identical check used to miss it.
         """
         if len(self.failed_calls) < LOOP_THRESHOLD:
             return None
         tail = self.failed_calls[-LOOP_THRESHOLD:]
-        if any(entry != tail[0] for entry in tail):
-            return None
-        return tail[0][0], tail[0][2]
+        if all(entry == tail[0] for entry in tail):
+            return FailureLoop(tail[0][0], tail[0][2], LOOP_THRESHOLD, True)
+        if len(self.failed_calls) >= SEMANTIC_LOOP_THRESHOLD:
+            tail = self.failed_calls[-SEMANTIC_LOOP_THRESHOLD:]
+            if len({(entry[0], entry[2]) for entry in tail}) == 1:
+                return FailureLoop(
+                    tail[0][0],
+                    tail[0][2],
+                    SEMANTIC_LOOP_THRESHOLD,
+                    False,
+                )
+        return None
 
     def to_prompt_injection(self) -> str:
         """One compact line injected into the system prompt before every LLM call.
@@ -2003,14 +2045,19 @@ class Scratchpad:
         body = ". ".join(parts) if parts else "No state yet"
         loop = self.repeated_failure()
         if loop:
-            tool, error = loop
-            fix = _LOOP_FIX_HINT.get(tool, _LOOP_FIX_HINT_DEFAULT)
+            fix = _LOOP_FIX_HINT.get(loop.tool, _LOOP_FIX_HINT_DEFAULT)
+            if loop.identical_arguments:
+                shape = "с теми же аргументами и той же ошибкой"
+            else:
+                shape = (
+                    "с разными аргументами, но одной и той же ошибкой"
+                )
             return (
                 f"[SCRATCHPAD] {body}. "
-                f"[CRITICAL LOOP DETECTED]: Вы вызвали '{tool}' {LOOP_THRESHOLD} раза "
-                f"подряд с теми же аргументами и той же ошибкой ({error}). Остановитесь. "
+                f"[CRITICAL LOOP DETECTED]: Вы вызвали '{loop.tool}' {loop.count} раза "
+                f"подряд {shape} ({loop.error}). Остановитесь. "
                 f"Прочитайте описание инструмента: {fix} "
-                f"NEXT STEP: change the arguments before calling {tool} again."
+                f"NEXT STEP: change the arguments before calling {loop.tool} again."
             )
         return f"[SCRATCHPAD] {body}. NEXT STEP: {self._next_step()}"
 
@@ -2018,10 +2065,16 @@ class Scratchpad:
         """A short, state-derived hint about what to do next."""
         loop = self.repeated_failure()
         if loop:
+            if loop.identical_arguments:
+                return (
+                    f"STOP calling {loop.tool} with the same arguments -- the identical "
+                    "call has failed repeatedly. Fix the arguments from its schema, "
+                    "then call it once."
+                )
             return (
-                f"STOP calling {loop[0]} with the same arguments -- the identical "
-                "call has failed repeatedly. Fix the arguments from its schema, "
-                "then call it once."
+                f"STOP retrying {loop.tool}: {loop.count} different calls failed with "
+                f"the same error '{loop.error}'. Change the approach, not just the "
+                "handle or date."
             )
         if self.errors:
             if self.current_handle:
@@ -2161,17 +2214,62 @@ _PHYSICS_TOOL_TO_METRIC: dict[str, str] = {
 }
 
 
-def _self_correction_hint(tool_name: Any) -> str:
+#: Hallucinated loader/plot names -> the real registered tool. Kept next to the
+#: physics map because both are self-correction data, not prompt text.
+_TOOL_NAME_ALIASES: dict[str, str] = {
+    "fetch_omni": "fetch_solar_wind",
+    "fetch_omni_data": "fetch_solar_wind",
+    "download_solar_wind": "fetch_solar_wind",
+    "get_solar_wind": "fetch_solar_wind",
+    "fetch_dst": "fetch_geomagnetic_indices",
+    "get_geomagnetic_indices": "fetch_geomagnetic_indices",
+    "fetch_indices": "fetch_geomagnetic_indices",
+    "fetch_supermag": "fetch_supermag_data",
+    "get_observatory_data": "fetch_observatory_data",
+    "download_observatory_data": "fetch_observatory_data",
+    "plot_data": "plot_components",
+}
+
+
+def _self_correction_hint(
+    tool_name: Any, available: Sequence[str] = ()
+) -> str:
     """The [SELF-CORRECTION] line the Scratchpad shows after a bad tool name.
 
-    Kept to one short line: a 7B model scans rather than reads, and a long hint
-    competes with the Scratchpad's own NEXT STEP line for its attention. A
-    physics-looking name is answered with the exact ``metric`` to pass next.
+    Kept to one short line: a small model scans rather than reads, and a long
+    hint competes with the Scratchpad's own NEXT STEP line for its attention. A
+    physics-looking name is answered with the exact ``metric`` to pass next; a
+    near-miss of an offered tool is answered with that tool. ``available`` is the
+    schema set actually offered in this task, so the hint cannot recommend a tool
+    the model was not given.
     """
     name = str(tool_name or "").strip()
     metric = _PHYSICS_TOOL_TO_METRIC.get(name) or _PHYSICS_TOOL_TO_METRIC.get(name.lower())
     if metric:
         return f"[SELF-CORRECTION]: Используй apply_physics_formula с metric='{metric}'."
+
+    offered = [str(item) for item in available if item]
+    real = _TOOL_NAME_ALIASES.get(name.lower())
+    if real and (not offered or real in offered):
+        return f"[SELF-CORRECTION]: '{name}' не существует. Используй {real}."
+
+    close = difflib.get_close_matches(
+        name.lower(), [item.lower() for item in offered], n=1, cutoff=0.75
+    )
+    if close:
+        match = next(item for item in offered if item.lower() == close[0])
+        return (
+            f"[SELF-CORRECTION]: '{name}' не существует. "
+            f"Ближайший доступный инструмент: {match}."
+        )
+    if offered:
+        shown = ", ".join(offered[:6])
+        if len(offered) > 6:
+            shown += ", ..."
+        return (
+            f"[SELF-CORRECTION]: Инструмент '{name}' не существует. "
+            f"Доступные сейчас: {shown}."
+        )
     return f"[SELF-CORRECTION]: Инструмент '{name}' не существует. Выбери доступный."
 
 
@@ -2194,6 +2292,44 @@ def _compact_tool_message(payload: Any, max_chars: int = FRAME_SUMMARY_MAX_CHARS
     if isinstance(payload, dict) and payload.get("fallback_hint"):
         limit = max(max_chars, FALLBACK_HINT_MAX_CHARS)
         return text if len(text) <= limit else text[:limit]
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        limit = max(max_chars, ERROR_PAYLOAD_MAX_CHARS)
+        if len(text) <= limit:
+            return text
+        compact = {k: payload[k] for k in _MODEL_PAYLOAD_KEYS if k in payload}
+        # Drop diagnostics from the least to the most actionable, never slice
+        # the JSON: a truncated payload is not parseable and the model then
+        # reports a parse failure instead of the real one.
+        for key in (
+            "lag_minutes",
+            "overlap",
+            "solar_wind_coverage",
+            "observatory_coverage",
+            "columns",
+            "empty",
+            "reason",
+            "required",
+            "allowed",
+            "missing",
+            "available",
+        ):
+            if len(_dumps(compact)) <= limit:
+                break
+            compact.pop(key, None)
+        text = _dumps(compact)
+        if len(text) <= limit:
+            return text
+        core_keys = ("ok", "error", "message", "hint", "solar_wind_handle", "available")
+        core = {key: payload[key] for key in core_keys if key in payload}
+        core_text = _dumps(core)
+        if len(core_text) <= limit:
+            return core_text
+        # Last resort: shorten the prose value, keep the JSON valid.
+        message = str(core.get("message") or "")
+        overflow = len(core_text) - limit
+        keep = max(40, len(message) - overflow - 20)
+        core["message"] = message[:keep].rstrip() + "…"
+        return _dumps(core)
     if len(text) <= max_chars or not isinstance(payload, dict):
         return text if len(text) <= max_chars else text[:max_chars]
 
@@ -5750,15 +5886,26 @@ def _resolve_solar_wind_frame(
     """
     handle = args.get("solar_wind_handle")
     if not (isinstance(handle, str) and handle.strip()):
+        available_sw = [
+            str(name) for name in store.names() if str(name).startswith("sw:")
+        ]
+        hint = (
+            "Pass 'solar_wind_handle' with the handle of solar wind data "
+            "(e.g., 'sw:omni:2024-09-12')."
+        )
+        if available_sw:
+            hint = (
+                "Pass 'solar_wind_handle' with one of the live solar-wind handles: "
+                + ", ".join(available_sw[:4])
+                + "."
+            )
         return None, _error(
             "missing_solar_wind_handle",
             "This metric needs solar-wind data, but 'solar_wind_handle' was not passed.",
             missing=["solar_wind_handle"],
             required=["solar_wind_handle"],
-            hint=(
-                "Pass 'solar_wind_handle' argument with the handle of solar wind data "
-                "(e.g., 'sw:omni:2024-09-12')."
-            ),
+            available_handles=available_sw,
+            hint=hint,
         )
 
     sw_frame, sw_err = store.resolve(handle)
@@ -5781,6 +5928,11 @@ def _resolve_solar_wind_frame(
 
     aligned = pengine.align_solar_wind(frame, sw_frame)
     if pengine.is_error(aligned):
+        # Name the handle that produced the alignment failure. The coverage
+        # dates are in the payload; without the handle the model knows the date
+        # is wrong but not which of several live wind frames it used.
+        aligned = dict(aligned)
+        aligned.setdefault("solar_wind_handle", handle)
         return None, aligned
     return aligned, None
 
@@ -6706,6 +6858,12 @@ def run_agent(
     else:
         schemas = select_tools_for_query(user_query)
         selection = explain_tool_selection(user_query)
+    offered_names = {
+        str(schema.get("function", {}).get("name") or "")
+        for schema in schemas
+        if isinstance(schema, dict)
+    }
+    offered_names.discard("")
     if verbose and selection is not None:
         print(
             "[TOOL SELECTION] "
@@ -6893,13 +7051,47 @@ def run_agent(
                 )
                 entry["error"] = payload["error"]
             elif name not in HANDLERS:
+                if offered_names:
+                    hint = _self_correction_hint(name, sorted(offered_names))
+                    available = sorted(offered_names)
+                else:
+                    hint = (
+                        "[SELF-CORRECTION]: No tools are offered for this task; "
+                        "answer in text without calling a tool."
+                    )
+                    available = []
                 payload = _error(
                     "unknown_tool",
                     f"No tool named {name!r}.",
-                    available=sorted(TOOLS_BY_NAME),
+                    available=available,
                     # Turns "unknown_tool" into an actionable next call: a
                     # hallucinated physics name is answered with the exact metric.
-                    hint=_self_correction_hint(name),
+                    hint=hint,
+                )
+                entry["error"] = payload["error"]
+            elif name not in offered_names:
+                # A real handler that was not in the schema list this task sent.
+                # Executing it would silently bypass the planner/router and spend
+                # a call on work the task did not ask for; refuse and name the
+                # tools the model may actually use.
+                if offered_names:
+                    shown = ", ".join(sorted(offered_names)[:8])
+                    if len(offered_names) > 8:
+                        shown += ", ..."
+                    hint = (
+                        f"Tool {name!r} exists but was not offered for this task. "
+                        f"Use one of the offered tools: {shown}."
+                    )
+                else:
+                    hint = (
+                        "No tools were offered for this task; answer in text "
+                        "without calling a tool."
+                    )
+                payload = _error(
+                    "tool_not_available",
+                    f"Tool {name!r} exists but was not offered for this task.",
+                    available=sorted(offered_names),
+                    hint=hint,
                 )
                 entry["error"] = payload["error"]
             else:
@@ -6947,7 +7139,7 @@ def run_agent(
             # Surface the diagnostic fields, not just the code: without these a
             # malformed call in Colab reports "malformed_tool_call" and nothing
             # else, which is what sent the previous two fixes down blind paths.
-            for key in ("message", "received", "reason", "hint"):
+            for key in ("message", "received", "reason", "hint", "available"):
                 if isinstance(payload, dict) and payload.get(key) is not None:
                     entry[key] = payload[key]
             # The project a project tool acted on. Without this the log says only
@@ -6979,6 +7171,10 @@ def run_agent(
             # Track completed actions and any failure so the next round sees the
             # progress and can self-correct instead of repeating a dead handle.
             if entry["ok"]:
+                # Progress resets the consecutive-failure streak. Without this,
+                # a failure before a successful call and another after it looked
+                # adjacent and tripped the loop breaker on unrelated calls.
+                scratchpad.clear_failures()
                 step = _SCRATCHPAD_STEP_BY_TOOL.get(name)
                 if step:
                     scratchpad.add_completed_step(step)
