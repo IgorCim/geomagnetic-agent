@@ -3166,10 +3166,14 @@ def _normalise_frame_alias(
         legacy is None or (isinstance(legacy, str) and not legacy.strip())
     )
 
-    if has_canonical and has_legacy and str(canonical).strip() != str(legacy).strip():
+    # Handles are case-insensitive in FrameStore; two spellings of the same slot
+    # are the same frame, so only a real difference between the days is a conflict.
+    same_handle = str(canonical).strip().lower() == str(legacy).strip().lower()
+    if has_canonical and has_legacy and not same_handle:
         return args, _error(
             "conflicting_frame_arguments",
             "Both 'df' and 'df_descriptor' were provided with different handles.",
+            tool=tool,
             received={"df": legacy, "df_descriptor": canonical},
             hint=(
                 "Pass only 'df_descriptor' with the handle you mean; 'df' is a "

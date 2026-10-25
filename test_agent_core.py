@@ -3371,11 +3371,25 @@ def test_conflicting_legacy_and_canonical_handles_are_refused():
     )
     assert ac.is_error(payload)
     assert payload["error"] == "conflicting_frame_arguments"
+    assert payload["tool"] == "get_statistics"
     assert payload["received"] == {
         "df": "raw:irt:2024-09-10",
         "df_descriptor": "raw:irt:2024-09-11",
     }
     assert "conflicting frame arguments" in note
+
+
+def test_case_only_handle_differences_are_the_same_frame():
+    """FrameStore lowercases handles, so the alias check must agree with it."""
+    payload, _ = ac.HANDLERS["get_statistics"](
+        {
+            "df": "RAW:IRT:2024-09-10",
+            "df_descriptor": "raw:irt:2024-09-10",
+            "components": ["X"],
+        },
+        _physics_store(),
+    )
+    assert not ac.is_error(payload), payload
 
 
 def test_agreeing_legacy_and_canonical_handles_are_accepted():
