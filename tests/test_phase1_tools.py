@@ -323,4 +323,4 @@ def test_the_formula_tool_description_publishes_the_grammar():
     description = schema["function"]["description"]
     assert "sqrt" in description
     assert "never executed" in description
-    assert schema["function"]["parameters"]["required"] == ["df", "formula"]
+    assert schema["function"]["parameters"]["required"] == ["df_descriptor", "formula"]

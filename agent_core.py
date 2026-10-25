@@ -44,6 +44,7 @@ import re
 import sys
 import traceback
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
@@ -278,15 +279,6 @@ _FRAME_ARG = {
     ),
 }
 
-#: The math tools predate ``df_descriptor``: they take ``df``. Both spellings
-#: are accepted so a model that just used ``apply_physics_formula`` does not
-#: bounce off a schema mismatch and loop.
-_FRAME_ALIAS_NOTE = (
-    " Note: This tool accepts both 'df' and 'df_descriptor' as arguments for "
-    "backward compatibility."
-)
-
-
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -508,23 +500,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Compute the horizontal field H, declination D and inclination I from "
                 "the Cartesian components X/Y/Z. Use this whenever H is needed."
-                + _FRAME_ALIAS_NOTE
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df": _FRAME_ARG,
-                    "df_descriptor": {
-                        "type": "string",
-                        "description": "Alias of 'df': the same handle from 'frame_handle'.",
-                    },
+                    "df_descriptor": _FRAME_ARG,
                     "components": {
                         "type": "array",
                         "items": {"type": "string", "enum": ["H", "D", "I"]},
                         "description": "Subset to compute. Default all three.",
                     },
                 },
-                "required": [],
+                "required": ["df_descriptor"],
             },
         },
     },
@@ -535,16 +522,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Descriptive statistics (min, max, mean, median, std, count) for one "
                 "or more components. Returns exact numbers you may quote directly."
-                + _FRAME_ALIAS_NOTE
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df": _FRAME_ARG,
-                    "df_descriptor": {
-                        "type": "string",
-                        "description": "Alias of 'df': the same handle from 'frame_handle'.",
-                    },
+                    "df_descriptor": _FRAME_ARG,
                     "components": {
                         "type": "array",
                         "items": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
@@ -552,7 +534,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     "digits": {"type": "integer", "description": "Decimal places. Default 2."},
                 },
-                "required": [],
+                "required": ["df_descriptor"],
             },
         },
     },
@@ -563,23 +545,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Flag samples that deviate from the series mean by more than N standard "
                 "deviations. Use for outlier and disturbance screening."
-                + _FRAME_ALIAS_NOTE
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df": _FRAME_ARG,
-                    "df_descriptor": {
-                        "type": "string",
-                        "description": "Alias of 'df': the same handle from 'frame_handle'.",
-                    },
+                    "df_descriptor": _FRAME_ARG,
                     "component": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
                     "sigma_threshold": {
                         "type": "number",
                         "description": "Threshold in sigmas. Default 3.0.",
                     },
                 },
-                "required": [],
+                "required": ["df_descriptor"],
             },
         },
     },
@@ -592,16 +569,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "(max-min variation), 'dH_dt' (rate of change in nT/min), or 'anomaly' "
                 "(value minus baseline_value from calculate_baseline). Returns a new "
                 "derived df_descriptor holding the series, plus the scalar."
-                + _FRAME_ALIAS_NOTE
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df": _FRAME_ARG,
-                    "df_descriptor": {
-                        "type": "string",
-                        "description": "Alias of 'df': the same handle from 'frame_handle'.",
-                    },
+                    "df_descriptor": _FRAME_ARG,
                     "metric": {
                         "type": "string",
                         "enum": ["delta", "anomaly", "dH_dt"],
@@ -631,7 +603,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         ),
                     },
                 },
-                "required": ["metric"],
+                "required": ["df_descriptor", "metric"],
             },
         },
     },
@@ -645,16 +617,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "window of the day (00:00-04:00 UTC by default), when the ring current is "
                 "minimal. Returns the baseline value; pass it to calculate_derived_math "
                 "with metric='anomaly'."
-                + _FRAME_ALIAS_NOTE
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df": _FRAME_ARG,
-                    "df_descriptor": {
-                        "type": "string",
-                        "description": "Alias of 'df': the same handle from 'frame_handle'.",
-                    },
+                    "df_descriptor": _FRAME_ARG,
                     "component": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
                     "mode": {
                         "type": "string",
@@ -671,7 +638,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": "Night window as [start_hour, end_hour] UTC, default [0, 4].",
                     },
                 },
-                "required": [],
+                "required": ["df_descriptor"],
             },
         },
     },
@@ -691,7 +658,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df": _FRAME_ARG,
+                    "df_descriptor": _FRAME_ARG,
                     "formula": {
                         "type": "string",
                         "description": (
@@ -700,7 +667,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         ),
                     },
                 },
-                "required": ["df", "formula"],
+                "required": ["df_descriptor", "formula"],
             },
         },
     },
@@ -718,7 +685,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "df": _FRAME_ARG,
+                    "df_descriptor": _FRAME_ARG,
                     "components": {
                         "type": "array",
                         "items": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I", "dst_proxy", "Dst", "Kp"]},
@@ -731,7 +698,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "title": {"type": "string", "description": "Chart title."},
                     "filename": {"type": "string", "description": "Output file name, .html."},
                 },
-                "required": ["df", "components"],
+                "required": ["df_descriptor", "components"],
             },
         },
     },
@@ -3175,6 +3142,64 @@ def _offline_frame() -> pd.DataFrame:
 Handler = Callable[[dict[str, Any], FrameStore], tuple[Any, str]]
 
 
+def _normalise_frame_alias(
+    tool: str, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Rewrite the legacy ``df`` argument to the canonical ``df_descriptor``.
+
+    No schema advertises ``df`` any more: the model must learn the one name the
+    registry and the prompts use. The old spelling is still honoured at the
+    handler boundary because a model mid-conversation may echo a call shape it
+    saw earlier, and a schema mismatch there would cost a whole round for a
+    rename that is unambiguous. If both names are present and disagree, prefer
+    an explicit error over silently choosing one day's frame over another.
+    """
+    if not isinstance(args, dict) or "df" not in args:
+        return args, None
+
+    canonical = args.get("df_descriptor")
+    legacy = args["df"]
+    has_canonical = not (
+        canonical is None or (isinstance(canonical, str) and not canonical.strip())
+    )
+    has_legacy = not (
+        legacy is None or (isinstance(legacy, str) and not legacy.strip())
+    )
+
+    if has_canonical and has_legacy and str(canonical).strip() != str(legacy).strip():
+        return args, _error(
+            "conflicting_frame_arguments",
+            "Both 'df' and 'df_descriptor' were provided with different handles.",
+            received={"df": legacy, "df_descriptor": canonical},
+            hint=(
+                "Pass only 'df_descriptor' with the handle you mean; 'df' is a "
+                "legacy alias and must not disagree with it."
+            ),
+        )
+
+    normalised = dict(args)
+    normalised.pop("df", None)
+    if not has_canonical and has_legacy:
+        normalised["df_descriptor"] = legacy
+    return normalised, None
+
+
+def _accepts_legacy_df(tool: str) -> Callable[[Handler], Handler]:
+    """Make one frame handler accept the retired ``df`` spelling at its edge."""
+
+    def decorate(handler: Handler) -> Handler:
+        @wraps(handler)
+        def wrapper(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
+            canonical, error = _normalise_frame_alias(tool, args)
+            if error is not None:
+                return error, f"{tool} refused: conflicting frame arguments"
+            return handler(canonical, store)
+
+        return wrapper
+
+    return decorate
+
+
 def _first_present(df: pd.DataFrame, store: FrameStore, requested: str) -> str:
     """Pick the richest handle that actually has the requested column.
 
@@ -3900,30 +3925,31 @@ def _handle_fetch_supermag(args: dict[str, Any], store: FrameStore) -> tuple[Any
     return summary, f"SuperMAG {kind}: {len(result)} строк ({start}..{end}) -> {slot!r}."
 
 
-def _legacy_frame_handle(tool: str, args: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
-    """Resolve the frame argument of a pre-``df_descriptor`` tool.
+def _frame_handle(tool: str, args: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    """Resolve the canonical ``df_descriptor`` argument of a frame tool.
 
-    The physics tool speaks ``df_descriptor``; the math tools were written
-    against ``df``. A model that has just used one reaches for the other, so
-    both spellings are accepted here. ``df`` wins when a caller supplies both,
-    which keeps the old call sites byte-for-byte compatible.
+    ``df`` is no longer part of any schema: it is accepted only as a legacy
+    spelling at the handler boundary, where :func:`_normalise_frame_alias`
+    rewrites it before the handler sees the arguments. Keeping the canonical
+    read here means a new handler cannot silently keep the old name.
     """
-    handle = args.get("df") or args.get("df_descriptor")
-    if not handle:
+    handle = args.get("df_descriptor")
+    if not handle or (isinstance(handle, str) and not handle.strip()):
         return "", _error(
             "missing_frame",
             f"{tool} needs a frame handle.",
-            missing=["df"],
+            missing=["df_descriptor"],
             hint=(
-                "Pass 'df' (or the equivalent 'df_descriptor') with a handle from a "
-                "previous tool's 'frame_handle', e.g. 'raw:irt:2024-09-12'."
+                "Pass 'df_descriptor' with a handle from a previous tool's "
+                "'frame_handle', e.g. 'raw:irt:2024-09-12'."
             ),
         )
     return str(handle), None
 
 
+@_accepts_legacy_df("calculate_derived_components")
 def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
-    handle, missing = _legacy_frame_handle("calculate_derived_components", args)
+    handle, missing = _frame_handle("calculate_derived_components", args)
     if missing:
         return missing, "calculate_derived_components failed: missing_frame"
     frame, err = store.resolve(handle)
@@ -3943,8 +3969,9 @@ def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     return summary, f"Computed {', '.join(summary['computed'])} -> handle {slot!r}."
 
 
+@_accepts_legacy_df("get_statistics")
 def _handle_stats(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
-    handle, missing = _legacy_frame_handle("get_statistics", args)
+    handle, missing = _frame_handle("get_statistics", args)
     if missing:
         return missing, "get_statistics failed: missing_frame"
     frame, err = store.resolve(handle)
@@ -3963,8 +3990,9 @@ def _handle_stats(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     return summary, f"Statistics for {', '.join(result)}."
 
 
+@_accepts_legacy_df("detect_anomalies")
 def _handle_anomalies(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
-    handle, missing = _legacy_frame_handle("detect_anomalies", args)
+    handle, missing = _frame_handle("detect_anomalies", args)
     if missing:
         return missing, "detect_anomalies failed: missing_frame"
     frame, err = store.resolve(handle)
@@ -3988,6 +4016,7 @@ def _handle_anomalies(args: dict[str, Any], store: FrameStore) -> tuple[Any, str
     return summary, f"Flagged {len(result)} samples of {component} -> handle {slot!r}."
 
 
+@_accepts_legacy_df("calculate_derived_math")
 def _handle_derived_math(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Measure a component's behaviour: variation, rate of change, or anomaly.
 
@@ -3996,7 +4025,7 @@ def _handle_derived_math(args: dict[str, Any], store: FrameStore) -> tuple[Any, 
     returned alongside the handle because the number is what the model is
     actually asked for -- a handle alone would force an extra round trip.
     """
-    handle, missing = _legacy_frame_handle("calculate_derived_math", args)
+    handle, missing = _frame_handle("calculate_derived_math", args)
     if missing:
         return missing, "calculate_derived_math failed: missing_frame"
     frame, err = store.resolve(handle)
@@ -4065,7 +4094,7 @@ def _handle_derived_math(args: dict[str, Any], store: FrameStore) -> tuple[Any, 
         series = geomath.calculate_anomaly(frame, component, float(baseline))
         if geomath.is_error(series):
             return series, f"calculate_derived_math failed: {series.get('error')}"
-        slot = store.derive_name(args.get("df") or "raw", "anomaly")
+        slot = store.derive_name(handle, "anomaly")
         frame_out = frame.copy()
         # Upper case to match the X/Y/Z/H/D/I convention: geomag_plotter
         # upper-cases the requested component names before matching columns, so a
@@ -4122,9 +4151,10 @@ def _handle_derived_math(args: dict[str, Any], store: FrameStore) -> tuple[Any, 
     ), f"calculate_derived_math refused metric {metric!r}."
 
 
+@_accepts_legacy_df("calculate_baseline")
 def _handle_baseline(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Establish the quiet reference level for a component."""
-    handle, missing = _legacy_frame_handle("calculate_baseline", args)
+    handle, missing = _frame_handle("calculate_baseline", args)
     if missing:
         return missing, "calculate_baseline failed: missing_frame"
     frame, err = store.resolve(handle)
@@ -4191,6 +4221,7 @@ def _handle_baseline(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]
     )
 
 
+@_accepts_legacy_df("evaluate_custom_formula")
 def _handle_custom_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Evaluate a user-supplied formula and store the result as a new column.
 
@@ -4198,7 +4229,10 @@ def _handle_custom_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any
     formula is reported back with the accepted grammar so the model can correct
     it on the next round instead of guessing.
     """
-    frame, err = store.resolve(args.get("df"))
+    handle, missing = _frame_handle("evaluate_custom_formula", args)
+    if missing:
+        return missing, "evaluate_custom_formula failed: missing_frame"
+    frame, err = store.resolve(handle)
     if err:
         return err, f"evaluate_custom_formula failed: {err['error']}"
 
@@ -4221,7 +4255,7 @@ def _handle_custom_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any
             f"evaluate_custom_formula refused the formula: {series.get('message')}"
         )
 
-    slot = store.derive_name(args.get("df") or "raw", "formula")
+    slot = store.derive_name(handle, "formula")
     frame_out = frame.copy()
     # Upper case for the same reason as ANOMALY: the plotter upper-cases the
     # requested names, so 'FORMULA' is reachable from plot_components while a
@@ -4267,11 +4301,13 @@ def _file_into_project(
         return []
 
 
+@_accepts_legacy_df("plot_components")
 def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     components = args.get("components") or ["H"]
     notes: list[str] = []
-    frame, err = _resolve_plottable(store, args.get("df"), components, notes)
-    if frame is None and not _is_derived_handle(args.get("df")):
+    descriptor = args.get("df_descriptor")
+    frame, err = _resolve_plottable(store, descriptor, components, notes)
+    if frame is None and not _is_derived_handle(descriptor):
         # No handle, or a bare family alias: search for the richest slot that
         # actually carries the requested column. An explicit derived handle is
         # excluded on purpose -- see _resolve_plottable.
@@ -4287,7 +4323,7 @@ def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[An
     )
     if plotter.is_error(result):
         return result, f"plot_components failed: {result.get('error')}"
-    filed = _file_into_project(store, result, [args.get("df")], "components")
+    filed = _file_into_project(store, result, [descriptor], "components")
     payload = {"ok": True, "path": result, "components": components, "rows": int(len(frame))}
     if filed:
         payload["filed_into_project"] = filed
@@ -4592,24 +4628,25 @@ def _matrix_task_args(
     if tool == "fetch_observatory_data":
         return {"station_code": station, "start_date": event, "end_date": event}
     if tool == "calculate_derived_components":
-        return {"df": raw_slot, "components": ["H", "D", "I"]}
+        return {"df_descriptor": raw_slot, "components": ["H", "D", "I"]}
     if tool in ("plot_components", "plot_overlay"):
         frame = store.get(derived_slot)
-        df = derived_slot if frame is not None else raw_slot
+        descriptor = derived_slot if frame is not None else raw_slot
         return {
-            "df": df,
+            "df_descriptor": descriptor,
             "components": ["H", "D", "I"],
             "filename": f"{station}_{event}_components.html",
         }
     if tool == "get_statistics":
-        return {"df": raw_slot, "components": ["X", "Y", "Z", "F"]}
+        return {"df_descriptor": raw_slot, "components": ["X", "Y", "Z", "F"]}
     if tool == "detect_anomalies":
         frame = store.get(derived_slot)
-        return {"df": derived_slot if frame is not None else raw_slot}
+        return {"df_descriptor": derived_slot if frame is not None else raw_slot}
+    # These two handlers read station_code + timestamp; they never take a frame.
     if tool == "calculate_mlt":
-        return {"station_code": station, "df": raw_slot}
+        return {"station_code": station}
     if tool == "calculate_local_time":
-        return {"station_code": station, "df": raw_slot}
+        return {"station_code": station}
     return {}
 
 
@@ -4646,7 +4683,8 @@ def _ensure_matrix_derived(
     if not ok:
         return False, note
     payload, _ = _handle_derive(
-        {"df": f"raw:{station.lower()}:{event}", "components": ["H", "D", "I"]}, store
+        {"df_descriptor": f"raw:{station.lower()}:{event}", "components": ["H", "D", "I"]},
+        store,
     )
     if is_error(payload):
         return False, (
@@ -5679,6 +5717,7 @@ def _resolve_reference_frame(
     return ref_frame, None
 
 
+@_accepts_legacy_df("apply_physics_formula")
 def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     """Run one physical formula and store the enriched frame as a derived slot.
 

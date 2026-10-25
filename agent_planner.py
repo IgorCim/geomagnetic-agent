@@ -130,8 +130,9 @@ class LLMPlanner:
         'BRW за 2024-10-10", "tool_name": "fetch_observatory_data", "tool_args": '
         '{"station_code": "BRW", "start_date": "2024-10-10", "end_date": "2024-10-10"}}, '
         '{"id": "step_002", "description": "Вычисли компоненты H, D, I для BRW", '
-        '"tool_name": "calculate_derived_components", "tool_args": {"df": '
-        '"raw:brw:2024-10-10", "components": ["H", "D", "I"]}}, ...]}\n\n'
+        '"tool_name": "calculate_derived_components", "tool_args": '
+        '{"df_descriptor": "raw:brw:2024-10-10", "components": ["H", "D", "I"]}}, '
+        '...]}\n\n'
         "ПРАВИЛА:\n"
         "1. Каждая подзадача — ОДИН вызов инструмента.\n"
         "2. Порядок важен: сначала fetch, потом derive, потом plot.\n"

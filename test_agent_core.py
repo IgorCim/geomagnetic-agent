@@ -2306,15 +2306,16 @@ def _tiny_plot_components(args, store):
     exercise the matrix wiring -- write a chart, file it into the project days,
     land it in the export -- on a few hundred bytes instead.
     """
+    descriptor = args.get("df_descriptor")
     frame, err = ac._resolve_plottable(
-        store, args.get("df"), args.get("components") or ["H"], []
+        store, descriptor, args.get("components") or ["H"], []
     )
     if err:
         return err, "plot_components failed: " + err["error"]
     out = plotter.DEFAULT_OUTPUT_DIR / (args.get("filename") or "plot.html")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("<html>tiny plot</html>", encoding="utf-8")
-    filed = ac._file_into_project(store, str(out), [args.get("df")], "components")
+    filed = ac._file_into_project(store, str(out), [descriptor], "components")
     payload = {
         "ok": True,
         "path": str(out),
@@ -3291,7 +3292,7 @@ def test_plot_space_weather_comparison_valid_args_pass_the_gate():
 
 
 # --------------------------------------------------------------------------- #
-# df_descriptor alias on the legacy math tools
+# df_descriptor is canonical; df is a boundary-only legacy alias
 # --------------------------------------------------------------------------- #
 _LEGACY_FRAME_CALLS = {
     "calculate_derived_components": {},
@@ -3302,11 +3303,8 @@ _LEGACY_FRAME_CALLS = {
 }
 
 
-def test_legacy_math_tools_accept_df_descriptor():
-    """A model that just used apply_physics_formula reaches for df_descriptor.
-
-    Before the alias this bounced as unknown_frame and the loop never closed.
-    """
+def test_frame_tools_accept_the_canonical_df_descriptor():
+    """Every frame tool speaks the same argument name as apply_physics_formula."""
     for tool, extra in _LEGACY_FRAME_CALLS.items():
         store = _physics_store()
         args = {"df_descriptor": "raw:irt:2024-09-10", **extra}
@@ -3315,7 +3313,8 @@ def test_legacy_math_tools_accept_df_descriptor():
         assert not isinstance(payload, dict) or payload, (tool, payload)
 
 
-def test_legacy_math_tools_still_accept_df():
+def test_boundary_still_accepts_the_retired_df_spelling():
+    """A model mid-conversation may echo the old call shape; it must not loop."""
     for tool, extra in _LEGACY_FRAME_CALLS.items():
         store = _physics_store()
         args = {"df": "raw:irt:2024-09-10", **extra}
@@ -3338,24 +3337,77 @@ def test_legacy_alias_and_original_return_the_same_numbers():
                 assert old.get(key) == new.get(key), (tool, key)
 
 
-def test_legacy_math_tools_refuse_a_call_with_no_frame():
-    """Neither spelling -> missing_frame, not a confusing unknown_frame(None)."""
+def test_frame_tools_refuse_a_call_with_no_frame():
+    """No canonical argument -> missing_frame, not a confusing unknown_frame(None)."""
     for tool, extra in _LEGACY_FRAME_CALLS.items():
         payload, _ = ac.HANDLERS[tool](dict(extra), _physics_store())
         assert ac.is_error(payload), tool
         assert payload["error"] == "missing_frame", (tool, payload)
-        assert payload["missing"] == ["df"]
+        assert payload["missing"] == ["df_descriptor"]
+        assert "df_descriptor" in payload["hint"]
         assert "raw:irt:2024-09-12" in payload["hint"]
 
 
-def test_legacy_tool_schemas_advertise_the_alias():
+def test_frame_tools_advertise_only_the_canonical_name():
+    """The schema is the prompt: it must not offer two names for one handle."""
     for tool in _LEGACY_FRAME_CALLS:
         schema = next(t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == tool)
-        props = schema["function"]["parameters"]["properties"]
-        assert "df_descriptor" in props, tool
-        assert "df" in props, tool
-        note = schema["function"]["description"]
-        assert "df_descriptor" in note and "backward compatibility" in note, tool
+        params = schema["function"]["parameters"]
+        assert "df_descriptor" in params["properties"], tool
+        assert "df" not in params["properties"], tool
+        assert "df_descriptor" in params["required"], tool
+        assert "both 'df' and 'df_descriptor'" not in schema["function"]["description"], tool
+
+
+def test_conflicting_legacy_and_canonical_handles_are_refused():
+    """Never choose one day's frame silently when the two names disagree."""
+    payload, note = ac.HANDLERS["get_statistics"](
+        {
+            "df": "raw:irt:2024-09-10",
+            "df_descriptor": "raw:irt:2024-09-11",
+            "components": ["X"],
+        },
+        _physics_store(),
+    )
+    assert ac.is_error(payload)
+    assert payload["error"] == "conflicting_frame_arguments"
+    assert payload["received"] == {
+        "df": "raw:irt:2024-09-10",
+        "df_descriptor": "raw:irt:2024-09-11",
+    }
+    assert "conflicting frame arguments" in note
+
+
+def test_agreeing_legacy_and_canonical_handles_are_accepted():
+    """A duplicate spelling of the same frame is harmless, not a conflict."""
+    for tool, extra in _LEGACY_FRAME_CALLS.items():
+        payload, _ = ac.HANDLERS[tool](
+            {
+                "df": "raw:irt:2024-09-10",
+                "df_descriptor": "raw:irt:2024-09-10",
+                **extra,
+            },
+            _physics_store(),
+        )
+        assert not ac.is_error(payload), (tool, payload)
+
+
+def test_apply_physics_formula_accepts_legacy_df_at_the_boundary():
+    """The alias is a boundary rule, so it must not bypass the strict gate."""
+    payload, _ = ac.HANDLERS["apply_physics_formula"](
+        {"df": "raw:irt:2024-09-10", "metric": "sq_baseline"},
+        _physics_store(),
+    )
+    assert not ac.is_error(payload), payload
+
+
+def test_plot_and_formula_schemas_use_the_canonical_name():
+    for tool in ("plot_components", "evaluate_custom_formula"):
+        schema = next(t for t in ac.TOOL_SCHEMAS if t["function"]["name"] == tool)
+        params = schema["function"]["parameters"]
+        assert "df_descriptor" in params["properties"], tool
+        assert "df" not in params["properties"], tool
+        assert "df_descriptor" in params["required"], tool
 
 
 # --------------------------------------------------------------------------- #

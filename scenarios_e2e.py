@@ -321,7 +321,7 @@ SCENARIOS: list[Scenario] = [
 ]
 
 #: Handle arguments that must resolve regardless of the casing used.
-_HANDLE_ARGS = ("df", "df1", "df2")
+_HANDLE_ARGS = ("df", "df_descriptor", "df1", "df2")
 
 
 # --------------------------------------------------------------------------- #
@@ -403,7 +403,7 @@ def _fetches(result: dict[str, Any]) -> list[dict[str, Any]]:
 #: a detour is recognised however the model recovered from it: the same tool
 #: called again, or a different tool that reaches the same subject.
 _SUBJECT_ARGS = (
-    "df", "df1", "df2", "components", "component",
+    "df", "df_descriptor", "df1", "df2", "components", "component",
     "station_code", "start_date", "end_date", "metric", "filename",
 )
 
@@ -430,7 +430,7 @@ def _subject_of(entry: dict[str, Any]) -> frozenset[str]:
             text = str(item).strip().lower()
             if not text:
                 continue
-            if key in ("df", "df1", "df2") and ":" in text:
+            if key in ("df", "df_descriptor", "df1", "df2") and ":" in text:
                 text = text.rsplit(":", 1)[-1]
             out.add(f"{key}={text}")
     return frozenset(out)
