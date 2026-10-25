@@ -3036,6 +3036,20 @@ def _api_envelope(text: str) -> tuple[str, Any] | None:
     return None
 
 
+# Sent back to the model when it stops with prose before the requested
+# solar-wind metric was computed. Fetching the frames is not the task: without
+# this guard a 14B model answered "данные загружены" and never called
+# apply_physics_formula, which the old loop accepted as a successful final
+# answer. The correction names the metric and points at the live handles.
+_GOAL_CORRECTION = (
+    "Запрошенная метрика солнечного ветра ещё не вычислена: {metrics}. "
+    "Вызови apply_physics_formula с metric={first_metric} и подходящими "
+    "df_descriptor/solar_wind_handle из Handles. "
+    "Если последний вызов упал, сначала исправь ошибку по hint, затем повтори "
+    "расчёт. Не отвечай текстом, пока инструмент не вернёт успешный результат."
+)
+
+
 # Sent back to the model when it answers with an API envelope instead of a
 # tool call. Names the exact mistake and shows the exact expected shape.
 _FORMAT_CORRECTION = (
@@ -6875,6 +6889,15 @@ def run_agent(
     log: list[dict[str, Any]] = []
     scratchpad = Scratchpad()
     scratchpad.reset()
+    # The router already knows which solar-wind metrics the question asked for.
+    # Keep that goal alive across rounds: a model that has fetched both frames
+    # but not called apply_physics_formula has not answered the question yet.
+    requested_metrics = [
+        metric
+        for metric in ((selection or {}).get("metrics") or [])
+        if metric in _SOLAR_WIND_METRICS
+    ]
+    goal_retries = 0
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompt},
@@ -6942,6 +6965,60 @@ def run_agent(
                     )
                 messages.append({"role": "user", "content": _FORMAT_CORRECTION})
                 continue
+
+            # A prose answer is not progress when the requested metric has not
+            # been computed. The model may have fetched both frames and then
+            # stopped; force it back to the decisive tool instead of accepting
+            # "данные загружены" as the final result.
+            can_compute_metric = "apply_physics_formula" in offered_names
+            missing_metrics = [
+                metric
+                for metric in requested_metrics
+                if f"physics_{metric}" not in scratchpad.completed_steps
+            ]
+            if (
+                can_compute_metric
+                and missing_metrics
+                and goal_retries < 2
+                and round_no < max_rounds
+            ):
+                goal_retries += 1
+                first_metric = missing_metrics[0]
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": _GOAL_CORRECTION.format(
+                            metrics=", ".join(missing_metrics),
+                            first_metric=first_metric,
+                        ),
+                    }
+                )
+                if verbose:
+                    print(
+                        f"[agent] round {round_no}: final answer deferred; "
+                        f"metric not computed: {', '.join(missing_metrics)}"
+                    )
+                continue
+            if can_compute_metric and missing_metrics:
+                text = leftover.strip() or content.strip()
+                return {
+                    "ok": False,
+                    "text": _with_tool_failures(
+                        text
+                        or "Не удалось вычислить запрошенную метрику "
+                        "солнечного ветра.",
+                        log,
+                    ),
+                    "plots": plots,
+                    "tool_calls": log,
+                    "rounds": round_no,
+                    "stop_reason": "metric_not_computed",
+                    "error": "metric_not_computed",
+                    "message": (
+                        "The model stopped before computing the requested "
+                        f"solar-wind metric(s): {', '.join(missing_metrics)}."
+                    ),
+                }
 
             text = leftover.strip() or content.strip()
             if verbose:

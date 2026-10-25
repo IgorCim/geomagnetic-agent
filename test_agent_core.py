@@ -1311,6 +1311,83 @@ def test_empty_schema_list_refuses_calls_instead_of_executing_them():
     assert "No tools were offered" in first["hint"]
 
 
+def test_run_agent_forces_a_requested_solar_wind_metric(monkeypatch):
+    """Fetching both frames is not the answer: the metric must be computed.
+
+    The 14B live run answered "данные загружены" after fetching the wind and
+    never called apply_physics_formula.  The loop used to accept that prose as
+    a successful final answer; the goal guard must send the model back to the
+    decisive tool instead.
+    """
+    computed: list[dict] = []
+
+    def fake_apply(args, store):  # noqa: ARG001
+        computed.append(dict(args))
+        return {
+            "ok": True,
+            "frame_handle": "derived:irt:2024-09-12",
+        }, "ey_coupling computed"
+
+    monkeypatch.setitem(ac.HANDLERS, "apply_physics_formula", fake_apply)
+
+    class Spy(ac.ScriptedBrain):
+        def __init__(self, script):
+            super().__init__(script)
+            self.user_messages: list[str] = []
+
+        def chat(self, messages, tools):
+            self.user_messages.extend(
+                str(m.get("content") or "")
+                for m in messages
+                if m.get("role") == "user"
+            )
+            return super().chat(messages, tools)
+
+    brain = Spy(
+        [
+            {"content": "Данные загружены, сейчас посчитаю."},
+            {
+                "content": _text_call(
+                    "apply_physics_formula",
+                    '{"df_descriptor": "raw:irt:2024-09-12", '
+                    '"metric": "ey_coupling", '
+                    '"solar_wind_handle": "sw:omni:2024-09-12"}',
+                )
+            },
+            {"content": "Ey рассчитан."},
+        ]
+    )
+    result = ac.run_agent(
+        "посчитай Ey для IRT за 2024-09-12 по солнечному ветру",
+        brain=brain,
+        max_rounds=5,
+        verbose=False,
+    )
+
+    assert result["ok"], result
+    assert computed and computed[0]["metric"] == "ey_coupling"
+    assert any("Запрошенная метрика" in msg for msg in brain.user_messages)
+    assert result["rounds"] == 3
+
+
+def test_run_agent_reports_a_metric_that_was_never_computed():
+    """Two corrections are allowed; then the result is an honest failure."""
+    brain = ac.ScriptedBrain(
+        [{"content": "Данные загружены, но расчёт не сделан."}] * 5
+    )
+    result = ac.run_agent(
+        "посчитай Ey для IRT за 2024-09-12 по солнечному ветру",
+        brain=brain,
+        max_rounds=5,
+        verbose=False,
+    )
+
+    assert result["ok"] is False
+    assert result["stop_reason"] == "metric_not_computed"
+    assert result["error"] == "metric_not_computed"
+    assert "ey_coupling" in result["message"]
+
+
 def test_semantic_loop_breaker_fires_on_changing_handles():
     """Four different dead handles with one error are one dead end."""
     class Spy(ac.ScriptedBrain):
