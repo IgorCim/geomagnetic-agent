@@ -1,6 +1,6 @@
 ﻿"""Agent Core -- the brain of the geomagnetic AI assistant.
 
-A local Qwen 2.5 7B Instruct (GGUF, Q4_K_M) is driven through
+A local Qwen 2.5 14B Instruct (GGUF, Q4_K_M) is driven through
 ``llama-cpp-python`` and given access to the Stage 1 + Stage 2 Python tools in
 a bounded tool-calling loop. No paid API, no API keys: the weights are pulled
 once from HuggingFace and everything afterwards runs inside the notebook.
@@ -88,6 +88,11 @@ __all__ = [
     "select_tools_for_task",
     "select_tools_for_query",
     "explain_tool_selection",
+    "normalize_tool_name",
+    "normalize_tool_args",
+    "missing_required_args",
+    "expected_frame_handle",
+    "is_bulk_query",
     "build_dynamic_prompt",
     "is_error",
 ]
@@ -96,15 +101,15 @@ __all__ = [
 # --------------------------------------------------------------------------- #
 # configuration
 # --------------------------------------------------------------------------- #
-MODEL_REPO = "Qwen/Qwen2.5-7B-Instruct-GGUF"
+MODEL_REPO = "Qwen/Qwen2.5-14B-Instruct-GGUF"
 # NOTE: this quantisation is *sharded* upstream -- there is no single-file
-# "qwen2.5-7b-instruct-q4_k_m.gguf". We match the stem and hand llama.cpp
-# shard 00001; it picks up the siblings from the same directory.
-MODEL_STEM = "qwen2.5-7b-instruct-q4_k_m"
+# "qwen2.5-14b-instruct-q4_k_m.gguf". We match the stem and hand llama.cpp
+# shard 00001; it picks up the two siblings from the same directory.
+MODEL_STEM = "qwen2.5-14b-instruct-q4_k_m"
 MODELS_DIR = Path(os.environ.get("GEOMAG_MODELS_DIR", "models"))
 
-#: Context window handed to llama.cpp. 8192 left ~200 free tokens once the full
-#: 21-schema list was appended to the system prompt, so the model produced an
+#: Context window handed to llama.cpp. 8192 left too little free space once the
+#: full schema list was appended to the system prompt, so the model produced an
 #: empty answer ("Нет текстового ответа"). Doubling it to 16384 keeps a wide
 #: safety margin while the schema diet (dynamic selection + trimmed
 #: descriptions) cuts what we actually send. ``load_brain(n_ctx=...)`` overrides.
@@ -1312,6 +1317,124 @@ def select_tools_for_task(tool_name: str) -> list[dict[str, Any]]:
     return [t for t in TOOL_SCHEMAS if t["function"]["name"] in needed]
 
 
+#: The planner is a language model: its JSON is not schema-validated. This is
+#: the one translation layer between the spellings a plan uses and the canonical
+#: arguments the handlers accept. Both LLMPlanner and the executor call it, so a
+#: plan cannot mean one thing when it is written and another when it is run.
+_TOOL_SCHEMA_FUNCTIONS: dict[str, dict[str, Any]] = {
+    str(schema["function"]["name"]): schema["function"] for schema in TOOL_SCHEMAS
+}
+
+
+def _tool_properties(name: str) -> set[str]:
+    function = _TOOL_SCHEMA_FUNCTIONS.get(name) or {}
+    parameters = function.get("parameters") or {}
+    return set((parameters.get("properties") or {}).keys())
+
+
+_FRAME_DESCRIPTOR_TOOLS = {
+    name for name in _TOOL_SCHEMA_FUNCTIONS if "df_descriptor" in _tool_properties(name)
+}
+
+
+def expected_frame_handle(station: Any, date: Any) -> str:
+    """The raw slot a fetch for *station* on *date* will create.
+
+    A planner knows the station and the day before it knows the handle. Naming
+    the slot here is the same convention :func:`_handle_fetch` uses, so a plan
+    can chain fetch -> plot without guessing.
+    """
+    station_code = str(station or "").strip().upper()
+    day = str(date or "").strip()
+    return f"raw:{station_code.lower()}:{day}" if station_code and day else ""
+
+
+def normalize_tool_name(tool_name: Any) -> str:
+    """Return a registered handler name, or ``run_agent`` for an unknown plan."""
+    name = str(tool_name or "").strip()
+    return name if name in TOOLS_BY_NAME else "run_agent"
+
+
+def normalize_tool_args(tool_name: Any, args: Any) -> dict[str, Any]:
+    """Translate a planner's arguments into the handler's canonical schema.
+
+    The LLM planner regularly writes ``df`` (the legacy alias), ``station`` /
+    ``date`` (the deterministic planner's vocabulary), ``component`` (singular)
+    and ``project_name`` for ``create_project``. Passing those straight to a
+    handler produces a missing-argument error even though the plan is right.
+    Normalising once here makes both the direct-execution path and the fallback
+    sub-agent see the same, valid call.
+    """
+    if not isinstance(args, dict):
+        return {}
+    name = normalize_tool_name(tool_name)
+    out = {str(key): value for key, value in args.items()}
+    properties = _tool_properties(name)
+
+    if name in _FRAME_DESCRIPTOR_TOOLS and "df" in out and "df_descriptor" not in out:
+        out["df_descriptor"] = out.pop("df")
+
+    if "station" in out and "station_code" in properties and "station_code" not in out:
+        out["station_code"] = out.pop("station")
+
+    if "date" in out and "start_date" in properties:
+        day = out.pop("date")
+        out.setdefault("start_date", day)
+        if "end_date" in properties:
+            out.setdefault("end_date", day)
+
+    if "component" in out and "components" in properties and "components" not in out:
+        component = out.pop("component")
+        out["components"] = component if isinstance(component, list) else [component]
+
+    if isinstance(out.get("components"), str):
+        out["components"] = [out["components"]]
+
+    if "project_name" in out and "name" in properties and "name" not in out:
+        out["name"] = out.pop("project_name")
+
+    # A plan that names only station/date can still name the raw slot the fetch
+    # step will create. Do this before the unknown-key filter below, because
+    # plot_components has no station_code/date properties of its own.
+    if (
+        name in _FRAME_DESCRIPTOR_TOOLS
+        and not out.get("df_descriptor")
+        and (out.get("station_code") or out.get("station"))
+        and (out.get("start_date") or out.get("date"))
+    ):
+        out["df_descriptor"] = expected_frame_handle(
+            out.get("station_code") or out.get("station"),
+            out.get("start_date") or out.get("date"),
+        )
+
+    # Drop keys the handler does not accept. A plan carrying 'station' for
+    # plot_components is not a reason to pass an unknown kwarg into a handler;
+    # the canonical handle above is the useful part.
+    if properties:
+        out = {key: value for key, value in out.items() if key in properties}
+    return out
+
+
+def missing_required_args(tool_name: Any, args: Any) -> list[str]:
+    """Return the required schema keys absent from a normalised plan."""
+    name = normalize_tool_name(tool_name)
+    function = _TOOL_SCHEMA_FUNCTIONS.get(name)
+    if function is None:
+        return ["<unknown tool>"]
+    parameters = function.get("parameters") or {}
+    values = args if isinstance(args, dict) else {}
+    missing: list[str] = []
+    for key in parameters.get("required") or []:
+        value = values.get(key)
+        if value is None:
+            missing.append(key)
+        elif isinstance(value, str) and not value.strip():
+            missing.append(key)
+        elif isinstance(value, (list, tuple)) and not value:
+            missing.append(key)
+    return missing
+
+
 #: Upper bound on the *optional* schemas a single free-form ``run_agent``
 #: question may see. The full 29-schema list is what filled the 8192-token window
 #: to ~200 tokens of headroom; a question only ever needs a handful. A tool the
@@ -1557,6 +1680,16 @@ def _is_bulk_query(text: str) -> bool:
     ):
         return True
     return False
+
+
+def is_bulk_query(text: str) -> bool:
+    """Public name for the router's matrix-scale decision.
+
+    The Gradio layer uses the same predicate as the tool router: a request that
+    is big enough to need the planner in the agent must not be sent down the
+    single-question path in the UI.
+    """
+    return _is_bulk_query(text)
 
 
 def _selection_plan(
@@ -2949,7 +3082,7 @@ _MAX_CALLS_PER_BODY = 8
 def _normalize_call(value: Any, depth: int = 0) -> list[tuple[str, dict[str, Any]]]:
     """Pull ``(name, arguments)`` pairs out of one parsed JSON value.
 
-    Handles the shapes a 7B model actually emits: a bare ``{"name", ...}``,
+    Handles the shapes a small model actually emits: a bare ``{"name", ...}``,
     the OpenAI-style ``{"function": {"name", ...}}`` envelope, ``parameters``
     instead of ``arguments``, and a top-level array of calls.
     """
@@ -3103,7 +3236,7 @@ def parse_tool_calls(
 
     Bodies are salvaged rather than rejected: prose around the JSON, trailing
     commas, single or curly quotes, stray brackets, a ``function`` envelope and
-    a top-level array are all tolerated, because a 7B model emits all of them.
+    a top-level array are all tolerated, because a small model emits all of them.
     A body that truly cannot be read becomes one ``malformed`` call carrying a
     ``reason``.
 
@@ -5261,7 +5394,7 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     export_error: str | None = None
     if run_until_complete and remaining == 0:
         # The whole job is done, so Python collects the ZIP itself. After a heavy
-        # 260-cell run the 7B model reliably drops the follow-up export_project
+        # 260-cell run the model reliably drops the follow-up export_project
         # step and answers with nothing; folding the archive into this one tool
         # call removes that step from the model's plate entirely.
         project_name = str(matrix.get("project") or "")
@@ -5359,6 +5492,15 @@ def _factor_plan_for_matrix(
             or tool_args.get("date")
             or ""
         ).strip()
+        if not station or not event:
+            # A normalised plan carries the canonical handle instead of the
+            # legacy station/date pair. Recover the cell coordinates from it so
+            # the matrix folding still recognises the plan.
+            handle = str(tool_args.get("df_descriptor") or "").strip().lower()
+            match = re.match(r"^(?:raw|derived):([^:]+):(\d{4}-\d{2}-\d{2})$", handle)
+            if match:
+                station = station or match.group(1).upper()
+                event = event or match.group(2)
         if station:
             stations.add(station)
         if event:
@@ -7297,7 +7439,7 @@ def run_agent(
 
             # Short-circuit: a finished matrix run already carries the final
             # human-readable summary and the archive path. Feeding that long
-            # payload back to a 7B model overflows its context and yields an
+            # payload back to a 14B model overflows its context and yields an
             # empty answer (the "Нет текстового ответа" seen in Kaggle), so hand
             # the tool's own summary to the user directly instead of asking the
             # model to rephrase it.
@@ -7340,6 +7482,138 @@ def run_agent(
         "rounds": max_rounds,
         "stop_reason": "round_limit",
     }
+
+
+def _planned_task_result(
+    task: Any, store: FrameStore, verbose: bool = False
+) -> dict[str, Any] | None:
+    """Execute a fully specified planner task without a model round-trip.
+
+    A plan is structured data: when it names a registered tool and carries every
+    required argument, there is nothing for the model to decide. Running the
+    handler directly is faster and more reliable than asking the model to repeat
+    the plan. ``None`` means "not fully specified"; the caller then falls back to
+    ``run_agent``, which can fill the gap and recover from an error.
+    """
+    name = normalize_tool_name(getattr(task, "tool_name", ""))
+    if name == "run_agent" or name not in HANDLERS:
+        return None
+    args = normalize_tool_args(name, getattr(task, "tool_args", {}))
+    missing = missing_required_args(name, args)
+    if missing:
+        if verbose:
+            print(f"[planner] {task.id}: direct call skipped, missing {missing}")
+        return None
+    if name in {"create_task_matrix", "process_matrix_batch"}:
+        # The matrix path owns these: it needs the workspace-level loop and
+        # export, not a single handler call.
+        return None
+
+    entry: dict[str, Any] = {
+        "round": 0,
+        "planned": True,
+        "tool": name,
+        "arguments": args,
+        "executed": True,
+    }
+    try:
+        payload, note = HANDLERS[name](args, store)
+    except Exception as exc:  # one bad plan step must not abort the whole plan
+        traceback.print_exc()
+        payload = _error("tool_exception", f"{type(exc).__name__}: {exc}", tool=name)
+        note = f"{name} raised {type(exc).__name__}"
+
+    ok = not is_error(payload)
+    entry["ok"] = ok
+    if note:
+        entry["note"] = note
+    if isinstance(payload, dict):
+        for key in ("error", "message", "hint", "available"):
+            if payload.get(key) is not None:
+                entry[key] = payload[key]
+        handles: list[str] = []
+        handle = payload.get("frame_handle")
+        if isinstance(handle, str) and handle:
+            handles.append(handle)
+        for extra in payload.get("frame_handles") or []:
+            if isinstance(extra, str) and extra:
+                handles.append(extra)
+        for fetched in payload.get("fetched") or []:
+            if not isinstance(fetched, dict):
+                continue
+            fetched_handle = fetched.get("frame_handle")
+            if isinstance(fetched_handle, str) and fetched_handle:
+                handles.append(fetched_handle)
+        handles = list(dict.fromkeys(handles))
+        if handles:
+            entry["frame_handles"] = handles
+            if len(handles) == 1:
+                entry["frame_handle"] = handles[0]
+        if ok and name in PLOT_TOOLS and isinstance(payload.get("path"), str):
+            entry["plot"] = payload["path"]
+
+    plots = [entry["plot"]] if "plot" in entry else []
+    if ok:
+        text = (
+            note
+            or (
+                str(payload.get("summary") or "").strip()
+                if isinstance(payload, dict)
+                else ""
+            )
+            or "Готово."
+        )
+    else:
+        text = (
+            note
+            or (
+                str(payload.get("message") or "").strip()
+                if isinstance(payload, dict)
+                else ""
+            )
+            or f"{name} failed."
+        )
+    if verbose:
+        status = "ok" if ok else f"FAILED ({entry.get('error')})"
+        print(f"[planner] {task.id}: {name}({_short(args)}) -> {status}")
+        if note:
+            print(f"[NOTE] {str(note)[:500]}")
+    return {
+        "ok": ok,
+        "text": text,
+        "plots": plots,
+        "tool_calls": [entry],
+        "rounds": 0,
+        "stop_reason": "planned_call",
+    }
+
+
+def _format_task_plan(task: Any) -> str:
+    """The structured plan, rendered for the fallback sub-agent."""
+    name = normalize_tool_name(getattr(task, "tool_name", ""))
+    if name == "run_agent":
+        return "Свободная задача: описание ниже; выбери инструменты сам."
+    args = normalize_tool_args(name, getattr(task, "tool_args", {}))
+    return (
+        f"Задача плана: выполнить `{name}`; аргументы: {_dumps(args)}. "
+        "Проверь аргументы; если они неполные или неверные, исправь их."
+    )
+
+
+def _format_plan_failure(direct: dict[str, Any]) -> str:
+    """Turn a failed direct plan call into the next sub-agent's context."""
+    calls = direct.get("tool_calls") or []
+    if not calls:
+        return ""
+    call = calls[0]
+    message = call.get("message") or direct.get("text") or ""
+    hint = call.get("hint") or ""
+    return (
+        "[PLANNER] Прямой вызов плана завершился ошибкой: "
+        f"{call.get('tool')} -> {call.get('error')}: {message}. "
+        + (f"Подсказка: {hint}. " if hint else "")
+        + "Исправь аргументы или запроси недостающие данные и выполни задачу."
+    )
 
 
 def run_agent_with_planner(
@@ -7439,41 +7713,103 @@ def run_agent_with_planner(
     for task in state.tasks:
         if verbose:
             print(f"\n🔧 Выполняю: {task.id} — {task.description}")
-        schemas = select_tools_for_task(task.tool_name)
-        sub_prompt = build_dynamic_prompt(
-            BASE_PROMPT_COMPACT, schemas, state.get_context_for_prompt()
+
+        # A plan that names a real tool and carries every required argument is
+        # already a complete instruction. Execute it directly; only an
+        # incomplete or failed plan needs the model. This is what makes the
+        # planner's tool_args load-bearing instead of decorative.
+        direct = _planned_task_result(task, shared, verbose=verbose)
+        if direct is not None and direct.get("ok"):
+            result = direct
+        else:
+            description = task.description
+            if direct is not None:
+                failure = _format_plan_failure(direct)
+                if failure:
+                    description = f"{description}\n\n{failure}"
+            schemas = select_tools_for_task(task.tool_name)
+            sub_prompt = build_dynamic_prompt(
+                BASE_PROMPT_COMPACT,
+                schemas,
+                f"{state.get_context_for_prompt()}\n\n{_format_task_plan(task)}",
+            )
+            try:
+                result = run_agent(
+                    description,
+                    brain=brain,
+                    max_rounds=max_rounds,
+                    verbose=verbose,
+                    system_prompt=sub_prompt,
+                    tools=schemas,
+                    store=shared,
+                )
+            except Exception as exc:
+                state.mark_failed(task.id, str(exc))
+                results.append(
+                    {"task_id": task.id, "ok": False, "error": str(exc)}
+                )
+                continue
+
+        ok = bool(result.get("ok")) if isinstance(result, dict) else False
+        if ok:
+            state.mark_done(task.id, result)
+        else:
+            state.mark_failed(task.id, str(result.get("text", result)))
+        results.append(
+            {
+                "task_id": task.id,
+                "ok": ok,
+                "result": result if ok else None,
+                "error": None if ok else str(result.get("text", result)),
+            }
         )
-        try:
-            result = run_agent(
-                task.description,
-                brain=brain,
-                max_rounds=max_rounds,
-                verbose=verbose,
-                system_prompt=sub_prompt,
-                tools=schemas,
-                store=shared,
-            )
-            ok = bool(result.get("ok")) if isinstance(result, dict) else False
-            state.mark_done(task.id, result if ok else None)
-            if not ok:
-                state.mark_failed(task.id, str(result.get("text", result)))
-            results.append(
-                {"task_id": task.id, "ok": ok, "result": result if ok else None,
-                 "error": None if ok else str(result.get("text", result))}
-            )
-        except Exception as exc:
-            state.mark_failed(task.id, str(exc))
-            results.append({"task_id": task.id, "ok": False, "error": str(exc)})
 
     done = sum(1 for r in results if r["ok"])
     failed = len(results) - done
+
+    # Aggregate the child results into the same shape as run_agent, so the
+    # Gradio layer can show every chart and every call without knowing that a
+    # plan produced them. Without this the UI silently lost all planner plots.
+    all_plots: list[str] = []
+    all_calls: list[dict[str, Any]] = []
+    for item in results:
+        payload = item.get("result")
+        if not isinstance(payload, dict):
+            continue
+        for plot in payload.get("plots") or []:
+            if isinstance(plot, str) and plot and plot not in all_plots:
+                all_plots.append(plot)
+        for call in payload.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            entry = dict(call)
+            entry.setdefault("task_id", item["task_id"])
+            all_calls.append(entry)
+
+    if len(results) == 1 and results[0]["ok"]:
+        payload = results[0].get("result") or {}
+        text = str(payload.get("text") or "").strip() or "Готово."
+    else:
+        text = f"Выполнено {done} из {len(results)} подзадач. Ошибок: {failed}."
+        notes = [
+            str((item.get("result") or {}).get("text") or "").strip()
+            for item in results
+            if item["ok"]
+        ]
+        notes = [note for note in notes if note]
+        if notes:
+            text += "\n" + "\n".join(f"- {note[:220]}" for note in notes[:8])
+
     return {
         "ok": failed == 0,
-        "text": f"Выполнено {done} из {len(results)} подзадач. Ошибок: {failed}.",
+        "text": text,
+        "plots": all_plots,
+        "tool_calls": all_calls,
         "results": results,
         "state": state.to_dict(),
         "summary": state.get_progress_summary(),
         "store": shared,
+        "stop_reason": "planner",
     }
 
 

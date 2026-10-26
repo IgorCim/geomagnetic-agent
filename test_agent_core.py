@@ -392,7 +392,7 @@ def test_brace_inside_string_value_does_not_unbalance():
     assert calls[0]["arguments"]["title"] == "a } b {"
 
 
-# --- repair ladder: shapes a 7B model actually emits (Colab malformed_tool_call) ---
+# --- repair ladder: shapes a small model actually emits (Colab malformed_tool_call) ---
 
 def _names(reply):
     calls, _ = ac.parse_tool_calls(reply, debug=False)
@@ -640,7 +640,7 @@ def test_system_prompt_forbids_the_api_envelope():
     assert "API-\u0441\u0435\u0440\u0432\u0435\u0440" in sp          # "API-\u0441\u0435\u0440\u0432\u0435\u0440"
     assert "'content'" in sp
     assert "tool_calls" in sp
-    # A concrete example beats an instruction for a 7B model.
+    # A concrete example beats an instruction for a small model.
     # The concrete example, minus the tag itself: this JSON body is
     # unique to the worked example in rule 10.
     assert '{"name": "fetch_observatory_data", "arguments": {' in sp
@@ -1616,24 +1616,24 @@ def test_result_shape_is_the_documented_contract():
 # --------------------------------------------------------------------------- #
 def test_model_stem_matches_the_real_sharded_upstream_name():
     """Upstream ships shards, not a single q4_k_m file."""
-    assert ac.MODEL_REPO == "Qwen/Qwen2.5-7B-Instruct-GGUF"
-    assert ac.MODEL_STEM == "qwen2.5-7b-instruct-q4_k_m"
+    assert ac.MODEL_REPO == "Qwen/Qwen2.5-14B-Instruct-GGUF"
+    assert ac.MODEL_STEM == "qwen2.5-14b-instruct-q4_k_m"
 
 
 def test_shard_sort_prefers_shard_one(tmp_path):
     names = [
-        "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf",
-        "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf",
+        "qwen2.5-14b-instruct-q4_k_m-00002-of-00003.gguf",
+        "qwen2.5-14b-instruct-q4_k_m-00001-of-00003.gguf",
     ]
     for name in names:
         (tmp_path / name).write_bytes(b"x")
     files = ac._gguf_files(tmp_path, ac.MODEL_STEM)
     assert len(files) == 2
-    assert ac._first_shard(files).name.endswith("00001-of-00002.gguf")
+    assert ac._first_shard(files).name.endswith("00001-of-00003.gguf")
 
 
 def test_download_returns_existing_model_without_network(tmp_path):
-    shard = tmp_path / f"{ac.MODEL_STEM}-00001-of-00002.gguf"
+    shard = tmp_path / f"{ac.MODEL_STEM}-00001-of-00003.gguf"
     shard.write_bytes(b"x" * 16)
     assert ac.download_model(target_dir=tmp_path, verbose=False) == str(shard)
 
@@ -1673,20 +1673,20 @@ def test_explicit_gpu_layers_are_respected():
 # --------------------------------------------------------------------------- #
 def test_entry_shard_rejects_a_download_missing_shard_one(tmp_path):
     """Observed in practice: shard 2 finished, shard 1 was still .incomplete."""
-    (tmp_path / f"{ac.MODEL_STEM}-00002-of-00002.gguf").write_bytes(b"x" * 512)
+    (tmp_path / f"{ac.MODEL_STEM}-00002-of-00003.gguf").write_bytes(b"x" * 512)
     assert ac._entry_shard(tmp_path, ac.MODEL_STEM) is None
     assert ac.model_is_downloaded(target_dir=tmp_path, stem=ac.MODEL_STEM) is False
 
 
-def test_entry_shard_accepts_a_complete_pair(tmp_path):
-    for index in (1, 2):
-        (tmp_path / f"{ac.MODEL_STEM}-0000{index}-of-00002.gguf").write_bytes(b"x" * 512)
+def test_entry_shard_accepts_a_complete_set(tmp_path):
+    for index in (1, 2, 3):
+        (tmp_path / f"{ac.MODEL_STEM}-0000{index}-of-00003.gguf").write_bytes(b"x" * 512)
     entry = ac._entry_shard(tmp_path, ac.MODEL_STEM)
-    assert entry is not None and "00001-of-00002" in entry.name
+    assert entry is not None and "00001-of-00003" in entry.name
 
 
 def test_entry_shard_ignores_zero_length_files(tmp_path):
-    shard = tmp_path / f"{ac.MODEL_STEM}-00001-of-00002.gguf"
+    shard = tmp_path / f"{ac.MODEL_STEM}-00001-of-00003.gguf"
     shard.write_bytes(b"")
     assert ac._entry_shard(tmp_path, ac.MODEL_STEM) is None
 
@@ -1706,7 +1706,7 @@ def test_purge_incomplete_cleans_halffinished_downloads(tmp_path):
 
 
 def test_run_agent_never_downloads_implicitly(tmp_path, monkeypatch):
-    """A question must not trigger a 5 GB download; it must explain itself."""
+    """A question must not trigger a ~9 GB download; it must explain itself."""
     monkeypatch.setattr(ac, "MODELS_DIR", tmp_path)
 
     def explode(*args, **kwargs):  # pragma: no cover - must never run
@@ -1722,8 +1722,8 @@ def test_run_agent_never_downloads_implicitly(tmp_path, monkeypatch):
 
 def test_run_agent_auto_loads_when_the_model_is_already_on_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(ac, "MODELS_DIR", tmp_path)
-    for index in (1, 2):
-        (tmp_path / f"{ac.MODEL_STEM}-0000{index}-of-00002.gguf").write_bytes(b"x" * 512)
+    for index in (1, 2, 3):
+        (tmp_path / f"{ac.MODEL_STEM}-0000{index}-of-00003.gguf").write_bytes(b"x" * 512)
     monkeypatch.setattr(ac, "load_brain", lambda **kw: ac.ScriptedBrain([{"content": "ок"}]))
     result = ac.run_agent("привет", verbose=False)
     assert result["ok"] is True and result["text"] == "ок"
@@ -1872,7 +1872,7 @@ def test_real_qwen_template_renders_our_history_cleanly():
     import urllib.request
 
     jinja2 = pytest.importorskip("jinja2")
-    url = "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/raw/main/tokenizer_config.json"
+    url = "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct/raw/main/tokenizer_config.json"
     with urllib.request.urlopen(url, timeout=60) as response:
         template_text = json.load(response)["chat_template"]
 
@@ -2155,7 +2155,7 @@ def test_auto_derived_comparison_still_plots_two_different_days(tmp_path, monkey
 def test_system_prompt_stays_within_its_budget():
     """The prompt was cut to buy room for the tool-selection table.
 
-    It is a prompt for a 7B model: every rule competes with the others for
+    It is a prompt for a small model: every rule competes with the others for
     attention, so growth has to be a deliberate act rather than an accumulation.
     The rules now enforced in code -- slot ordering, doubled braces -- were the
     ones removed, and this stops them creeping back one clause at a time.
@@ -2415,27 +2415,63 @@ def test_plot_overlay_auto_fetch(tmp_path, monkeypatch):
 # Phase 4: external brain (planner + dynamic tool selection)
 # --------------------------------------------------------------------------- #
 def test_planner_multi_station():
-    """One target per station: IRT, API, BSL -> three tasks."""
+    """Each station gets an explicit fetch and a plot with a canonical handle."""
     from agent_planner import Planner
 
     state = Planner().plan("Построй графики для станций IRT, API, BSL за 10 сентября 2024")
-    assert len(state.tasks) == 3, "Должно быть 3 подзадачи"
-    assert state.tasks[0].tool_args["station"] == "IRT"
-    codes = [t.tool_args["station"] for t in state.tasks]
-    assert codes == ["IRT", "API", "BSL"]
-    assert all(t.tool_name == "plot_components" for t in state.tasks)
-    assert all(t.tool_args["date"] == "2024-09-10" for t in state.tasks)
+    assert len(state.tasks) == 6, "fetch + plot for each of three stations"
+    assert [t.tool_name for t in state.tasks] == [
+        "fetch_observatory_data",
+        "plot_components",
+        "fetch_observatory_data",
+        "plot_components",
+        "fetch_observatory_data",
+        "plot_components",
+    ]
+    assert state.tasks[0].tool_args == {
+        "station_code": "IRT",
+        "start_date": "2024-09-10",
+        "end_date": "2024-09-10",
+    }
+    assert state.tasks[1].tool_args == {
+        "df_descriptor": "raw:irt:2024-09-10",
+        "components": ["H"],
+    }
+    codes = [t.tool_args.get("station_code") for t in state.tasks[::2]]
+    assert codes == ["IRT", "API", "BSL"], "query order, not registry order"
     assert state.original_query.startswith("Построй графики")
 
 
+def test_planner_large_plan_still_folds_to_matrix():
+    """The canonical handles must not hide the cell coordinates from the folder."""
+    from agent_planner import Planner
+
+    state = Planner().plan("Построй графики для 26 станций за 10 сентября 2024")
+    assert len(state.tasks) > ac.MATRIX_THRESHOLD
+    folded = ac._factor_plan_for_matrix(state.tasks)
+    assert folded is not None
+    events, stations, actions, _project = folded
+    assert events == ["2024-09-10"]
+    assert "plot_components" in actions
+    assert "fetch_observatory_data" in actions
+    assert len(stations) == len(Planner.KNOWN_STATIONS)
+
+
 def test_planner_batch_statistics():
-    """Статистика для N станций порождает N задач get_statistics."""
+    """Statistics for N stations gets a fetch and a canonical stats task each."""
     from agent_planner import Planner
 
     state = Planner().plan("Посчитай медиану для 2 станций за 2024-09-10")
-    assert len(state.tasks) == 2
-    assert state.tasks[0].tool_name == "get_statistics"
-    assert state.tasks[0].tool_args["station"] == "IRT"
+    assert len(state.tasks) == 4
+    assert [t.tool_name for t in state.tasks] == [
+        "fetch_observatory_data",
+        "get_statistics",
+        "fetch_observatory_data",
+        "get_statistics",
+    ]
+    assert state.tasks[0].tool_args["station_code"] == "IRT"
+    assert state.tasks[1].tool_args["df_descriptor"] == "raw:irt:2024-09-10"
+    assert state.tasks[1].tool_args["components"] == ["H"]
 
 
 def test_planner_unrecognized_query_is_one_run_agent_task():
@@ -2479,18 +2515,33 @@ class _AlwaysTextBrain:
         return {"content": "Готово.", "tool_calls": None}
 
 
-def test_run_agent_with_planner_executes_each_subtask():
-    """Two stations -> two subtasks, both succeed with a mock brain."""
+def test_run_agent_with_planner_executes_each_subtask(monkeypatch, tmp_path):
+    """Two stations -> fetch+plot per station, executed without a model round."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setitem(
+        ac.HANDLERS,
+        "plot_components",
+        lambda args, store: (
+            {
+                "ok": True,
+                "path": str(tmp_path / f"plot_{len(store.names())}.html"),
+                "components": args.get("components"),
+            },
+            "Saved fake chart",
+        ),
+    )
+    brain = _AlwaysTextBrain()
     result = ac.run_agent_with_planner(
         "Построй графики для 2 станций за 10 сентября",
-        brain=_AlwaysTextBrain(),
+        brain=brain,
         verbose=False,
     )
     assert result["ok"], result
-    assert len(result["results"]) == 2
+    assert len(result["results"]) == 4
     assert all(r["ok"] for r in result["results"])
-    assert result["state"]["current_task_index"] == 2
-    assert "Выполнено 2 из 2" in result["text"]
+    assert result["state"]["current_task_index"] == 4
+    assert "Выполнено 4 из 4" in result["text"]
+    assert brain.calls == 1, "only the planner needs the model; steps are direct"
 
 
 class _PlanChatBrain:
@@ -2530,8 +2581,53 @@ def test_llm_planner_parses_model_plan_ignoring_markdown_fences():
         "fetch_observatory_data",
         "plot_components",
     ]
+    assert state.tasks[0].tool_args == {"name": "events"}
     assert state.tasks[1].tool_args["station_code"] == "BRW"
+    assert state.tasks[2].tool_args["df_descriptor"] == "raw:brw:2024-10-10"
     assert state.tasks[2].tool_args["components"] == ["H", "D"]
+
+
+def test_normalize_tool_args_accepts_legacy_planner_spellings():
+    """Planner JSON is not schema-validated; the executor translates it once."""
+    assert ac.normalize_tool_args(
+        "plot_components", {"df": "raw:irt:2024-09-10", "component": "H"}
+    ) == {"df_descriptor": "raw:irt:2024-09-10", "components": ["H"]}
+    assert ac.normalize_tool_args(
+        "fetch_observatory_data", {"station": "IRT", "date": "2024-09-10"}
+    ) == {
+        "station_code": "IRT",
+        "start_date": "2024-09-10",
+        "end_date": "2024-09-10",
+    }
+    assert ac.normalize_tool_args("create_project", {"project_name": "events"}) == {
+        "name": "events"
+    }
+    # A plot plan that knows only station/date gets the exact handle the
+    # preceding fetch will create.
+    assert ac.normalize_tool_args(
+        "plot_components", {"station": "IRT", "date": "2024-09-10", "component": "H"}
+    ) == {"df_descriptor": "raw:irt:2024-09-10", "components": ["H"]}
+
+
+def test_llm_planner_normalises_unknown_tools_to_free_form():
+    """An unregistered tool name must not reach the dispatcher."""
+    from agent_planner import LLMPlanner
+
+    plan = (
+        '{"tasks": [{"id": "s1", "description": "Построй H", '
+        '"tool_name": "plot_components", "tool_args": {"df": "raw:irt:2024-09-10", '
+        '"component": "H"}}, '
+        '{"id": "s2", "description": "Объясни результат", '
+        '"tool_name": "unknown_tool", "tool_args": {}}]}'
+    )
+    state = LLMPlanner(_PlanChatBrain(plan)).plan("x")
+    assert state.tasks[0].tool_name == "plot_components"
+    assert state.tasks[0].tool_args == {
+        "df_descriptor": "raw:irt:2024-09-10",
+        "components": ["H"],
+    }
+    assert state.tasks[1].tool_name == "run_agent"
+    assert state.tasks[1].tool_args == {"query": "Объясни результат"}
 
 
 def test_llm_planner_parses_truncated_plan_and_renumbers_ids():
@@ -2553,9 +2649,11 @@ def test_llm_planner_falls_back_to_deterministic_on_bad_json():
     state = LLMPlanner(_PlanChatBrain("Я не понял задачу, повторите.")).plan(
         "Построй графики для 2 станций за 10 сентября"
     )
-    assert len(state.tasks) == 2
+    assert len(state.tasks) == 4
     assert [t.tool_name for t in state.tasks] == [
+        "fetch_observatory_data",
         "plot_components",
+        "fetch_observatory_data",
         "plot_components",
     ]
 
@@ -2571,7 +2669,7 @@ def test_llm_planner_verbose_reports_raw_output_and_fallback(capsys):
     out = capsys.readouterr().out
     assert "LLM-ПЛАНИРОВЩИК: Сырой ответ модели" in out
     assert "Ошибка парсинга" in out
-    assert len(state.tasks) == 2, "fallback must still produce the deterministic plan"
+    assert len(state.tasks) == 4, "fallback must still produce the deterministic plan"
 
 
 def test_llm_planner_verbose_reports_task_count(capsys):

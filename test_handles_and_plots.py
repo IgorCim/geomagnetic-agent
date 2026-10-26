@@ -231,6 +231,79 @@ def test_three_days_fill_three_iframe_slots(tmp_path, monkeypatch):
         assert "<iframe" in slot["value"]
 
 
+def test_gradio_store_persists_between_turns(tmp_path, monkeypatch):
+    """A follow-up must see the handle fetched by the previous turn."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    ga.PLOTS_DIR = tmp_path
+
+    store = ac.FrameStore()
+    fetch_brain = ac.ScriptedBrain(
+        ac._unwrap(
+            [
+                {
+                    "_text": '<tool_call>{"name": "fetch_observatory_data", '
+                    '"arguments": {"station_code": "IRT", '
+                    '"start_date": "2024-09-10", "end_date": "2024-09-10"}}'
+                    "</tool_call>"
+                },
+                {"content": "Данные загружены."},
+            ]
+        )
+    )
+    fetch_handler = ga.make_chat_handler(fetch_brain)
+    fetch_handler("загрузи IRT за 10 сентября 2024", [], [], store)
+    assert "raw:irt:2024-09-10" in store.names()
+
+    plot_brain = ac.ScriptedBrain(
+        ac._unwrap(
+            [
+                {
+                    "_text": '<tool_call>{"name": "plot_components", '
+                    '"arguments": {"df_descriptor": "raw:irt:2024-09-10", '
+                    '"components": ["H"]}}</tool_call>'
+                },
+                {"content": "График готов."},
+            ]
+        )
+    )
+    plot_handler = ga.make_chat_handler(plot_brain)
+    _messages, slots, log, saved, _files, _box = ga.split_result(
+        plot_handler("построй H по тому же handle", [], [], store)
+    )
+    assert saved, log
+    assert any(slot.get("visible") for slot in slots), log
+
+
+def test_bulk_request_goes_through_the_planner(monkeypatch):
+    """The UI must not send a matrix-scale request down the single-question path."""
+    calls = []
+
+    def fake_planner(query, brain=None, store=None, **kwargs):
+        calls.append((query, store))
+        return {
+            "ok": True,
+            "text": "План выполнен.",
+            "plots": [],
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(ga, "run_agent_with_planner", fake_planner)
+    monkeypatch.setattr(
+        ga,
+        "run_agent",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("bulk query reached the single-question agent")
+        ),
+    )
+    handler = ga.make_chat_handler(object())
+    messages, _slots, _log, _saved, _files, _box = ga.split_result(
+        handler("матрица 26 станций × 10 дат", [], [])
+    )
+    assert calls, "bulk query must use the planner"
+    assert "План выполнен." in messages[-1]["content"]
+
+
 def test_an_unreadable_file_does_not_break_the_panel(tmp_path, monkeypatch):
     _write_plot(tmp_path / "good.html")
 

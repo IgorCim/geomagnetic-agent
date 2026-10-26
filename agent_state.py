@@ -8,6 +8,7 @@ actually needs to see are rendered on demand (:meth:`SessionState.get_context_fo
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -55,7 +56,11 @@ class SessionState:
                 break
         # Move to the next task only when the done one is the current one, so a
         # re-opened session can resume from where it stopped.
-        if self.tasks and self.tasks[self.current_task_index].id == task_id:
+        if (
+            self.tasks
+            and 0 <= self.current_task_index < len(self.tasks)
+            and self.tasks[self.current_task_index].id == task_id
+        ):
             self.current_task_index += 1
 
     def mark_failed(self, task_id: str, error: str) -> None:
@@ -64,6 +69,15 @@ class SessionState:
                 task.status = "failed"
                 task.error = error
                 break
+        # A failure is still progress: the next task must see this one's error
+        # and its own pending description. Without advancing here, a failed
+        # step pinned the context window to itself for the rest of the plan.
+        if (
+            self.tasks
+            and 0 <= self.current_task_index < len(self.tasks)
+            and self.tasks[self.current_task_index].id == task_id
+        ):
+            self.current_task_index += 1
 
     def get_progress_summary(self) -> str:
         total = len(self.tasks)
@@ -72,13 +86,35 @@ class SessionState:
         return f"Всего задач: {total}, выполнено: {done}, ошибок: {failed}"
 
     def get_context_for_prompt(self) -> str:
+        """Render the last few tasks with the handles they produced.
+
+        Descriptions alone were not enough to chain a plan: subtask 2 was told
+        "plot BRW" but not the ``raw:brw:...`` handle subtask 1 had just
+        created, so it had to guess the naming convention. The compact result
+        line carries the live handle (and the note) without dumping a whole
+        tool payload into the prompt.
+        """
         recent = self.tasks[max(0, self.current_task_index - 3): self.current_task_index + 1]
         icons = {"done": "✅", "failed": "❌", "pending": "⏳", "running": "▶️"}
-        lines = []
+        lines: list[str] = []
         for task in recent:
             icon = icons.get(task.status, "⏳")
-            lines.append(f"{icon} [{task.id}] {task.description}")
-        return "\n".join(lines) if lines else "Начинаем выполнение."
+            line = f"{icon} [{task.id}] {task.description}"
+            if task.status == "done":
+                summary = _compact_task_result(task)
+                if summary:
+                    line += f" -> {summary}"
+            elif task.status == "failed" and task.error:
+                line += f" -> ошибка: {str(task.error)[:180]}"
+            if task.tool_args:
+                try:
+                    args = json.dumps(task.tool_args, ensure_ascii=False, default=str)
+                except (TypeError, ValueError):
+                    args = str(task.tool_args)
+                line += f" (args: {args[:220]})"
+            lines.append(line)
+        text = "\n".join(lines) if lines else "Начинаем выполнение."
+        return text[:1800]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -94,3 +130,35 @@ class SessionState:
             task = TaskStep(**task_data)
             state.tasks.append(task)
         return state
+
+
+def _compact_task_result(task: TaskStep, limit: int = 260) -> str:
+    """One line of the evidence a later subtask needs from *task*."""
+    result = task.result
+    if result is None:
+        return ""
+    if not isinstance(result, dict):
+        return str(result)[:limit]
+    parts: list[str] = []
+    handles: list[str] = []
+    for call in result.get("tool_calls") or []:
+        if not isinstance(call, dict):
+            continue
+        handle = call.get("frame_handle")
+        if isinstance(handle, str) and handle:
+            handles.append(handle)
+        for extra in call.get("frame_handles") or []:
+            if isinstance(extra, str) and extra:
+                handles.append(extra)
+        plot = call.get("plot")
+        if isinstance(plot, str) and plot:
+            parts.append(f"plot={plot}")
+        note = call.get("note")
+        if isinstance(note, str) and note:
+            parts.append(note)
+    if handles:
+        parts.insert(0, "handles: " + ", ".join(dict.fromkeys(handles)))
+    text = result.get("text")
+    if isinstance(text, str) and text.strip():
+        parts.append(text.strip())
+    return " | ".join(parts)[:limit]

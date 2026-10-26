@@ -23,13 +23,12 @@ Design notes
 
 * **The model is loaded exactly once.** ``load_brain()`` runs in :func:`main`
   before the server exists and the object is closed over by the chat handler.
-  Loading it per message would push 4.7 GB into VRAM on every turn and OOM.
+  Loading it per message would push roughly 9 GB into VRAM on every turn and OOM.
 
-* **Plots go through ``gr.Plot``, not ``gr.HTML``.** Gradio injects component
-  content with ``innerHTML`` and browsers refuse to run ``<script>`` tags
-  inserted that way, so inlining a Plotly document renders nothing at all. The
-  figure is instead recovered from the saved document and handed over as a real
-  Plotly object.
+* **Plots go through a fixed row of ``gr.HTML`` iframes.** A ``gr.Gallery``
+  accepts raster images only, and a ``gr.Plot`` cannot be created per turn. The
+  saved Plotly document is inlined in an iframe's ``srcdoc`` instead, which keeps
+  zoom, pan and hover working without depending on Gradio's file route.
 
 * **A figure that cannot be recovered is never fatal.** The text answer still
   arrives and names the file; see :func:`figure_from_plot_file`.
@@ -72,6 +71,7 @@ except ImportError:  # pragma: no cover - plotter is a hard dep in practice
     plotter = None
 
 run_agent = core.run_agent
+run_agent_with_planner = core.run_agent_with_planner
 load_brain = core.load_brain
 is_error = core.is_error
 #: Shared with agent_core so the log's verdict and the answer's footer agree.
@@ -105,9 +105,10 @@ def split_result(out: tuple) -> tuple[list, list, str, list, list, str]:
     log, saved, files, box = out[1 + MAX_PLOTS_IN_PANEL : 1 + MAX_PLOTS_IN_PANEL + HANDLER_TAIL]
     return list(out[0]), slots, log, list(saved), list(files), box
 
-#: ``run_agent`` is stateless -- every call is an independent query with a fresh
-#: message list. To make follow-ups like "and the same for 11 September" work, a
-#: short recap of the previous turns is prepended. Set False for one-shot mode.
+#: ``run_agent`` has no conversation memory of its own, but the UI keeps one
+#: ``FrameStore`` per browser session so handles survive between turns. A short
+#: recap of the previous turns is also prepended for date follow-ups such as
+#: "and the same for 11 September". Set False for one-shot mode.
 USE_HISTORY_CONTEXT = True
 HISTORY_TURNS = 4
 
@@ -429,7 +430,8 @@ def _format_tool_log(tool_calls: Any, text: str = "") -> str:
             mark = "обойдено"
         else:
             mark = "**ошибка**"
-        lines.append(f"- раунд {step.get('round', '?')} · `{name}` — {mark}")
+        where = "план" if step.get("planned") else f"раунд {step.get('round', '?')}"
+        lines.append(f"- {where} · `{name}` — {mark}")
         arguments = step.get("arguments")
         if isinstance(arguments, dict) and arguments:
             rendered = ", ".join(f"`{k}={v}`" for k, v in arguments.items())
@@ -598,6 +600,7 @@ def make_chat_handler(brain: Any):
         message: str,
         history: Any,
         plots_state: Any,
+        store: Any = None,
     ) -> tuple:
         messages = normalize_history(history)
         saved: list[dict[str, str]] = [
@@ -614,6 +617,13 @@ def make_chat_handler(brain: Any):
                 [entry["path"] for entry in saved],
                 "",
             )
+
+        # Gradio passes one gr.State object per browser session. Keeping the
+        # FrameStore on that state is what lets a follow-up reuse a handle from
+        # a previous turn; a fresh store per message made "plot it again" fail
+        # with unknown_frame even though the chart was on screen.
+        if not isinstance(store, core.FrameStore):
+            store = core.FrameStore()
 
         if VERBOSE:
             print(f"[web] запрос: {question[:120]}")
@@ -632,8 +642,24 @@ def make_chat_handler(brain: Any):
             )
 
         try:
-
-            result = run_agent(_context_from_history(messages) + question, brain=brain)
+            question_with_context = _context_from_history(messages) + question
+            if core.is_bulk_query(question):
+                # A matrix-scale request is the planner's job. Sending it to
+                # the single-question loop is what made a 260-cell request
+                # exhaust the tool budget halfway through.
+                result = run_agent_with_planner(
+                    question_with_context,
+                    brain=brain,
+                    store=store,
+                    verbose=VERBOSE,
+                )
+            else:
+                result = run_agent(
+                    question_with_context,
+                    brain=brain,
+                    store=store,
+                    verbose=VERBOSE,
+                )
         except Exception as exc:  # one bad turn must not kill the server
             traceback.print_exc()
             detail = f"{type(exc).__name__}: {exc}"
@@ -744,17 +770,17 @@ def _make_zip(name: str) -> Any:
 def app_download_zip(project_state, tab_state):
     name = (project_state or {}).get('project')
     if not name:
-        return project_state, gr.update(value=None, label='??? ??????? ??? ??????????')
+        return project_state, gr.update(value=None, label='Нет проекта для скачивания')
     try:
         result = project_store.export_project(name)
     except Exception as exc:
-        return project_state, gr.update(value=None, label='?????? ????????: ' + str(exc))
+        return project_state, gr.update(value=None, label='Ошибка экспорта: ' + str(exc))
     if project_store.is_error(result):
-        return project_state, gr.update(value=None, label='?????? ????????: ' + str(result.get('error')))
+        return project_state, gr.update(value=None, label='Ошибка экспорта: ' + str(result.get('error')))
     path = Path(result['path'])
     if not path.exists():
-        return project_state, gr.update(value=None, label='ZIP ?? ??????')
-    return project_state, gr.update(value=str(path), label='??????? ' + path.name + ' (' + str(result.get('size')) + ')', visible=True)
+        return project_state, gr.update(value=None, label='ZIP не найден')
+    return project_state, gr.update(value=str(path), label='Готово ' + path.name + ' (' + str(result.get('size')) + ')', visible=True)
 
 
 def build_demo(brain: Any) -> gr.Blocks:
@@ -845,8 +871,12 @@ def build_demo(brain: Any) -> gr.Blocks:
             )
 
         plots_state = gr.State([])
+        # One FrameStore per browser session. The chat handler mutates it, so a
+        # follow-up can plot a handle fetched in an earlier turn without the
+        # model having to re-download the data.
+        session_store = gr.State(core.FrameStore())
 
-        def submit(text, history, state, logon):
+        def submit(text, history, state, logon, store):
             if not _message_text(text):
                 gr.Info("Введите вопрос.")
                 return gr.skip()
@@ -854,7 +884,7 @@ def build_demo(brain: Any) -> gr.Blocks:
             # для этого запроса; в лог и историю логин не попадает.
             if logon and logon.strip():
                 os.environ["SUPERMAG_LOGON"] = logon.strip()
-            return chat_and_plot(text, history, state)
+            return chat_and_plot(text, history, state, store)
 
         outputs = [
             chatbot,
@@ -866,12 +896,12 @@ def build_demo(brain: Any) -> gr.Blocks:
         ]
         send.click(
             submit,
-            inputs=[textbox, chatbot, plots_state, sm_logon],
+            inputs=[textbox, chatbot, plots_state, sm_logon, session_store],
             outputs=outputs,
         )
         textbox.submit(
             submit,
-            inputs=[textbox, chatbot, plots_state, sm_logon],
+            inputs=[textbox, chatbot, plots_state, sm_logon, session_store],
             outputs=outputs,
         )
 
@@ -899,7 +929,7 @@ def build_demo(brain: Any) -> gr.Blocks:
 def main() -> None:
     print(f"🎛 Gradio {GRADIO_VERSION}")
     # Load the brain exactly once, before the server exists.
-    print("⏳ Загружаю Qwen 2.5 7B в VRAM (один раз на весь сеанс)...")
+    print("⏳ Загружаю Qwen 2.5 14B в VRAM (один раз на весь сеанс)...")
     brain = load_brain()
     if is_error(brain):
         print(f"\n❌ Мозг не загрузился: {brain.get('error')}: {brain.get('message')}")
