@@ -2592,7 +2592,11 @@ def test_normalize_tool_args_accepts_legacy_planner_spellings():
     """Planner JSON is not schema-validated; the executor translates it once."""
     assert ac.normalize_tool_args(
         "plot_components", {"df": "raw:irt:2024-09-10", "component": "H"}
-    ) == {"df_descriptor": "raw:irt:2024-09-10", "components": ["H"]}
+    ) == {
+        "df_descriptor": "raw:irt:2024-09-10",
+        "components": ["H"],
+        "filename": "raw_irt_2024-09-10_H.html",
+    }
     assert ac.normalize_tool_args(
         "fetch_observatory_data", {"station": "IRT", "date": "2024-09-10"}
     ) == {
@@ -2611,12 +2615,30 @@ def test_normalize_tool_args_accepts_legacy_planner_spellings():
             "station_code": "IRT",
             "date": "2024-09-10",
         },
-    ) == {"df_descriptor": "raw:irt:2024-09-10", "components": ["H"]}
+    ) == {
+        "df_descriptor": "raw:irt:2024-09-10",
+        "components": ["H"],
+        "filename": "raw_irt_2024-09-10_H.html",
+    }
     # A plot plan that knows only station/date gets the exact handle the
     # preceding fetch will create.
     assert ac.normalize_tool_args(
         "plot_components", {"station": "IRT", "date": "2024-09-10", "component": "H"}
-    ) == {"df_descriptor": "raw:irt:2024-09-10", "components": ["H"]}
+    ) == {
+        "df_descriptor": "raw:irt:2024-09-10",
+        "components": ["H"],
+        "filename": "raw_irt_2024-09-10_H.html",
+    }
+    # A plan that explicitly names the output file keeps it; only the missing
+    # filename is derived, so user/model naming is not overridden.
+    assert ac.normalize_tool_args(
+        "plot_components",
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "components": ["H"],
+            "filename": "mine.html",
+        },
+    )["filename"] == "mine.html"
 
 
 def test_llm_planner_normalises_unknown_tools_to_free_form():
@@ -2635,6 +2657,7 @@ def test_llm_planner_normalises_unknown_tools_to_free_form():
     assert state.tasks[0].tool_args == {
         "df_descriptor": "raw:irt:2024-09-10",
         "components": ["H"],
+        "filename": "raw_irt_2024-09-10_H.html",
     }
     assert state.tasks[1].tool_name == "run_agent"
     assert state.tasks[1].tool_args == {"query": "Объясни результат"}
@@ -2794,31 +2817,49 @@ def test_shared_framestore_run_agent_two_calls_same_store(
 def test_planner_plot_graph_alias_executes_directly(monkeypatch, tmp_path):
     """The model's invented "plot_graph" must become plot_components, not a
     model round-trip. It also omits components; the handler's H default is the
-    same default the deterministic planner uses."""
+    same default the deterministic planner uses. Two stations must still produce
+    two files, not overwrite the one default filename."""
     monkeypatch.setattr(ac, "OFFLINE", True)
     monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
 
     plan_json = (
         '{"tasks":['
-        '{"id":"step_001","description":"Скачай BRW",'
+        '{"id":"step_001","description":"Скачай IRT",'
         '"tool_name":"fetch_observatory_data",'
-        '"tool_args":{"station_code":"BRW","start_date":"2024-10-10","end_date":"2024-10-10"}},'
-        '{"id":"step_002","description":"Построй график",'
+        '"tool_args":{"station_code":"IRT","start_date":"2024-09-10","end_date":"2024-09-10"}},'
+        '{"id":"step_002","description":"Скачай API",'
+        '"tool_name":"fetch_observatory_data",'
+        '"tool_args":{"station_code":"API","start_date":"2024-09-10","end_date":"2024-09-10"}},'
+        '{"id":"step_003","description":"Построй график IRT",'
         '"tool_name":"plot_graph",'
-        '"tool_args":{"df_descriptor":"raw:brw:2024-10-10",'
-        '"station_code":"BRW","date":"2024-10-10"}}]}'
+        '"tool_args":{"df_descriptor":"raw:irt:2024-09-10",'
+        '"station_code":"IRT","date":"2024-09-10"}},'
+        '{"id":"step_004","description":"Построй график API",'
+        '"tool_name":"plot_graph",'
+        '"tool_args":{"df_descriptor":"raw:api:2024-09-10",'
+        '"station_code":"API","date":"2024-09-10"}}]}'
     )
     brain = _FetchThenPlotBrain(plan_json)
     result = ac.run_agent_with_planner(
         "Скачай и построй", brain=brain, verbose=False
     )
     assert result["ok"], result
-    assert result["state"]["tasks"][1]["tool_name"] == "plot_components"
-    direct = result["results"][1]["result"]["tool_calls"][0]
-    assert direct["planned"] is True
-    assert direct["tool"] == "plot_components"
-    assert direct["arguments"]["components"] == ["H"]
-    assert result["plots"]
+    assert [t["tool_name"] for t in result["state"]["tasks"]] == [
+        "fetch_observatory_data",
+        "fetch_observatory_data",
+        "plot_components",
+        "plot_components",
+    ]
+    plots = [r["result"]["tool_calls"][0] for r in result["results"][2:]]
+    assert all(call["planned"] is True for call in plots)
+    assert [call["tool"] for call in plots] == ["plot_components", "plot_components"]
+    assert [call["arguments"]["components"] for call in plots] == [["H"], ["H"]]
+    assert [call["arguments"]["filename"] for call in plots] == [
+        "raw_irt_2024-09-10_H.html",
+        "raw_api_2024-09-10_H.html",
+    ]
+    assert len(result["plots"]) == 2, result["plots"]
+    assert "Построено графиков: 2." in result["text"], result["text"]
 
 
 def test_shared_framestore_through_planner(monkeypatch, tmp_path):

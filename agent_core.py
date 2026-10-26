@@ -1363,6 +1363,44 @@ _TOOL_ALIASES = {
 }
 
 
+def _slug(value: Any) -> str:
+    """A filename-safe fragment for a planner-generated chart name."""
+    text = re.sub(r"[^0-9A-Za-z_.-]+", "_", str(value or "").strip())
+    return text.strip("_") or "plot"
+
+
+def _default_plot_filename(name: str, args: dict[str, Any]) -> str:
+    """Give a planned chart a unique file when the plan omitted ``filename``.
+
+    The plot handlers fall back to one shared name (``plot_geomagnetic_
+    components.html``). Two direct station tasks would then overwrite each
+    other, leaving one chart while the plan says two. Deriving the name from the
+    frame handle makes direct execution as safe as the model's own filenames.
+    """
+    components = args.get("components") or (
+        [args["component"]] if args.get("component") else ["H"]
+    )
+    component_slug = "_".join(_slug(item) for item in components)
+    if name == "plot_components":
+        handle = args.get("df_descriptor")
+        if handle:
+            return f"{_slug(handle)}_{component_slug}.html"
+    if name == "plot_overlay":
+        stations = args.get("stations") or []
+        dates = args.get("dates") or []
+        if stations and dates:
+            station_slug = "_".join(_slug(item) for item in stations)
+            return (
+                f"overlay_{station_slug}_{_slug(dates[0])}_{_slug(dates[-1])}"
+                f"_{component_slug}.html"
+            )
+    if name == "plot_comparison":
+        df1, df2 = args.get("df1"), args.get("df2")
+        if df1 and df2:
+            return f"compare_{_slug(df1)}_{_slug(df2)}_{component_slug}.html"
+    return ""
+
+
 def normalize_tool_name(tool_name: Any) -> str:
     """Return a registered handler name, or ``run_agent`` for an unknown plan."""
     name = str(tool_name or "").strip()
@@ -1428,6 +1466,17 @@ def normalize_tool_args(tool_name: Any, args: Any) -> dict[str, Any]:
             out.get("station_code") or out.get("station"),
             out.get("start_date") or out.get("date"),
         )
+
+    # A plan that names the frame but not the output file would make every direct
+    # plot write the handler's one default filename and overwrite the previous
+    # chart. Derive a distinct name from the canonical frame/selection instead.
+    if (
+        name in {"plot_components", "plot_overlay", "plot_comparison"}
+        and not out.get("filename")
+    ):
+        filename = _default_plot_filename(name, out)
+        if filename:
+            out["filename"] = filename
 
     # Drop keys the handler does not accept. A plan carrying 'station' for
     # plot_components is not a reason to pass an unknown kwarg into a handler;
