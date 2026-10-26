@@ -2639,6 +2639,15 @@ def test_normalize_tool_args_accepts_legacy_planner_spellings():
             "filename": "mine.html",
         },
     )["filename"] == "mine.html"
+    assert ac.normalize_tool_args(
+        "plot_space_weather_comparison",
+        {
+            "ground_df_descriptor": "raw:irt:2024-05-10",
+            "solar_wind_df_descriptor": "sw:omni:2024-05-01",
+            "ground_component": "H",
+            "solar_wind_components": ["Bz", "V"],
+        },
+    )["filename"] == "space_raw_irt_2024-05-10_vs_sw_omni_2024-05-01_H.html"
 
 
 def test_llm_planner_normalises_unknown_tools_to_free_form():
@@ -3924,6 +3933,43 @@ def test_plot_space_weather_comparison_valid_args_pass_the_gate():
     )
     assert ac.is_error(payload)
     assert payload["error"] == "missing_dependency"
+
+
+def test_space_weather_plots_get_distinct_filenames(monkeypatch, tmp_path):
+    """Ten comparisons on one day must not all write space_H_vs_Bz_V.html."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = ac.FrameStore()
+    for station in ("IRT", "API"):
+        payload, _ = ac.HANDLERS["fetch_observatory_data"](
+            {"station_code": station, "start_date": "2024-05-10", "end_date": "2024-05-10"},
+            store,
+        )
+        assert not ac.is_error(payload), payload
+    # The offline ground frame is always 2025-03-10; the solar-wind frame must
+    # use the same synthetic day or the alignment correctly refuses to compare
+    # two different epochs.
+    payload, _ = ac.HANDLERS["fetch_solar_wind"](
+        {"start_date": "2025-03-10", "end_date": "2025-03-10"}, store
+    )
+    assert not ac.is_error(payload), payload
+
+    paths = []
+    for station in ("IRT", "API"):
+        args = ac.normalize_tool_args(
+            "plot_space_weather_comparison",
+            {
+                "ground_df_descriptor": f"raw:{station.lower()}:2024-05-10",
+                "solar_wind_df_descriptor": "sw:omni:2025-03-10",
+                "ground_component": "H",
+                "solar_wind_components": ["Bz", "V"],
+            },
+        )
+        payload, _ = ac.HANDLERS["plot_space_weather_comparison"](args, store)
+        assert not ac.is_error(payload), payload
+        paths.append(payload["path"])
+    assert len(set(paths)) == 2, paths
+    assert all(Path(path).exists() for path in paths)
 
 
 

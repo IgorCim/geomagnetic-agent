@@ -1398,6 +1398,15 @@ def _default_plot_filename(name: str, args: dict[str, Any]) -> str:
         df1, df2 = args.get("df1"), args.get("df2")
         if df1 and df2:
             return f"compare_{_slug(df1)}_{_slug(df2)}_{component_slug}.html"
+    if name == "plot_space_weather_comparison":
+        ground = args.get("ground_df_descriptor")
+        solar = args.get("solar_wind_df_descriptor")
+        ground_component = args.get("ground_component") or "H"
+        if ground and solar:
+            return (
+                f"space_{_slug(ground)}_vs_{_slug(solar)}"
+                f"_{_slug(ground_component)}.html"
+            )
     return ""
 
 
@@ -1471,7 +1480,13 @@ def normalize_tool_args(tool_name: Any, args: Any) -> dict[str, Any]:
     # plot write the handler's one default filename and overwrite the previous
     # chart. Derive a distinct name from the canonical frame/selection instead.
     if (
-        name in {"plot_components", "plot_overlay", "plot_comparison"}
+        name
+        in {
+            "plot_components",
+            "plot_overlay",
+            "plot_comparison",
+            "plot_space_weather_comparison",
+        }
         and not out.get("filename")
     ):
         filename = _default_plot_filename(name, out)
