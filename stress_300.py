@@ -503,6 +503,7 @@ if not r_list.get("ok"):
 print("\n" + "=" * 72)
 print("STRESS TEST SUMMARY")
 print("=" * 72)
+print("projects:", ", ".join((PROJECT_A, PROJECT_B, PROJECT_C)))
 print("matrix A:", len(htmlA), "charts;", rA.get("coverage"))
 print("matrix B:", len(htmlB), "charts;", rB.get("coverage"))
 print("comparisons:", len(htmlC), "charts;", rC.get("coverage"))
