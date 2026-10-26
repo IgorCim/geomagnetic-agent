@@ -7578,8 +7578,10 @@ def _planned_task_result(
     A plan is structured data: when it names a registered tool and carries every
     required argument, there is nothing for the model to decide. Running the
     handler directly is faster and more reliable than asking the model to repeat
-    the plan. ``None`` means "not fully specified"; the caller then falls back to
-    ``run_agent``, which can fill the gap and recover from an error.
+    the plan. ``None`` means "not fully specified"; the caller may then ask the
+    model to fill the missing arguments. A returned dict with ``ok=False`` is a
+    terminal outcome and must not be retried through open-ended ``run_agent``:
+    that path can change the requested station or date.
     """
     name = normalize_tool_name(getattr(task, "tool_name", ""))
     if name == "run_agent" or name not in HANDLERS:
@@ -7686,22 +7688,6 @@ def _format_task_plan(task: Any) -> str:
     )
 
 
-def _format_plan_failure(direct: dict[str, Any]) -> str:
-    """Turn a failed direct plan call into the next sub-agent's context."""
-    calls = direct.get("tool_calls") or []
-    if not calls:
-        return ""
-    call = calls[0]
-    message = call.get("message") or direct.get("text") or ""
-    hint = call.get("hint") or ""
-    return (
-        "[PLANNER] Прямой вызов плана завершился ошибкой: "
-        f"{call.get('tool')} -> {call.get('error')}: {message}. "
-        + (f"Подсказка: {hint}. " if hint else "")
-        + "Исправь аргументы или запроси недостающие данные и выполни задачу."
-    )
-
-
 def _strip_child_plot_tally(text: str) -> str:
     """Drop a child ``run_agent`` plot footer before the planner totals them.
 
@@ -7723,12 +7709,15 @@ def run_agent_with_planner(
     """Run a possibly-large request through the external planner.
 
     One :class:`~agent_state.TaskStep` per unit ("26 станций x 10 событий"
-    expands into hundreds of steps) and each step is executed by its own
-    ``run_agent`` call. With ``use_llm_planner=True`` (default) a real request is
-    split by the model itself (:class:`~agent_planner.LLMPlanner`), which beats
-    the regex planner on free-form phrasing; a parse failure falls back to the
-    deterministic :class:`~agent_planner.Planner`. When ``brain`` is absent the
-    model cannot plan, so the deterministic planner is used.
+    expands into hundreds of steps). A fully specified step is executed by
+    calling its handler directly; only a step with missing arguments is handed
+    to ``run_agent``. A failed fully specified step is terminal, because an
+    open-ended retry could silently change the requested station or date. With
+    ``use_llm_planner=True`` (default) a real request is split by the model
+    itself (:class:`~agent_planner.LLMPlanner`), which beats the regex planner on
+    free-form phrasing; a parse failure falls back to the deterministic
+    :class:`~agent_planner.Planner`. When ``brain`` is absent the model cannot
+    plan, so the deterministic planner is used.
 
     CRITICAL: every subtask shares the same :class:`FrameStore` (created here if
     not passed). Frames fetched by step 1 are visible to step 260; without this
@@ -7811,18 +7800,16 @@ def run_agent_with_planner(
             print(f"\n🔧 Выполняю: {task.id} — {task.description}")
 
         # A plan that names a real tool and carries every required argument is
-        # already a complete instruction. Execute it directly; only an
-        # incomplete or failed plan needs the model. This is what makes the
-        # planner's tool_args load-bearing instead of decorative.
+        # already a complete instruction. Execute it directly; only a task that
+        # is *not fully specified* may use the model to fill the gap. A failed
+        # fully-specified task is terminal: re-entering run_agent here gives the
+        # model freedom to change the requested station or date (the BOX->BSL
+        # and 2024-05-08->2024-05-13 substitutions observed in the field).
         direct = _planned_task_result(task, shared, verbose=verbose)
-        if direct is not None and direct.get("ok"):
+        if direct is not None:
             result = direct
         else:
             description = task.description
-            if direct is not None:
-                failure = _format_plan_failure(direct)
-                if failure:
-                    description = f"{description}\n\n{failure}"
             schemas = select_tools_for_task(task.tool_name)
             sub_prompt = build_dynamic_prompt(
                 BASE_PROMPT_COMPACT,

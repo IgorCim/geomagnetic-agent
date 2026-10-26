@@ -2903,6 +2903,160 @@ def test_shared_framestore_through_planner(monkeypatch, tmp_path):
     )
 
 
+class _PlanThenReplyBrain:
+    """First call returns a planner JSON; later calls return a fixed reply."""
+
+    def __init__(self, plan_json: str, reply: str):
+        self._plan = plan_json
+        self._reply = reply
+        self.calls = 0
+
+    def chat(self, messages, tools):  # noqa: ARG002
+        self.calls += 1
+        if self.calls == 1:
+            return {"content": self._plan, "tool_calls": None}
+        return {"content": self._reply, "tool_calls": None}
+
+
+class _PlanThenSubstituteBrain:
+    """A regression model that would change the requested entity if re-entered."""
+
+    def __init__(self, plan_json: str):
+        self._plan = plan_json
+        self.calls = 0
+
+    def chat(self, messages, tools):  # noqa: ARG002
+        self.calls += 1
+        if self.calls == 1:
+            return {"content": self._plan, "tool_calls": None}
+        if self.calls == 2:
+            return {
+                "content": _text_call(
+                    "fetch_observatory_data",
+                    json.dumps(
+                        {
+                            "station_code": "BSL",
+                            "start_date": "2024-05-13",
+                            "end_date": "2024-05-13",
+                        }
+                    ),
+                ),
+                "tool_calls": None,
+            }
+        return {"content": "Готово.", "tool_calls": None}
+
+
+def test_fully_specified_plan_failure_never_reenters_model(monkeypatch):
+    """A failed direct plot must stay failed, not become BSL/2024-05-13.
+
+    This is the field failure: plot_space_weather_comparison(API, 2024-05-08)
+    returned unknown_frame, then run_agent fetched API 2024-05-13 and plotted
+    BSL instead. A fully specified task has no entity choice left, so its
+    failure is terminal.
+    """
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    store = ac.FrameStore()
+    sw_handle = create_mock_solar_wind_frame(store=store)
+    plan_json = json.dumps(
+        {
+            "tasks": [
+                {
+                    "id": "step_001",
+                    "description": "Сравни API за 2024-05-08",
+                    "tool_name": "plot_space_weather_comparison",
+                    "tool_args": {
+                        "ground_df_descriptor": "raw:api:2024-05-08",
+                        "solar_wind_df_descriptor": sw_handle,
+                        "ground_component": "H",
+                        "solar_wind_components": ["Bz", "V"],
+                    },
+                }
+            ]
+        }
+    )
+    brain = _PlanThenSubstituteBrain(plan_json)
+
+    result = ac.run_agent_with_planner(
+        "Построй сравнение для API за 2024-05-08",
+        brain=brain,
+        store=store,
+        verbose=False,
+    )
+
+    assert not result["ok"]
+    assert brain.calls == 1, "a failed fully specified task must not re-enter the model"
+    assert result["results"][0]["ok"] is False
+    assert "unknown_frame" in str(result["results"][0]["error"])
+    assert result["plots"] == []
+    assert "raw:api:2024-05-13" not in store.names()
+    assert "raw:bsl:2024-05-13" not in store.names()
+
+
+def test_fully_specified_fetch_no_data_is_terminal(monkeypatch):
+    """The same fail-closed rule applies to a plain fetch, not only plots."""
+    monkeypatch.setitem(
+        ac.HANDLERS,
+        "fetch_observatory_data",
+        lambda args, store: (
+            ac._error("no_data", "No BOX data for the requested date"),
+            "fetch failed: no_data",
+        ),
+    )
+    plan_json = json.dumps(
+        {
+            "tasks": [
+                {
+                    "id": "step_001",
+                    "description": "Скачай BOX за 2024-05-08",
+                    "tool_name": "fetch_observatory_data",
+                    "tool_args": {
+                        "station_code": "BOX",
+                        "start_date": "2024-05-08",
+                        "end_date": "2024-05-08",
+                    },
+                }
+            ]
+        }
+    )
+    brain = _PlanThenReplyBrain(plan_json, "Готово.")
+
+    result = ac.run_agent_with_planner(
+        "Скачай BOX за 2024-05-08",
+        brain=brain,
+        verbose=False,
+    )
+
+    assert not result["ok"]
+    assert brain.calls == 1
+    assert "no_data" in str(result["results"][0]["error"])
+
+
+def test_incomplete_plan_still_uses_the_model_for_repair(monkeypatch):
+    """Only a task with missing arguments may ask the model to fill the gap."""
+    plan_json = json.dumps(
+        {
+            "tasks": [
+                {
+                    "id": "step_001",
+                    "description": "Посчитай статистику",
+                    "tool_name": "get_statistics",
+                    "tool_args": {},
+                }
+            ]
+        }
+    )
+    brain = _PlanThenReplyBrain(plan_json, "Готово.")
+
+    result = ac.run_agent_with_planner(
+        "Посчитай статистику",
+        brain=brain,
+        verbose=False,
+    )
+
+    assert result["ok"], result
+    assert brain.calls == 2, "an incomplete task still needs a bounded model repair"
+
+
 # --------------------------------------------------------------------------- #
 # Phase 5 -- Generator-Executor: task matrix + batch processing
 # --------------------------------------------------------------------------- #
