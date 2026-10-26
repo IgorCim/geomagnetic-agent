@@ -3513,6 +3513,32 @@ def test_process_matrix_batch_classifies_full_partial_and_empty_stations(
     assert statuses == {"BRW": "done", "SHU": "partial", "IRT": "failed"}
 
 
+def test_run_matrix_job_is_not_green_when_a_cell_is_missing(
+    monkeypatch, tmp_path
+):
+    """A partial matrix must fail overall even if no station is fully empty."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    real_fetch = ac._handle_fetch
+
+    def flaky_fetch(args, store_):
+        if str(args.get("start_date") or "").startswith("1990"):
+            return ac._error("no_data", "no data for 1990-01-01"), "fetch failed: no_data"
+        return real_fetch(args, store_)
+
+    monkeypatch.setitem(ac.HANDLERS, "fetch_observatory_data", flaky_fetch)
+    result = ac._run_matrix_job(
+        ["2024-05-10", "1990-01-01"],
+        ["BRW"],
+        ["fetch_observatory_data"],
+        "partial",
+        store,
+    )
+    assert result["ok"] is False
+    assert result["coverage"] == "1/2"
+    assert len(result["missing_cells"]) == 1
+    assert result["missing_cells"][0]["date"] == "1990-01-01"
+
+
 def test_process_matrix_batch_marks_a_failed_cell_without_stopping_the_batch(
     monkeypatch, tmp_path
 ):

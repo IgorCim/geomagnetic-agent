@@ -5866,7 +5866,8 @@ def _run_matrix_job(
         + f". Архив: {archive}."
     )
     return {
-        "ok": empty == 0,
+        # A partial station or a provenance failure is not a green matrix run.
+        "ok": empty == 0 and not missing_cells,
         "text": text,
         "results": batches,
         "matrix_path": path,
