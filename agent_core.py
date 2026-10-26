@@ -5258,6 +5258,27 @@ def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool,
                     f"{str(payload.get('message'))[:200]}"
                 )
                 break
+            if tool == "plot_space_weather_comparison":
+                expected_ground = f"raw:{station.lower()}:{event}"
+                expected_sw = str(
+                    shared_args.get("solar_wind_df_descriptor") or ""
+                ).strip()
+                got_ground = str(payload.get("ground_handle") or "").strip()
+                got_sw = str(payload.get("solar_wind_handle") or "").strip()
+                if not got_ground or got_ground.lower() != expected_ground:
+                    event_failures[event].append(
+                        "provenance_mismatch: comparison used "
+                        f"{got_ground or '<missing>'} instead of {expected_ground}"
+                    )
+                    break
+                if expected_sw and (
+                    not got_sw or got_sw.lower() != expected_sw.lower()
+                ):
+                    event_failures[event].append(
+                        "provenance_mismatch: comparison used "
+                        f"{got_sw or '<missing>'} instead of {expected_sw}"
+                    )
+                    break
             if tool == "fetch_observatory_data" and payload.get("frame_handle"):
                 frame = store.get(payload["frame_handle"])
                 if frame is not None:

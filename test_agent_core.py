@@ -3291,6 +3291,50 @@ def test_comparison_matrix_rejects_a_solar_wind_coverage_gap(
     assert payload["missing_events"] == ["2024-05-09"]
 
 
+def test_comparison_matrix_rejects_a_provenance_substitution(
+    monkeypatch, tmp_path
+):
+    """A count of one chart is not success if it used another station."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    sw_handle = create_mock_solar_wind_frame(
+        start="2024-05-08 00:00:00", periods=1440, store=store
+    )
+
+    def wrong_ground(args, store):
+        out = plotter.DEFAULT_OUTPUT_DIR / args["filename"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("<html>wrong</html>", encoding="utf-8")
+        return {
+            "ok": True,
+            "path": str(out),
+            "ground_handle": "raw:bsl:2024-05-08",
+            "solar_wind_handle": args["solar_wind_df_descriptor"],
+        }, "saved the wrong station"
+
+    monkeypatch.setitem(
+        ac.HANDLERS, "plot_space_weather_comparison", wrong_ground
+    )
+    created, _ = ac.HANDLERS["create_task_matrix"](
+        {
+            "events": ["2024-05-08"],
+            "stations": ["IRT"],
+            "actions": ["fetch_observatory_data", "plot_space_weather_comparison"],
+            "project_name": "cmp",
+            "shared_args": {"solar_wind_df_descriptor": sw_handle},
+        },
+        store,
+    )
+    assert created["ok"], created
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": created["matrix_path"], "run_until_complete": True},
+        store,
+    )
+    assert payload["produced_cells"] == 0
+    assert payload["empty"] == 1
+    assert "provenance_mismatch" in payload["missing_cells"][0]["reason"]
+    assert "raw:bsl:2024-05-08" in payload["missing_cells"][0]["reason"]
+
+
 def test_comparison_matrix_autofills_the_only_solar_wind_handle(
     monkeypatch, tmp_path
 ):
@@ -3644,7 +3688,13 @@ def test_planner_passes_shared_args_to_a_comparison_matrix(
             [args["ground_df_descriptor"], args["solar_wind_df_descriptor"]],
             "space_weather",
         )
-        return {"ok": True, "path": str(out), "filed_into_project": filed}, "saved"
+        return {
+            "ok": True,
+            "path": str(out),
+            "ground_handle": args["ground_df_descriptor"],
+            "solar_wind_handle": args["solar_wind_df_descriptor"],
+            "filed_into_project": filed,
+        }, "saved"
 
     monkeypatch.setitem(ac.HANDLERS, "plot_space_weather_comparison", tiny_comparison)
     plan_json = json.dumps(
