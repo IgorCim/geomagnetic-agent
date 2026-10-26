@@ -270,6 +270,28 @@ def print_matrix_report(label, result):
             print(f"    {date}: {str(reason)[:240]}")
 
 
+def check_matrix_shape(label, result, stations, events):
+    """The matrix must be station-grouped, with exactly the requested cells."""
+    problems = []
+    tasks = read_matrix(result).get("tasks") or []
+    if len(tasks) != len(stations):
+        problems.append(
+            f"matrix {label} has {len(tasks)} tasks != {len(stations)} stations"
+        )
+    got_stations = [str(task.get("station_code") or "") for task in tasks]
+    if len(set(got_stations)) != len(got_stations):
+        problems.append(f"matrix {label} has duplicate station tasks")
+    if set(got_stations) != set(stations):
+        problems.append(f"matrix {label} station set mismatch")
+    for task in tasks:
+        if set(task.get("events") or []) != set(events):
+            problems.append(
+                f"matrix {label} task {task.get('station_code')} date set mismatch"
+            )
+            break
+    return problems
+
+
 def check_matrix(label, result, expected):
     problems = []
     if not result.get("ok"):
@@ -294,6 +316,8 @@ def check_matrix(label, result, expected):
         archive = export.get("path") or export.get("archive")
     if not archive or not Path(str(archive)).is_file():
         problems.append(f"matrix {label} ZIP archive is missing")
+    elif Path(str(archive)).stat().st_size == 0:
+        problems.append(f"matrix {label} ZIP archive is empty")
     return problems
 
 
@@ -391,12 +415,13 @@ r_list = run_stage(
 # Final gate
 # ---------------------------------------------------------------------------
 failures = []
-for label, result, expected in (
-    ("A", rA, 200),
-    ("B", rB, 50),
-    ("C", rC, 50),
+for label, result, expected, stations, events in (
+    ("A", rA, 200, STATIONS, DATES_A),
+    ("B", rB, 50, HIGHLAT, DATES_B),
+    ("C", rC, 50, STATIONS, STORM_DATES),
 ):
     failures.extend(check_matrix(label, result, expected))
+    failures.extend(check_matrix_shape(label, result, stations, events))
     print_matrix_report(label, result)
 
 if len(htmlA) != 200:
@@ -407,12 +432,15 @@ if len(htmlC) != 50:
     failures.append(f"comparison charts: {len(htmlC)} != 50")
 if len(set(comp_plots)) != len(comp_plots):
     failures.append("comparison filenames are not unique")
-if len(set(htmlA + htmlB + htmlC)) != 300:
+all_paths = htmlA + htmlB + htmlC
+if len(set(all_paths)) != 300:
     failures.append("total distinct chart paths != 300")
 for label, paths in (("A", htmlA), ("B", htmlB), ("C", htmlC)):
     names = [path.name for path in paths]
     if len(set(names)) != len(names):
         failures.append(f"matrix {label} has duplicate chart filenames")
+if any(path.stat().st_size == 0 for path in all_paths):
+    failures.append("one or more HTML charts are empty")
 
 # Provenance: a count of 50 is not enough if the matrix used plot_components
 # instead of plot_space_weather_comparison, or omitted shared_args.
@@ -438,7 +466,9 @@ for task_actions in matrix_actions(rC):
         break
 try:
     matrixC = read_matrix(rC)
-    if (
+    if not matrixC:
+        failures.append("comparison matrix JSON is missing")
+    elif (
         matrixC.get("shared_args", {}).get("solar_wind_df_descriptor")
         != "sw:omni:2024-05-01"
     ):
@@ -488,7 +518,10 @@ print(
     "to give all ten stations twenty complete days."
 )
 print("expected service notes:")
-print("  - SuperMAG: skipped because SUPERMAG_LOGON is not set")
+if r_smag is None:
+    print("  - SuperMAG: skipped because SUPERMAG_LOGON is not set")
+else:
+    print("  - SuperMAG: exercised with SUPERMAG_LOGON")
 print("  - NOAA solar_events: 0 records for May 2024 (7-day current window only)")
 print("  - NOAA alerts/forecast: current window only, not historical May 2024")
 print("  - ISWA perturbation map: service_decommissioned by NASA")
