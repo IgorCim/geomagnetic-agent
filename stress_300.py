@@ -55,6 +55,7 @@ def _find_repo():
                 pass
 
     seen = set()
+    resolved = []
     for candidate in candidates:
         try:
             candidate = candidate.expanduser().resolve()
@@ -64,7 +65,16 @@ def _find_repo():
             continue
         seen.add(candidate)
         if (candidate / "agent_core.py").is_file():
+            resolved.append(candidate)
+
+    # Prefer the checkout that also contains this file.  A stale
+    # /content/geomagnetic_agent clone can have agent_core.py but not the
+    # coverage-valid stress cell; choosing it would silently run old code.
+    for candidate in resolved:
+        if (candidate / "stress_300.py").is_file():
             return candidate
+    if resolved:
+        return resolved[0]
     raise RuntimeError(
         "agent_core.py not found. Set DIR to the repository directory "
         "(for example /kaggle/working/geomagnetic-agent) and rerun this cell."
