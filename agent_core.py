@@ -1349,9 +1349,24 @@ def expected_frame_handle(station: Any, date: Any) -> str:
     return f"raw:{station_code.lower()}:{day}" if station_code and day else ""
 
 
+#: Names a planner invents for an existing tool. This is deliberately small and
+#: only covers spellings that cannot mean a different handler: a plan that says
+#: "plot_graph" with a frame descriptor wants ``plot_components``, not a model
+#: round-trip. Anything genuinely ambiguous still falls back to ``run_agent``.
+_TOOL_ALIASES = {
+    "plot": "plot_components",
+    "plot_graph": "plot_components",
+    "plot_chart": "plot_components",
+    "make_plot": "plot_components",
+    "build_plot": "plot_components",
+    "draw_plot": "plot_components",
+}
+
+
 def normalize_tool_name(tool_name: Any) -> str:
     """Return a registered handler name, or ``run_agent`` for an unknown plan."""
     name = str(tool_name or "").strip()
+    name = _TOOL_ALIASES.get(name.lower(), name)
     return name if name in TOOLS_BY_NAME else "run_agent"
 
 
@@ -1389,6 +1404,13 @@ def normalize_tool_args(tool_name: Any, args: Any) -> dict[str, Any]:
 
     if isinstance(out.get("components"), str):
         out["components"] = [out["components"]]
+
+    # ``plot_components`` itself defaults a chart with no component to H. Mirror
+    # that default here: a plan that names the frame and the plot tool but omits
+    # the obvious H is still fully executable. Other tools keep their own
+    # multi-component defaults (H,D,I for derive; X,Y,Z,F,H for statistics).
+    if name == "plot_components" and not out.get("components"):
+        out["components"] = ["H"]
 
     if "project_name" in out and "name" in properties and "name" not in out:
         out["name"] = out.pop("project_name")
@@ -7616,6 +7638,16 @@ def _format_plan_failure(direct: dict[str, Any]) -> str:
     )
 
 
+def _strip_child_plot_tally(text: str) -> str:
+    """Drop a child ``run_agent`` plot footer before the planner totals them.
+
+    Each child step says "Построено графиков: 1" for its own chart. Concatenating
+    those notes made a four-step plan with two charts end with "Построено
+    графиков: 1" -- the last child's local count, not the plan's total.
+    """
+    return re.split(r"\n\s*Построено графиков:", text, maxsplit=1)[0].rstrip()
+
+
 def run_agent_with_planner(
     query: str,
     brain: Any = None,
@@ -7792,13 +7824,19 @@ def run_agent_with_planner(
     else:
         text = f"Выполнено {done} из {len(results)} подзадач. Ошибок: {failed}."
         notes = [
-            str((item.get("result") or {}).get("text") or "").strip()
+            _strip_child_plot_tally(
+                str((item.get("result") or {}).get("text") or "").strip()
+            )
             for item in results
             if item["ok"]
         ]
         notes = [note for note in notes if note]
         if notes:
             text += "\n" + "\n".join(f"- {note[:220]}" for note in notes[:8])
+        if all_plots and "Построено графиков" not in text:
+            names = _unique([Path(str(plot)).name for plot in all_plots])
+            text += f"\n\nПостроено графиков: {len(names)}."
+            text += "\nФайлы: " + ", ".join(names)
 
     return {
         "ok": failed == 0,

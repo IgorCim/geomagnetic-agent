@@ -2541,6 +2541,7 @@ def test_run_agent_with_planner_executes_each_subtask(monkeypatch, tmp_path):
     assert all(r["ok"] for r in result["results"])
     assert result["state"]["current_task_index"] == 4
     assert "Выполнено 4 из 4" in result["text"]
+    assert "Построено графиков: 2." in result["text"], result["text"]
     assert brain.calls == 1, "only the planner needs the model; steps are direct"
 
 
@@ -2602,6 +2603,15 @@ def test_normalize_tool_args_accepts_legacy_planner_spellings():
     assert ac.normalize_tool_args("create_project", {"project_name": "events"}) == {
         "name": "events"
     }
+    assert ac.normalize_tool_name("plot_graph") == "plot_components"
+    assert ac.normalize_tool_args(
+        "plot_graph",
+        {
+            "df_descriptor": "raw:irt:2024-09-10",
+            "station_code": "IRT",
+            "date": "2024-09-10",
+        },
+    ) == {"df_descriptor": "raw:irt:2024-09-10", "components": ["H"]}
     # A plot plan that knows only station/date gets the exact handle the
     # preceding fetch will create.
     assert ac.normalize_tool_args(
@@ -2779,6 +2789,36 @@ def test_shared_framestore_run_agent_two_calls_same_store(
     )
     assert out2["ok"], out2
     assert out2["plots"], "plot of a handle created in the previous call must resolve"
+
+
+def test_planner_plot_graph_alias_executes_directly(monkeypatch, tmp_path):
+    """The model's invented "plot_graph" must become plot_components, not a
+    model round-trip. It also omits components; the handler's H default is the
+    same default the deterministic planner uses."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+
+    plan_json = (
+        '{"tasks":['
+        '{"id":"step_001","description":"Скачай BRW",'
+        '"tool_name":"fetch_observatory_data",'
+        '"tool_args":{"station_code":"BRW","start_date":"2024-10-10","end_date":"2024-10-10"}},'
+        '{"id":"step_002","description":"Построй график",'
+        '"tool_name":"plot_graph",'
+        '"tool_args":{"df_descriptor":"raw:brw:2024-10-10",'
+        '"station_code":"BRW","date":"2024-10-10"}}]}'
+    )
+    brain = _FetchThenPlotBrain(plan_json)
+    result = ac.run_agent_with_planner(
+        "Скачай и построй", brain=brain, verbose=False
+    )
+    assert result["ok"], result
+    assert result["state"]["tasks"][1]["tool_name"] == "plot_components"
+    direct = result["results"][1]["result"]["tool_calls"][0]
+    assert direct["planned"] is True
+    assert direct["tool"] == "plot_components"
+    assert direct["arguments"]["components"] == ["H"]
+    assert result["plots"]
 
 
 def test_shared_framestore_through_planner(monkeypatch, tmp_path):
