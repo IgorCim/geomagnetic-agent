@@ -1240,6 +1240,8 @@ MATRIX_ACTION_ALIASES = {
     "hdi": "calculate_derived_components",
     "derive": "calculate_derived_components",
     "plot": "plot_components",
+    "compare_space": "plot_space_weather_comparison",
+    "space_weather": "plot_space_weather_comparison",
     "stats": "get_statistics",
     "statistics": "get_statistics",
     "anomalies": "detect_anomalies",
@@ -1569,6 +1571,7 @@ _MATRIX_TOOLS = (
     "fetch_observatory_data",
     "calculate_derived_components",
     "plot_components",
+    "plot_space_weather_comparison",
 )
 
 #: Tools that bring a frame into the store.
