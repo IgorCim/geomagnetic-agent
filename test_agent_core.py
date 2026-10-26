@@ -2450,11 +2450,49 @@ def test_planner_large_plan_still_folds_to_matrix():
     assert len(state.tasks) > ac.MATRIX_THRESHOLD
     folded = ac._factor_plan_for_matrix(state.tasks)
     assert folded is not None
-    events, stations, actions, _project = folded
+    events, stations, actions, _project, shared_args = folded
     assert events == ["2024-09-10"]
+    assert shared_args == {}
     assert "plot_components" in actions
     assert "fetch_observatory_data" in actions
     assert len(stations) == len(Planner.KNOWN_STATIONS)
+
+
+def test_comparison_plan_folds_to_matrix_with_shared_args():
+    """Direct comparison tasks can be folded without losing the shared frame."""
+    from agent_planner import TaskStep
+
+    tasks = [
+        TaskStep(
+            id=f"step_{index}",
+            description=f"Сравни {station}",
+            tool_name="plot_space_weather_comparison",
+            tool_args={
+                "ground_df_descriptor": f"raw:{station.lower()}:2024-05-14",
+                "solar_wind_df_descriptor": "sw:omni:2024-05-01",
+                "ground_component": "H",
+                "solar_wind_components": ["Bz", "V"],
+                "filename": f"wrong_{station}.html",
+            },
+        )
+        for index, station in enumerate(("IRT", "API"), start=1)
+    ]
+    folded = ac._factor_plan_for_matrix(tasks)
+    assert folded is not None
+    events, stations, actions, _project, shared_args = folded
+    assert events == ["2024-05-14"]
+    assert stations == ["API", "IRT"]
+    assert actions == ["plot_space_weather_comparison"]
+    assert shared_args == {
+        "solar_wind_df_descriptor": "sw:omni:2024-05-01",
+        "ground_component": "H",
+        "solar_wind_components": ["Bz", "V"],
+    }
+
+    tasks[1].tool_args["ground_component"] = "D"
+    assert ac._factor_plan_for_matrix(tasks) is None, (
+        "conflicting per-cell frame arguments cannot share one matrix"
+    )
 
 
 def test_planner_batch_statistics():

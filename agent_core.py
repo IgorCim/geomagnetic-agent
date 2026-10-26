@@ -1255,6 +1255,7 @@ _MATRIX_PER_UNIT_TOOLS = {
     "calculate_derived_math",
     "plot_components",
     "plot_overlay",
+    "plot_space_weather_comparison",
     "calculate_mlt",
     "calculate_local_time",
 }
@@ -5667,18 +5668,23 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
 
 def _factor_plan_for_matrix(
     tasks: Sequence[Any],
-) -> tuple[list[str], list[str], list[str], str] | None:
-    """Re-derive (events, stations, actions, project) from a >threshold plan.
+) -> tuple[list[str], list[str], list[str], str, dict[str, Any]] | None:
+    """Re-derive (events, stations, actions, project, shared_args) from a plan.
 
     A deterministic planner that expands "26 станций" already produced one task
     per station; instead of running 26 model round-trips we fold the plan back
     into a matrix. Returns None when the plan mixes tools a matrix cell cannot
     express, in which case the caller executes the plan as generated.
+
+    Comparison plans carry a solar-wind handle and component choices on every
+    task. Those are frame-level, not cell-level, so they are collected once into
+    ``shared_args``; conflicting values mean the plan cannot be one matrix.
     """
     events: set[str] = set()
     stations: set[str] = set()
     actions: list[str] = []
     project_name = ""
+    shared_args: dict[str, Any] = {}
     for task in tasks:
         name = getattr(task, "tool_name", None)
         tool_args = getattr(task, "tool_args", None) or {}
@@ -5705,8 +5711,13 @@ def _factor_plan_for_matrix(
         if not station or not event:
             # A normalised plan carries the canonical handle instead of the
             # legacy station/date pair. Recover the cell coordinates from it so
-            # the matrix folding still recognises the plan.
-            handle = str(tool_args.get("df_descriptor") or "").strip().lower()
+            # the matrix folding still recognises the plan. Comparison tasks
+            # name their ground frame with ground_df_descriptor.
+            handle = str(
+                tool_args.get("df_descriptor")
+                or tool_args.get("ground_df_descriptor")
+                or ""
+            ).strip().lower()
             match = re.match(r"^(?:raw|derived):([^:]+):(\d{4}-\d{2}-\d{2})$", handle)
             if match:
                 station = station or match.group(1).upper()
@@ -5717,9 +5728,31 @@ def _factor_plan_for_matrix(
             events.add(event)
         if name not in actions:
             actions.append(name)
+        if name == "plot_space_weather_comparison":
+            for key in (
+                "solar_wind_df_descriptor",
+                "ground_component",
+                "solar_wind_components",
+            ):
+                if key not in tool_args:
+                    continue
+                value = tool_args[key]
+                if key in shared_args:
+                    if json.dumps(shared_args[key], sort_keys=True) != json.dumps(
+                        value, sort_keys=True
+                    ):
+                        return None
+                else:
+                    shared_args[key] = value
     if not events or not stations or not actions:
         return None
-    return sorted(events), sorted(stations), actions, project_name or "batch_matrix"
+    return (
+        sorted(events),
+        sorted(stations),
+        actions,
+        project_name or "batch_matrix",
+        shared_args,
+    )
 
 
 def _run_matrix_job(
@@ -7910,13 +7943,21 @@ def run_agent_with_planner(
     if len(state.tasks) > MATRIX_THRESHOLD:
         factored = _factor_plan_for_matrix(state.tasks)
         if factored is not None:
-            events, stations, actions, project_name = factored
+            events, stations, actions, project_name, shared_args = factored
             if verbose:
                 print(
                     f"🔄 План из {len(state.tasks)} подзадач свернут в матрицу "
                     f"({len(events)}x{len(stations)}, действия: {actions})."
                 )
-            return _run_matrix_job(events, stations, actions, project_name, shared, verbose=verbose)
+            return _run_matrix_job(
+                events,
+                stations,
+                actions,
+                project_name,
+                shared,
+                verbose=verbose,
+                shared_args=shared_args,
+            )
 
     # A single "run_agent" task means the planner did not recognise the request:
     # fall back to the ordinary single-question loop.
