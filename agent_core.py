@@ -5156,7 +5156,13 @@ def _ensure_matrix_fetch(
     if store.get(slot) is not None:
         return True, ""
     payload, note = _handle_fetch(
-        {"station_code": station, "start_date": event, "end_date": event}, store
+        {
+            "station_code": station,
+            "start_date": event,
+            "end_date": event,
+            "data_type": "best-avail",
+        },
+        store,
     )
     if is_error(payload):
         return False, f"fetch: {payload.get('error')}: {str(payload.get('message'))[:200]}"
@@ -5331,7 +5337,8 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
                 "plot_space_weather_comparison needs shared_args.solar_wind_df_descriptor.",
                 hint="Call fetch_solar_wind first, then pass its sw:... handle.",
             ), "create_task_matrix refused: missing solar_wind_df_descriptor."
-        if store.get(solar_wind) is None:
+        sw_frame = store.get(solar_wind)
+        if sw_frame is None:
             return _error(
                 "unknown_frame",
                 f"Solar-wind frame {solar_wind!r} is not in the store.",
@@ -5339,6 +5346,32 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
                 hint="Call fetch_solar_wind before create_task_matrix.",
                 available=store.names(),
             ), "create_task_matrix refused: unknown solar-wind handle."
+        try:
+            stamps = pd.to_datetime(
+                sw_frame["timestamp"], utc=True, errors="coerce"
+            ).dropna()
+            sw_start = stamps.min().date()
+            sw_end = stamps.max().date()
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return _error(
+                "invalid_solar_wind",
+                "The solar-wind frame has no usable timestamp column.",
+                handle=solar_wind,
+            ), "create_task_matrix refused: invalid solar-wind frame."
+        missing_events = [
+            event
+            for event in events
+            if not (sw_start <= date.fromisoformat(event) <= sw_end)
+        ]
+        if missing_events:
+            return _error(
+                "solar_wind_coverage",
+                "The solar-wind frame does not cover every requested event.",
+                handle=solar_wind,
+                coverage=f"{sw_start.isoformat()}..{sw_end.isoformat()}",
+                missing_events=missing_events,
+                hint="Fetch solar wind for the whole comparison period first.",
+            ), "create_task_matrix refused: solar-wind coverage gap."
 
     # Open (or reuse) the project so data and charts are filed under it and the
     # final export_project has a tree to zip. create_project is idempotent.
@@ -5703,6 +5736,8 @@ def _run_matrix_job(
     The full Generator-Executor run, called by :func:`run_agent_with_planner`
     whenever a plan degenerates into per-unit tasks. The batch tool grinds every
     station (and every event inside it) in Python; the model is not in the loop.
+    ``shared_args`` carries the solar-wind handle and component choices for a
+    comparison matrix. The result reports cell coverage, not just station counts.
     """
     if verbose:
         print(

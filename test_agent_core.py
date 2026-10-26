@@ -3148,7 +3148,9 @@ def test_comparison_matrix_uses_shared_solar_wind_and_unique_names(
     and no station/date substitution are involved.
     """
     store = _matrix_store(monkeypatch, tmp_path)
-    sw_handle = create_mock_solar_wind_frame(store=store)
+    sw_handle = create_mock_solar_wind_frame(
+        start="2024-05-08 00:00:00", periods=2880, store=store
+    )
     calls: list[dict] = []
 
     def tiny_comparison(args, store):
@@ -3228,12 +3230,37 @@ def test_comparison_matrix_rejects_unknown_solar_wind(monkeypatch, tmp_path):
     assert "fetch_solar_wind" in payload.get("hint", "")
 
 
+def test_comparison_matrix_rejects_a_solar_wind_coverage_gap(
+    monkeypatch, tmp_path
+):
+    """A matrix must not start if the shared solar wind misses an event date."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    sw_handle = create_mock_solar_wind_frame(
+        start="2024-05-08 00:00:00", periods=1440, store=store
+    )
+    payload, _ = ac.HANDLERS["create_task_matrix"](
+        {
+            "events": ["2024-05-08", "2024-05-09"],
+            "stations": ["IRT"],
+            "actions": ["fetch_observatory_data", "plot_space_weather_comparison"],
+            "project_name": "cmp",
+            "shared_args": {"solar_wind_df_descriptor": sw_handle},
+        },
+        store,
+    )
+    assert payload["error"] == "solar_wind_coverage"
+    assert payload["coverage"] == "2024-05-08..2024-05-08"
+    assert payload["missing_events"] == ["2024-05-09"]
+
+
 def test_comparison_matrix_autofills_the_only_solar_wind_handle(
     monkeypatch, tmp_path
 ):
     """If the planner omits shared_args, one unambiguous sw: handle is safe."""
     store = _matrix_store(monkeypatch, tmp_path)
-    sw_handle = create_mock_solar_wind_frame(store=store)
+    sw_handle = create_mock_solar_wind_frame(
+        start="2024-05-08 00:00:00", periods=1440, store=store
+    )
     created, _ = ac.HANDLERS["create_task_matrix"](
         {
             "events": ["2024-05-08"],
@@ -3556,6 +3583,72 @@ def test_run_agent_with_planner_single_matrix_plan_runs_the_whole_job(
     assert any("raw:brw:2024-10-10" in h for h in result["store"].names())
     assert Path(result["export"]["path"]).suffix == ".zip"
     assert result["results"], "at least one process_matrix_batch result expected"
+
+
+def test_planner_passes_shared_args_to_a_comparison_matrix(
+    monkeypatch, tmp_path
+):
+    """The single-matrix planner path must forward shared_args, not drop them."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    sw_handle = create_mock_solar_wind_frame(
+        start="2024-05-08 00:00:00", periods=1440, store=store
+    )
+    calls: list[dict] = []
+
+    def tiny_comparison(args, store):
+        calls.append(dict(args))
+        out = plotter.DEFAULT_OUTPUT_DIR / args["filename"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("<html>tiny</html>", encoding="utf-8")
+        filed = ac._file_into_project(
+            store,
+            str(out),
+            [args["ground_df_descriptor"], args["solar_wind_df_descriptor"]],
+            "space_weather",
+        )
+        return {"ok": True, "path": str(out), "filed_into_project": filed}, "saved"
+
+    monkeypatch.setitem(ac.HANDLERS, "plot_space_weather_comparison", tiny_comparison)
+    plan_json = json.dumps(
+        {
+            "tasks": [
+                {
+                    "id": "step_001",
+                    "description": "Сравнения",
+                    "tool_name": "create_task_matrix",
+                    "tool_args": {
+                        "events": ["2024-05-08"],
+                        "stations": ["IRT"],
+                        "actions": [
+                            "fetch_observatory_data",
+                            "plot_space_weather_comparison",
+                        ],
+                        "project_name": "cmp",
+                        "shared_args": {
+                            "solar_wind_df_descriptor": sw_handle,
+                            "ground_component": "H",
+                            "solar_wind_components": ["Bz", "V"],
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
+    class _Brain:
+        def chat(self, messages, tools):  # noqa: ARG002
+            return {"content": plan_json, "tool_calls": None}
+
+    result = ac.run_agent_with_planner(
+        "Сравни IRT с солнечным ветром", brain=_Brain(), store=store, verbose=False
+    )
+    assert result["ok"], result
+    assert result["coverage"] == "1/1"
+    assert len(calls) == 1
+    assert calls[0]["ground_df_descriptor"] == "raw:irt:2024-05-08"
+    assert calls[0]["solar_wind_df_descriptor"] == sw_handle
+    matrix = json.loads(Path(result["matrix_path"]).read_text(encoding="utf-8"))
+    assert matrix["shared_args"]["solar_wind_df_descriptor"] == sw_handle
 
 
 class _ManyCellsPlanBrain:
