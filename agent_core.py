@@ -462,6 +462,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Project that stores the results and the matrix.",
                     },
+                    "shared_args": {
+                        "type": "object",
+                        "description": (
+                            "Arguments shared by every cell. For "
+                            "plot_space_weather_comparison supply "
+                            "solar_wind_df_descriptor (required), ground_component "
+                            "(default H) and solar_wind_components (default Bz,V). "
+                            "The matrix supplies ground_df_descriptor and a unique "
+                            "filename per cell."
+                        ),
+                        "additionalProperties": True,
+                    },
                 },
                 "required": ["events", "stations", "actions", "project_name"],
             },
@@ -5084,15 +5096,37 @@ def _normalise_matrix_actions(raw: Any) -> list[str] | None:
 
 
 def _matrix_task_args(
-    tool: str, station: str, event: str, store: FrameStore
+    tool: str,
+    station: str,
+    event: str,
+    store: FrameStore,
+    shared_args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the handler arguments for one (station, event) cell of a matrix."""
     raw_slot = f"raw:{station.lower()}:{event}"
     derived_slot = f"derived:{station.lower()}:{event}"
     if tool == "fetch_observatory_data":
-        return {"station_code": station, "start_date": event, "end_date": event}
+        return {
+            "station_code": station,
+            "start_date": event,
+            "end_date": event,
+            # A matrix is a coverage job: use the best published state instead
+            # of failing a cell because definitive data is not released yet.
+            "data_type": "best-avail",
+        }
     if tool == "calculate_derived_components":
         return {"df_descriptor": raw_slot, "components": ["H", "D", "I"]}
+    if tool == "plot_space_weather_comparison":
+        args = dict(shared_args or {})
+        # The cell owns the ground frame and the filename. A shared filename
+        # would make every cell overwrite the same HTML.
+        args.pop("filename", None)
+        args.pop("ground_df_descriptor", None)
+        args["ground_df_descriptor"] = raw_slot
+        args.setdefault("ground_component", "H")
+        args.setdefault("solar_wind_components", ["Bz", "V"])
+        args["filename"] = _default_plot_filename(tool, args)
+        return args
     if tool in ("plot_components", "plot_overlay"):
         frame = store.get(derived_slot)
         descriptor = derived_slot if frame is not None else raw_slot
@@ -5176,6 +5210,7 @@ def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool,
     station = str(task.get("station_code") or "").strip().upper()
     events = [str(e) for e in (task.get("events") or [])]
     tools = task.get("actions") or _DEFAULT_MATRIX_ACTIONS
+    shared_args = task.get("shared_args") or {}
     event_failures: dict[str, list[str]] = {event: [] for event in events}
     for event in events:
         for tool in tools:
@@ -5198,7 +5233,8 @@ def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool,
                         break
             try:
                 payload, _ = HANDLERS[tool](
-                    _matrix_task_args(tool, station, event, store), store
+                    _matrix_task_args(tool, station, event, store, shared_args),
+                    store,
                 )
             except Exception as exc:  # noqa: BLE001
                 traceback.print_exc()
@@ -5224,6 +5260,9 @@ def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool,
     ok_events = [e for e in events if not event_failures[e]]
     task["events_ok"] = ok_events
     task["events_failed"] = failed_events
+    task["event_errors"] = {
+        event: list(errors) for event, errors in event_failures.items() if errors
+    }
     if not failed_events:
         return True, ""
     details = [f"{e}: {event_failures[e][0]}" for e in failed_events]
@@ -5269,6 +5308,38 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
             received=args.get("actions"),
         ), "create_task_matrix refused: no usable actions."
 
+    shared_args = args.get("shared_args") or {}
+    if not isinstance(shared_args, dict):
+        return _error(
+            "invalid_shared_args",
+            "shared_args must be an object.",
+            received=shared_args,
+        ), "create_task_matrix refused: shared_args must be an object."
+    shared_args = dict(shared_args)
+    if "plot_space_weather_comparison" in actions:
+        solar_wind = str(shared_args.get("solar_wind_df_descriptor") or "").strip()
+        if not solar_wind:
+            # The planner often has exactly one solar-wind frame in the store.
+            # Using it is deterministic; choosing among several would be a guess.
+            candidates = [name for name in store.names() if name.startswith("sw:")]
+            if len(candidates) == 1:
+                solar_wind = candidates[0]
+                shared_args["solar_wind_df_descriptor"] = solar_wind
+        if not solar_wind:
+            return _error(
+                "missing_shared_args",
+                "plot_space_weather_comparison needs shared_args.solar_wind_df_descriptor.",
+                hint="Call fetch_solar_wind first, then pass its sw:... handle.",
+            ), "create_task_matrix refused: missing solar_wind_df_descriptor."
+        if store.get(solar_wind) is None:
+            return _error(
+                "unknown_frame",
+                f"Solar-wind frame {solar_wind!r} is not in the store.",
+                handle=solar_wind,
+                hint="Call fetch_solar_wind before create_task_matrix.",
+                available=store.names(),
+            ), "create_task_matrix refused: unknown solar-wind handle."
+
     # Open (or reuse) the project so data and charts are filed under it and the
     # final export_project has a tree to zip. create_project is idempotent.
     if project_name not in store.workspace.known():
@@ -5284,6 +5355,7 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
             "station_code": station,
             "events": list(events),
             "actions": list(actions),
+            "shared_args": dict(shared_args),
             "status": "pending",
             "attempts": 0,
             "error": None,
@@ -5296,6 +5368,7 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
         "completed": 0,
         "failed": 0,
         "pending": len(tasks),
+        "shared_args": dict(shared_args),
         "tasks": tasks,
     }
     path = _matrix_path(project_name, store.workspace)
@@ -5454,6 +5527,17 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
             }
         )
 
+    expected_cells = sum(len(t.get("events") or []) for t in tasks)
+    produced_cells = sum(len(t.get("events_ok") or []) for t in tasks)
+    missing_cells = [
+        {
+            "station": str(t.get("station_code") or ""),
+            "date": event,
+            "reason": (errors[0] if errors else "unknown")[:300],
+        }
+        for t in tasks
+        for event, errors in (t.get("event_errors") or {}).items()
+    ]
     full = sum(1 for t in tasks if _matrix_station_class(t) == "full")
     partial = sum(1 for t in tasks if _matrix_station_class(t) == "partial")
     empty = sum(1 for t in tasks if _matrix_station_class(t) == "empty")
@@ -5473,6 +5557,9 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     matrix["failed"] = empty
     matrix["partial"] = partial
     matrix["pending"] = remaining
+    matrix["expected_cells"] = expected_cells
+    matrix["produced_cells"] = produced_cells
+    matrix["missing_cells"] = missing_cells
     path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     archive: str | None = None
@@ -5532,6 +5619,10 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
         "partial_stations": partial_stations,
         "remaining": remaining,
         "total": total,
+        "expected_cells": expected_cells,
+        "produced_cells": produced_cells,
+        "missing_cells": missing_cells,
+        "coverage": f"{produced_cells}/{expected_cells}",
         "progress": f"{full + partial}/{total}",
         "archive": archive,
         "export": export_payload,
@@ -5605,6 +5696,7 @@ def _run_matrix_job(
     project_name: str,
     store: FrameStore,
     verbose: bool = False,
+    shared_args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """create_task_matrix -> one run_until_complete=True batch -> export_project.
 
@@ -5623,6 +5715,7 @@ def _run_matrix_job(
             "stations": list(stations),
             "actions": list(actions),
             "project_name": project_name,
+            "shared_args": shared_args or {},
         },
         store,
     )
@@ -5657,6 +5750,9 @@ def _run_matrix_job(
     partial = int(payload.get("partial", 0))
     empty = int(payload.get("empty", payload.get("failed", 0)))
     empty_stations = payload.get("empty_stations") or []
+    expected_cells = int(payload.get("expected_cells", 0))
+    produced_cells = int(payload.get("produced_cells", 0))
+    missing_cells = payload.get("missing_cells") or []
     if verbose:
         print(f"   {payload['summary']}")
 
@@ -5673,6 +5769,8 @@ def _run_matrix_job(
         f"Матрица {project_name}: станций {create_payload['total']} — "
         f"полностью успешных {full}, частичных {partial}, пустых {empty}"
         + (f" ({', '.join(empty_stations)})" if empty_stations else "")
+        + f". Ячеек: {produced_cells}/{expected_cells}"
+        + (f", пропущено: {len(missing_cells)}" if missing_cells else "")
         + f". Архив: {archive}."
     )
     return {
@@ -5682,6 +5780,10 @@ def _run_matrix_job(
         "matrix_path": path,
         "export": export_payload,
         "summary": text,
+        "expected_cells": expected_cells,
+        "produced_cells": produced_cells,
+        "missing_cells": missing_cells,
+        "coverage": f"{produced_cells}/{expected_cells}",
         "store": store,
     }
 
@@ -7763,6 +7865,7 @@ def run_agent_with_planner(
             str(args.get("project_name") or "").strip() or "batch_matrix",
             shared,
             verbose=verbose,
+            shared_args=args.get("shared_args"),
         )
 
     # A plan that degenerated into > MATRIX_THRESHOLD per-unit tasks (e.g. a

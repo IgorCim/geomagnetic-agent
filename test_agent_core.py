@@ -3138,6 +3138,134 @@ def test_create_task_matrix_groups_work_by_station(monkeypatch, tmp_path):
     ]
 
 
+def test_comparison_matrix_uses_shared_solar_wind_and_unique_names(
+    monkeypatch, tmp_path
+):
+    """A comparison matrix supplies only the per-cell ground frame.
+
+    The solar-wind handle and component choices are shared; the matrix must add
+    the station/date handle and a unique filename for every cell. No model call
+    and no station/date substitution are involved.
+    """
+    store = _matrix_store(monkeypatch, tmp_path)
+    sw_handle = create_mock_solar_wind_frame(store=store)
+    calls: list[dict] = []
+
+    def tiny_comparison(args, store):
+        frame, err = store.resolve(args["ground_df_descriptor"])
+        assert err is None, err
+        calls.append(dict(args))
+        out = plotter.DEFAULT_OUTPUT_DIR / args["filename"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("<html>tiny comparison</html>", encoding="utf-8")
+        filed = ac._file_into_project(
+            store,
+            str(out),
+            [args["ground_df_descriptor"], args["solar_wind_df_descriptor"]],
+            "space_weather",
+        )
+        return {
+            "ok": True,
+            "path": str(out),
+            "ground_handle": args["ground_df_descriptor"],
+            "solar_wind_handle": args["solar_wind_df_descriptor"],
+            "filed_into_project": filed,
+        }, "saved comparison"
+
+    monkeypatch.setitem(ac.HANDLERS, "plot_space_weather_comparison", tiny_comparison)
+    args = {
+        "events": ["2024-05-08", "2024-05-09"],
+        "stations": ["IRT", "API"],
+        "actions": ["fetch_observatory_data", "plot_space_weather_comparison"],
+        "project_name": "cmp",
+        "shared_args": {
+            "solar_wind_df_descriptor": sw_handle,
+            "ground_component": "H",
+            "solar_wind_components": ["Bz", "V"],
+        },
+    }
+    created, _ = ac.HANDLERS["create_task_matrix"](dict(args), store)
+    assert created["ok"], created
+    matrix = json.loads(Path(created["matrix_path"]).read_text(encoding="utf-8"))
+    assert matrix["shared_args"] == args["shared_args"]
+    assert all(t["shared_args"] == args["shared_args"] for t in matrix["tasks"])
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": created["matrix_path"], "run_until_complete": True},
+        store,
+    )
+    assert payload["ok"], payload
+    assert payload["succeeded"] == 2 and payload["partial"] == 0
+    assert payload["empty"] == 0
+    assert len(calls) == 4
+    assert {call["ground_df_descriptor"] for call in calls} == {
+        "raw:irt:2024-05-08",
+        "raw:irt:2024-05-09",
+        "raw:api:2024-05-08",
+        "raw:api:2024-05-09",
+    }
+    assert len({call["filename"] for call in calls}) == 4
+    assert all(call["solar_wind_df_descriptor"] == sw_handle for call in calls)
+    project = ac.projects.project_dir("cmp", store.workspace.root)
+    assert project is not None
+    assert len(list(project.rglob("*.html"))) == 4
+
+
+def test_comparison_matrix_rejects_unknown_solar_wind(monkeypatch, tmp_path):
+    """A comparison matrix must not start without the exact solar-wind frame."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    payload, _ = ac.HANDLERS["create_task_matrix"](
+        {
+            "events": ["2024-05-08"],
+            "stations": ["IRT"],
+            "actions": ["fetch_observatory_data", "plot_space_weather_comparison"],
+            "project_name": "cmp",
+            "shared_args": {"solar_wind_df_descriptor": "sw:omni:missing"},
+        },
+        store,
+    )
+    assert payload["error"] == "unknown_frame"
+    assert "fetch_solar_wind" in payload.get("hint", "")
+
+
+def test_comparison_matrix_autofills_the_only_solar_wind_handle(
+    monkeypatch, tmp_path
+):
+    """If the planner omits shared_args, one unambiguous sw: handle is safe."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    sw_handle = create_mock_solar_wind_frame(store=store)
+    created, _ = ac.HANDLERS["create_task_matrix"](
+        {
+            "events": ["2024-05-08"],
+            "stations": ["IRT"],
+            "actions": ["fetch_observatory_data", "plot_space_weather_comparison"],
+            "project_name": "cmp",
+            "shared_args": {"ground_component": "H"},
+        },
+        store,
+    )
+    assert created["ok"], created
+    matrix = json.loads(Path(created["matrix_path"]).read_text(encoding="utf-8"))
+    assert matrix["shared_args"]["solar_wind_df_descriptor"] == sw_handle
+    assert all(
+        task["shared_args"]["solar_wind_df_descriptor"] == sw_handle
+        for task in matrix["tasks"]
+    )
+
+
+def test_matrix_fetch_uses_the_best_available_publication_state():
+    """A matrix cell must not fail just because definitive data is unpublished."""
+    args = ac._matrix_task_args(
+        "fetch_observatory_data", "API", "2024-05-08", ac.FrameStore()
+    )
+    assert args == {
+        "station_code": "API",
+        "start_date": "2024-05-08",
+        "end_date": "2024-05-08",
+        "data_type": "best-avail",
+    }
+
+
 def test_process_matrix_batch_executes_cells_directly(monkeypatch, tmp_path):
     """The batch tool grinds station-tasks (and their events) with no model calls."""
     store = _matrix_store(monkeypatch, tmp_path)
@@ -3260,9 +3388,18 @@ def test_process_matrix_batch_classifies_full_partial_and_empty_stations(
     assert "Полностью пустых: 1." in summary
     assert "Список пустых станций: [IRT]." in summary
     assert payload["archive"] and Path(payload["archive"]).is_file()
+    assert payload["expected_cells"] == 5
+    assert payload["produced_cells"] == 2
+    assert payload["coverage"] == "2/5"
+    assert {
+        (cell["station"], cell["date"]) for cell in payload["missing_cells"]
+    } == {("SHU", "1990-01-01"), ("IRT", "1990-01-01"), ("IRT", "1990-02-02")}
+    assert all("no_data" in cell["reason"] for cell in payload["missing_cells"])
 
     refreshed = json.loads(path.read_text(encoding="utf-8"))
     assert refreshed["completed"] == 2 and refreshed["failed"] == 1
+    assert refreshed["expected_cells"] == 5 and refreshed["produced_cells"] == 2
+    assert len(refreshed["missing_cells"]) == 3
     statuses = {t["station_code"]: t["status"] for t in refreshed["tasks"]}
     assert statuses == {"BRW": "done", "SHU": "partial", "IRT": "failed"}
 
