@@ -218,6 +218,48 @@ def project_html(project):
     return sorted(path.rglob("*.html"))
 
 
+def check_chart_cells(label, project, stations, events):
+    """Each requested station/date cell must own exactly one non-empty chart.
+
+    The chart file is deliberately called ``chart.html`` inside every cell.
+    Uniqueness is the full project-relative path, not the basename: counting
+    basenames rejects a perfectly good matrix tree where 200 cells each contain
+    ``irt/2024-05-14/chart.html`` and so on.
+    """
+    problems = []
+    root = ps.project_dir(project, root=STORE.workspace.root)
+    if root is None or not root.is_dir():
+        return [f"matrix {label} project directory is missing"]
+
+    expected_paths = set()
+    for station in stations:
+        for event in events:
+            cell = root / station.lower() / event
+            charts = sorted(cell.glob("*.html")) if cell.is_dir() else []
+            if len(charts) != 1:
+                problems.append(
+                    f"matrix {label} cell {station}/{event} has {len(charts)} HTML charts"
+                )
+                continue
+            chart = charts[0]
+            if chart.stat().st_size == 0:
+                problems.append(
+                    f"matrix {label} cell {station}/{event} has an empty chart"
+                )
+            expected_paths.add(chart.resolve())
+
+    extras = [
+        path
+        for path in root.rglob("*.html")
+        if path.resolve() not in expected_paths
+    ]
+    if extras:
+        problems.append(
+            f"matrix {label} has {len(extras)} HTML charts outside the requested cells"
+        )
+    return problems
+
+
 def matrix_prompt(project, events, stations):
     return (
         "Создай ровно ОДНУ подзадачу create_task_matrix и ничего больше.\n"
@@ -436,13 +478,14 @@ r_list = run_stage(
 # Final gate
 # ---------------------------------------------------------------------------
 failures = []
-for label, result, expected, stations, events in (
-    ("A", rA, 200, STATIONS, DATES_A),
-    ("B", rB, 50, HIGHLAT, DATES_B),
-    ("C", rC, 50, STATIONS, STORM_DATES),
+for label, result, expected, stations, events, project in (
+    ("A", rA, 200, STATIONS, DATES_A, PROJECT_A),
+    ("B", rB, 50, HIGHLAT, DATES_B, PROJECT_B),
+    ("C", rC, 50, STATIONS, STORM_DATES, PROJECT_C),
 ):
     failures.extend(check_matrix(label, result, expected))
     failures.extend(check_matrix_shape(label, result, stations, events))
+    failures.extend(check_chart_cells(label, project, stations, events))
     print_matrix_report(label, result)
 
 if len(htmlA) != 200:
@@ -463,10 +506,6 @@ for path in all_paths:
     except ValueError:
         failures.append(f"chart outside this run's project root: {path}")
         break
-for label, paths in (("A", htmlA), ("B", htmlB), ("C", htmlC)):
-    names = [path.name for path in paths]
-    if len(set(names)) != len(names):
-        failures.append(f"matrix {label} has duplicate chart filenames")
 if any(path.stat().st_size == 0 for path in all_paths):
     failures.append("one or more HTML charts are empty")
 
