@@ -113,6 +113,7 @@ RUN_PROJECTS.mkdir(parents=True, exist_ok=True)
 RUN_EXPORTS.mkdir(parents=True, exist_ok=True)
 
 STORE = ac.FrameStore(workspace=ps.Workspace(root=RUN_PROJECTS))
+_ORIGINAL_EXPORTS_ROOT = ps.EXPORTS_ROOT
 ps.EXPORTS_ROOT = RUN_EXPORTS
 assert STORE.workspace.root != ps.PROJECTS_ROOT, (
     "stress run must not reuse the persistent projects/ root"
@@ -566,6 +567,8 @@ print("  - NOAA solar_events: 0 records for May 2024 (7-day current window only)
 print("  - NOAA alerts/forecast: current window only, not historical May 2024")
 print("  - ISWA perturbation map: service_decommissioned by NASA")
 print("failures:", failures or "none")
+# Do not leak the run-local export root into later notebook work.
+ps.EXPORTS_ROOT = _ORIGINAL_EXPORTS_ROOT
 if failures:
     raise AssertionError(failures)
 source_note = (
