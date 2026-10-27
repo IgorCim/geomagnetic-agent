@@ -311,9 +311,11 @@ def test_an_unreadable_file_does_not_break_the_panel(tmp_path, monkeypatch):
 
     def flaky(df, components=("X", "Y", "Z"), **kwargs):
         """Second chart is written truncated, the way a killed run leaves it."""
-        if kwargs.get("filename") == "bad.html":
-            (tmp_path / "bad.html").write_text("<html>truncated", encoding="utf-8")
-            return str(tmp_path / "bad.html")
+        filename = str(kwargs.get("filename") or "")
+        if "bad" in filename:
+            bad = tmp_path / filename
+            bad.write_text("<html>truncated", encoding="utf-8")
+            return str(bad)
         return real_plot_components(df, components=components, **kwargs)
 
     monkeypatch.setattr(plotter, "plot_components", flaky)
@@ -331,7 +333,7 @@ def test_an_unreadable_file_does_not_break_the_panel(tmp_path, monkeypatch):
     assert len(saved) == 2, saved
     assert len([s for s in slots if s.get("visible")]) == 1
     assert len(files) == 2, "the unreadable chart must still be downloadable"
-    assert any("bad.html" in p for p in files)
+    assert any("bad_INTERMAGNET.html" in p for p in files)
 
 
 def test_filenames_in_the_answer_are_picked_up(tmp_path, monkeypatch):
@@ -617,8 +619,9 @@ def test_plot_result_survives_a_later_refusal(tmp_path, monkeypatch):
     result = ac.run_agent("три дня", brain=brain, max_tool_calls=9, verbose=False)
 
     assert result["stop_reason"] == "tool_budget_exhausted"
-    assert [Path(p).name for p in result["plots"]] == names
-    assert all((tmp_path / n).exists() for n in names)
+    expected = [f"{Path(name).stem}_INTERMAGNET.html" for name in names]
+    assert [Path(p).name for p in result["plots"]] == expected
+    assert all((tmp_path / name).exists() for name in expected)
 
 
 def test_partial_success_states_the_count_and_the_files(tmp_path, monkeypatch):
@@ -646,8 +649,11 @@ def test_partial_success_states_the_count_and_the_files(tmp_path, monkeypatch):
     assert result["stop_reason"] == "tool_budget_exhausted"
     text = result["text"]
     assert "Построено графиков: 2 из 3 запрошенных" in text, text
-    assert "day10.html" in text and "day11.html" in text
-    assert "day12.html" not in text.split("Файлы:")[1].split("\n")[0]
+    assert "day10_INTERMAGNET.html" in text and "day11_INTERMAGNET.html" in text
+    assert (
+        "day12_INTERMAGNET.html"
+        not in text.split("Файлы:")[1].split("\n")[0]
+    )
     assert "Не построено" in text, text
 
 
@@ -664,7 +670,7 @@ def test_complete_run_still_reports_what_it_saved(tmp_path, monkeypatch):
     assert result["stop_reason"] == "no_tool_calls"
     assert "Построено графиков: 3." in result["text"], result["text"]
     for name in names:
-        assert name in result["text"]
+        assert f"{Path(name).stem}_INTERMAGNET.html" in result["text"]
     assert "Не построено" not in result["text"]
 
 

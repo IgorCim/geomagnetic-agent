@@ -372,3 +372,159 @@ def test_the_run_records_the_project_so_a_checker_can_find_the_tree(root):
     # And the extraction rule that puts it there.
     payload = {"ok": True, "project": "boreal-storm"}
     assert isinstance(payload.get("project"), str)
+
+
+# --------------------------------------------------------------------------- #
+# canonical chart names, metadata index and presentation-only folder views
+# --------------------------------------------------------------------------- #
+def _write_chart(root, station, day, name):
+    path = root / "p" / station / day / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("<html>chart</html>", encoding="utf-8")
+    return path
+
+
+def test_save_chart_preserves_canonical_name_and_records_metadata(root, tmp_path):
+    ws = ps.Workspace(root=root)
+    ws.create("P")
+    (root / "p" / "irt" / "2024-05-14").mkdir(parents=True)
+    source = tmp_path / "IRT_2024-05-14_H-D-I_INTERMAGNET.html"
+    source.write_text("<html>chart</html>", encoding="utf-8")
+
+    filed = ws.save_chart(
+        source,
+        ["derived:irt:2024-05-14"],
+        kind="components",
+        metadata={"components": ["H", "D", "I"], "product": "components"},
+    )
+
+    assert [Path(path).name for path in filed] == [
+        "IRT_2024-05-14_H-D-I_INTERMAGNET.html"
+    ]
+    charts = ps.read_chart_index("p", root)
+    assert charts[0]["source"] == "INTERMAGNET"
+    assert charts[0]["station"] == "IRT"
+    assert charts[0]["date"] == "2024-05-14"
+    assert charts[0]["components"] == ["H", "D", "I"]
+    assert charts[0]["relative_path"] == (
+        "irt/2024-05-14/IRT_2024-05-14_H-D-I_INTERMAGNET.html"
+    )
+
+
+def test_save_chart_adds_source_to_an_explicit_name(root, tmp_path):
+    ws = ps.Workspace(root=root)
+    ws.create("P")
+    (root / "p" / "irt" / "2024-05-14").mkdir(parents=True)
+    source = tmp_path / "mine.html"
+    source.write_text("<html>chart</html>", encoding="utf-8")
+
+    filed = ws.save_chart(source, ["raw:irt:2024-05-14"], kind="components")
+
+    assert Path(filed[0]).name == "mine_INTERMAGNET.html"
+
+
+def test_comparison_chart_records_both_sources_in_every_copy(root, tmp_path):
+    ws = ps.Workspace(root=root)
+    ws.create("P")
+    for station, day in (("irt", "2024-05-14"), ("omni", "2024-05-01")):
+        (root / "p" / station / day).mkdir(parents=True)
+    source = tmp_path / (
+        "IRT_2024-05-14_H_vs_OMNI_2024-05-01_Bz-V_INTERMAGNET-OMNI.html"
+    )
+    source.write_text("<html>chart</html>", encoding="utf-8")
+
+    filed = ws.save_chart(
+        source,
+        ["raw:irt:2024-05-14", "sw:omni:2024-05-01"],
+        kind="space_weather",
+        metadata={"components": ["H", "Bz", "V"], "product": "space_weather"},
+    )
+
+    assert len(filed) == 2
+    charts = ps.read_chart_index("p", root)
+    assert len(charts) == 2
+    assert {row["source"] for row in charts} == {"INTERMAGNET-OMNI"}
+    assert all(len(row["handles"]) == 2 for row in charts)
+
+
+def test_export_custom_folders_and_archive_name_keep_canonical_chart_names(
+    root, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(ps, "EXPORTS_ROOT", tmp_path / "exports")
+    ws = ps.Workspace(root=root)
+    ws.create("P")
+    for station, day in (("irt", "2024-05-14"), ("api", "2024-05-14")):
+        (root / "p" / station / day).mkdir(parents=True)
+        source = tmp_path / f"{station.upper()}_{day}_H_INTERMAGNET.html"
+        source.write_text("<html>chart</html>", encoding="utf-8")
+        ws.save_chart(
+            source,
+            [f"raw:{station}:{day}"],
+            kind="components",
+            metadata={"components": ["H"], "product": "components"},
+        )
+
+    payload, _ = ac.HANDLERS["export_project"](
+        {
+            "name": "p",
+            "archive_name": "my_report",
+            "folders": {
+                # Uppercase is how a model usually writes a station code; the
+                # canonical project folders are lowercase.
+                "1": ["IRT/2024-05-14"],
+                "2": ["API/2024-05-14/*.html"],
+            },
+            "sort_by": ["source", "station"],
+        },
+        _store(root),
+    )
+
+    assert payload["ok"], payload
+    assert payload["filename"] == "my_report.zip"
+    import zipfile
+
+    with zipfile.ZipFile(payload["path"]) as archive:
+        names = set(archive.namelist())
+        assert "1/irt/2024-05-14/IRT_2024-05-14_H_INTERMAGNET.html" in names
+        assert "2/api/2024-05-14/API_2024-05-14_H_INTERMAGNET.html" in names
+        assert {"index.csv", "index.html", "export_manifest.json"} <= names
+        index = archive.read("index.csv").decode("utf-8")
+        assert "INTERMAGNET" in index
+        assert "IRT_2024-05-14_H_INTERMAGNET.html" in index
+        import csv
+        import io
+
+        rows = list(csv.DictReader(io.StringIO(index)))
+        # sort_by source,station: API must come first even though its archive
+        # path is under folder "2", not "1".
+        assert [row["station"] for row in rows] == ["API", "IRT"]
+
+
+def test_export_rejects_path_traversal_in_folder_and_archive_names(root, frame):
+    store = _store(root)
+    store.workspace.create("P")
+    ps.save_artifact("P", "IRT", "2024-09-10", frame, root=root)
+
+    bad_folder = ps.export_project(
+        "p", root=root, exports=root / "out", folders={"../x": ["irt"]}
+    )
+    assert bad_folder["error"] == "invalid_folder_name"
+
+    bad_archive = ps.export_project(
+        "p", root=root, exports=root / "out", archive_name="../x"
+    )
+    assert bad_archive["error"] == "invalid_archive_name"
+
+
+def test_sort_charts_uses_metadata_and_custom_source_order():
+    rows = [
+        {"file": "a.html", "source": "INTERMAGNET", "station": "IRT", "date": "2024-05-14"},
+        {"file": "b.html", "source": "OMNI", "station": "", "date": "2024-05-01"},
+        {"file": "c.html", "source": "KYOTO", "station": "", "date": "2024-05-02"},
+    ]
+    by_source = ps.sort_charts(rows, "source")
+    assert [row["source"] for row in by_source] == ["INTERMAGNET", "KYOTO", "OMNI"]
+    custom = ps.sort_charts(
+        rows, "source", source_order=["OMNI", "KYOTO", "INTERMAGNET"]
+    )
+    assert [row["source"] for row in custom] == ["OMNI", "KYOTO", "INTERMAGNET"]

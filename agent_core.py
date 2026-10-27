@@ -61,6 +61,7 @@ import noaa_swpc_loader as noaa
 import supermag_loader as supermag
 import iswa_loader as iswa
 import project_store as projects
+import chart_naming
 import geomag_coords as gcoords
 import physics_engine as pengine
 
@@ -410,9 +411,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "export_project",
             "description": (
-                "Pack a whole project into a single ZIP for download: the folder tree, "
-                "every CSV and HTML chart, and the manifests. Returns the archive path. "
-                "Call this once the work is done and tell the user the file name."
+                "Zip a project: canonical tree, charts, manifests and a metadata "
+                "index. Returns the archive path."
             ),
             "parameters": {
                 "type": "object",
@@ -420,7 +420,47 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "name": {
                         "type": "string",
                         "description": "Project to export. Defaults to the open project.",
-                    }
+                    },
+                    "archive_name": {
+                        "type": "string",
+                        "description": (
+                            "Optional ZIP name, only when the user explicitly asks; "
+                            "'.zip' is added if absent."
+                        ),
+                    },
+                    "folders": {
+                        "type": "object",
+                        "description": (
+                            "Optional custom folder view, only when the user explicitly "
+                            "asks for named folders. Keys are folder names; values are "
+                            "lists of project-relative paths, directories or globs. "
+                            "Canonical chart filenames are preserved inside them."
+                        ),
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "sort_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Index order, e.g. ['source','station','date'] or "
+                            "['date','source']. Default station,date,components,source,file."
+                        ),
+                    },
+                    "source_order": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Custom source order for the index, e.g. "
+                            "['OMNI','INTERMAGNET','KYOTO','SUPERMAG']."
+                        ),
+                    },
+                    "include_index": {
+                        "type": "boolean",
+                        "description": "Write index.csv and index.html. Default true.",
+                    },
                 },
                 "required": [],
             },
@@ -474,6 +514,16 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         ),
                         "additionalProperties": True,
                     },
+                    "export_args": {
+                        "type": "object",
+                        "description": (
+                            "Optional export_project arguments used by the automatic "
+                            "batch export: archive_name, folders, sort_by, "
+                            "source_order, include_index. Only set when the user "
+                            "explicitly asks for a custom archive/folder view."
+                        ),
+                        "additionalProperties": True,
+                    },
                 },
                 "required": ["events", "stations", "actions", "project_name"],
             },
@@ -509,6 +559,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "batch_size": {
                         "type": "integer",
                         "description": "Stations per call when run_until_complete=False. Default 5. Ignored when run_until_complete=True.",
+                    },
+                    "export_args": {
+                        "type": "object",
+                        "description": (
+                            "Optional export_project arguments for the automatic "
+                            "archive. Overrides export_args stored in the matrix."
+                        ),
+                        "additionalProperties": True,
                     },
                 },
                 "required": ["matrix_path"],
@@ -1385,42 +1443,48 @@ def _slug(value: Any) -> str:
 
 
 def _default_plot_filename(name: str, args: dict[str, Any]) -> str:
-    """Give a planned chart a unique file when the plan omitted ``filename``.
+    """Give a planned chart its deterministic canonical name.
 
     The plot handlers fall back to one shared name (``plot_geomagnetic_
     components.html``). Two direct station tasks would then overwrite each
     other, leaving one chart while the plan says two. Deriving the name from the
-    frame handle makes direct execution as safe as the model's own filenames.
+    frame handle makes direct execution as safe as the model's own filenames,
+    and keeps the source tag last: ``IRT_2024-12-10_F_INTERMAGNET.html``.
     """
     components = args.get("components") or (
         [args["component"]] if args.get("component") else ["H"]
     )
-    component_slug = "_".join(_slug(item) for item in components)
+    if isinstance(components, str):
+        components = [components]
     if name == "plot_components":
         handle = args.get("df_descriptor")
         if handle:
-            return f"{_slug(handle)}_{component_slug}.html"
+            return chart_naming.components_filename(handle, components)
     if name == "plot_overlay":
         stations = args.get("stations") or []
-        dates = args.get("dates") or []
+        dates = args.get("dates") or ([args["date"]] if args.get("date") else [])
+        if isinstance(dates, str):
+            dates = [dates]
         if stations and dates:
-            station_slug = "_".join(_slug(item) for item in stations)
-            return (
-                f"overlay_{station_slug}_{_slug(dates[0])}_{_slug(dates[-1])}"
-                f"_{component_slug}.html"
+            return chart_naming.overlay_filename(
+                stations, dates[0], args.get("component") or components[0]
             )
     if name == "plot_comparison":
         df1, df2 = args.get("df1"), args.get("df2")
         if df1 and df2:
-            return f"compare_{_slug(df1)}_{_slug(df2)}_{component_slug}.html"
+            return chart_naming.comparison_filename(
+                df1, df2, args.get("component") or components[0]
+            )
     if name == "plot_space_weather_comparison":
         ground = args.get("ground_df_descriptor")
         solar = args.get("solar_wind_df_descriptor")
         ground_component = args.get("ground_component") or "H"
+        solar_components = args.get("solar_wind_components") or ["Bz", "V"]
+        if isinstance(solar_components, str):
+            solar_components = [solar_components]
         if ground and solar:
-            return (
-                f"space_{_slug(ground)}_vs_{_slug(solar)}"
-                f"_{_slug(ground_component)}.html"
+            return chart_naming.space_weather_filename(
+                ground, solar, ground_component, solar_components
             )
     return ""
 
@@ -3645,6 +3709,16 @@ def _accepts_legacy_df(tool: str) -> Callable[[Handler], Handler]:
     return decorate
 
 
+def _slot_for_frame(store: FrameStore, frame: Any) -> str | None:
+    """The concrete store slot holding *frame*, or ``None`` if it is not stored."""
+    if frame is None:
+        return None
+    for slot in store.names():
+        if store.get(slot) is frame:
+            return slot
+    return None
+
+
 def _first_present(df: pd.DataFrame, store: FrameStore, requested: str) -> str:
     """Pick the richest handle that actually has the requested column.
 
@@ -4764,7 +4838,11 @@ def _handle_custom_formula(args: dict[str, Any], store: FrameStore) -> tuple[Any
 
 
 def _file_into_project(
-    store: FrameStore, chart: str, handles: Sequence[Any], kind: str
+    store: FrameStore,
+    chart: str,
+    handles: Sequence[Any],
+    kind: str,
+    metadata: dict[str, Any] | None = None,
 ) -> list[str]:
     """Copy a saved chart into the project days its handles point at.
 
@@ -4773,7 +4851,7 @@ def _file_into_project(
     the existing behaviour changes.
     """
     try:
-        return store.workspace.save_chart(chart, handles, kind=kind)
+        return store.workspace.save_chart(chart, handles, kind=kind, metadata=metadata)
     except OSError as exc:
         # A project that cannot be written must not sink the chart: the chart is
         # the answer, the filing is bookkeeping.
@@ -4784,6 +4862,8 @@ def _file_into_project(
 @_accepts_legacy_df("plot_components")
 def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     components = args.get("components") or ["H"]
+    if isinstance(components, str):
+        components = [components]
     notes: list[str] = []
     descriptor = args.get("df_descriptor")
     frame, err = _resolve_plottable(store, descriptor, components, notes)
@@ -4795,15 +4875,37 @@ def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[An
         frame, err = store.resolve(handle)
     if err:
         return err, f"plot_components failed: {err['error']}"
+    if frame is not None and (not descriptor or ":" not in str(descriptor)):
+        # A bare family alias points at whichever day was fetched last; use the
+        # concrete slot for the canonical filename and project filing.
+        descriptor = _slot_for_frame(store, frame) or descriptor
+    sources = chart_naming.sources_for_handles([descriptor])
+    if args.get("filename"):
+        filename = chart_naming.ensure_source_suffix(args["filename"], sources)
+    elif descriptor:
+        filename = chart_naming.components_filename(descriptor, components)
+    else:
+        filename = None
+    title = args.get("title") or (
+        chart_naming.components_title(descriptor, components)
+        if descriptor
+        else "Geomagnetic components"
+    )
     result = plotter.plot_components(
         frame,
         components=components,
-        title=args.get("title") or "Geomagnetic components",
-        filename=args.get("filename"),
+        title=title,
+        filename=filename,
     )
     if plotter.is_error(result):
         return result, f"plot_components failed: {result.get('error')}"
-    filed = _file_into_project(store, result, [descriptor], "components")
+    filed = _file_into_project(
+        store,
+        result,
+        [descriptor],
+        "components",
+        metadata={"components": components, "product": "components"},
+    )
     payload = {"ok": True, "path": result, "components": components, "rows": int(len(frame))}
     if filed:
         payload["filed_into_project"] = filed
@@ -4831,17 +4933,39 @@ def _handle_plot_comparison(args: dict[str, Any], store: FrameStore) -> tuple[An
                 "points at the most recent fetch, so it can never represent both days."
             ),
         ), "plot_comparison refused: both handles resolved to the same data."
+    df1, df2 = args.get("df1"), args.get("df2")
+    if first is not None and (not df1 or ":" not in str(df1)):
+        df1 = _slot_for_frame(store, first) or df1
+    if second is not None and (not df2 or ":" not in str(df2)):
+        df2 = _slot_for_frame(store, second) or df2
+    handles = [df1, df2]
+    sources = chart_naming.sources_for_handles(handles)
+    if args.get("filename"):
+        filename = chart_naming.ensure_source_suffix(args["filename"], sources)
+    else:
+        filename = chart_naming.comparison_filename(
+            handles[0], handles[1], component
+        )
     result = plotter.plot_comparison(
         first,
         second,
         component=component,
-        title=args.get("title") or "Day comparison",
-        filename=args.get("filename"),
+        title=args.get("title")
+        or chart_naming.comparison_title(handles[0], handles[1], component),
+        filename=filename,
     )
     if plotter.is_error(result):
         return result, f"plot_comparison failed: {result.get('error')}"
     filed = _file_into_project(
-        store, result, [args.get("df1"), args.get("df2")], "comparison"
+        store,
+        result,
+        handles,
+        "comparison",
+        metadata={
+            "components": [component],
+            "product": "comparison",
+            "handles": handles,
+        },
     )
     payload = {"ok": True, "path": result, "component": component}
     if filed:
@@ -5034,16 +5158,28 @@ def _handle_export_project(args: dict[str, Any], store: FrameStore) -> tuple[Any
             "No project is open. Call create_project first, or pass 'name'.",
             available=store.workspace.known(),
         ), "export_project refused: no project to export."
-    result = projects.export_project(name, root=store.workspace.root)
+    result = projects.export_project(
+        name,
+        root=store.workspace.root,
+        archive_name=args.get("archive_name"),
+        folders=args.get("folders"),
+        sort_by=args.get("sort_by"),
+        source_order=args.get("source_order"),
+        include_index=args.get("include_index", True),
+    )
     if projects.is_error(result):
         return result, f"export_project failed: {result['error']}"
     return {
         "ok": True,
         "project": result["project"],
         "path": result["path"],
-        "filename": Path(result["path"]).name,
+        "filename": result["filename"],
+        "archive": result["archive"],
         "size": result["size"],
         "files": result["files"],
+        "charts": result["charts"],
+        "folders": result["folders"],
+        "index": result["index"],
         "tree": store.workspace.tree_markdown(name),
     }, f"Exported project {result['project']!r} to {result['path']} ({result['size']})."
 
@@ -5134,10 +5270,11 @@ def _matrix_task_args(
     if tool in ("plot_components", "plot_overlay"):
         frame = store.get(derived_slot)
         descriptor = derived_slot if frame is not None else raw_slot
+        components = ["H", "D", "I"]
         return {
             "df_descriptor": descriptor,
-            "components": ["H", "D", "I"],
-            "filename": f"{station}_{event}_components.html",
+            "components": components,
+            "filename": chart_naming.components_filename(descriptor, components),
         }
     if tool == "get_statistics":
         return {"df_descriptor": raw_slot, "components": ["X", "Y", "Z", "F"]}
@@ -5347,6 +5484,14 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
             received=shared_args,
         ), "create_task_matrix refused: shared_args must be an object."
     shared_args = dict(shared_args)
+    export_args = args.get("export_args") or {}
+    if not isinstance(export_args, dict):
+        return _error(
+            "invalid_export_args",
+            "export_args must be an object.",
+            received=export_args,
+        ), "create_task_matrix refused: export_args must be an object."
+    export_args = dict(export_args)
     if "plot_space_weather_comparison" in actions:
         solar_wind = str(shared_args.get("solar_wind_df_descriptor") or "").strip()
         if not solar_wind:
@@ -5427,6 +5572,7 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
         "failed": 0,
         "pending": len(tasks),
         "shared_args": dict(shared_args),
+        "export_args": dict(export_args),
         "tasks": tasks,
     }
     path = _matrix_path(project_name, store.workspace)
@@ -5630,9 +5776,12 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
         # call removes that step from the model's plate entirely.
         project_name = str(matrix.get("project") or "")
         if project_name:
-            export_payload, export_note = _handle_export_project(
-                {"name": project_name}, store
-            )
+            export_args = args.get("export_args")
+            if not isinstance(export_args, dict):
+                export_args = matrix.get("export_args") or {}
+            export_call = dict(export_args)
+            export_call["name"] = project_name
+            export_payload, export_note = _handle_export_project(export_call, store)
             if not is_error(export_payload):
                 archive = export_payload.get("path") or export_payload.get("archive")
             else:
@@ -5787,6 +5936,7 @@ def _run_matrix_job(
     store: FrameStore,
     verbose: bool = False,
     shared_args: dict[str, Any] | None = None,
+    export_args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """create_task_matrix -> one run_until_complete=True batch -> export_project.
 
@@ -5808,6 +5958,7 @@ def _run_matrix_job(
             "actions": list(actions),
             "project_name": project_name,
             "shared_args": shared_args or {},
+            "export_args": export_args or {},
         },
         store,
     )
@@ -5853,7 +6004,9 @@ def _run_matrix_job(
     # payload stable for callers that read ``export``).
     export_payload = payload.get("export")
     if not isinstance(export_payload, dict) or is_error(export_payload):
-        export_payload, export_note = _handle_export_project({"name": project_name}, store)
+        export_call = dict(export_args or {})
+        export_call["name"] = project_name
+        export_payload, export_note = _handle_export_project(export_call, store)
     archive = payload.get("archive")
     if not archive:
         archive = export_payload.get("path") if not is_error(export_payload) else export_payload.get("message")
@@ -6908,19 +7061,33 @@ def _handle_plot_overlay(args, store):
     order = _sort_stations_north_first(list(frames))
     ordered = {code: frames[code] for code in order}
 
+    handles = [f"raw:{code.lower()}:{date}" for code in order]
+    sources = chart_naming.sources_for_handles(handles)
+    if args.get('filename'):
+        filename = chart_naming.ensure_source_suffix(args['filename'], sources)
+    else:
+        filename = chart_naming.overlay_filename(order, date, component, sources)
     result = plotter.plot_overlay(
         ordered,
         component=component,
         offsets=offsets,
         time_system=time_system,
         time_shifts=time_shifts,
-        title=args.get('title') or f"Overlay {', '.join(order)} {date}",
-        filename=args.get('filename'),
+        title=args.get('title') or chart_naming.overlay_title(order, date, component),
+        filename=filename,
     )
     if plotter.is_error(result):
         return result, f"plot_overlay failed: {result.get('error')}"
     filed = _file_into_project(
-        store, result, [f"raw:{code.lower()}:{date}" for code in order], "overlay"
+        store,
+        result,
+        handles,
+        "overlay",
+        metadata={
+            "components": [component],
+            "product": "overlay",
+            "handles": handles,
+        },
     )
     payload = {
         'ok': True,
@@ -7091,17 +7258,42 @@ def _handle_plot_space_weather_comparison(args: dict[str, Any], store: FrameStor
         return aligned, f"plot_space_weather_comparison failed: {aligned.get('error')}"
     aligned = _merge_solar_wind_columns(aligned, sw_frame, sw_components)
 
+    if ground is not None and (not ground_desc or ":" not in ground_desc):
+        ground_desc = _slot_for_frame(store, ground) or ground_desc
+    if sw_frame is not None and (not sw_desc or ":" not in sw_desc):
+        sw_desc = _slot_for_frame(store, sw_frame) or sw_desc
+    handles = [ground_desc, sw_desc]
+    sources = chart_naming.sources_for_handles(handles)
+    if args.get("filename"):
+        filename = chart_naming.ensure_source_suffix(args["filename"], sources)
+    else:
+        filename = chart_naming.space_weather_filename(
+            ground_desc, sw_desc, ground_component, sw_components
+        )
     result = plotter.plot_space_weather_comparison(
         aligned,
         ground_component=ground_component,
         solar_wind_components=sw_components,
-        title=args.get("title") or f"{ground_component} vs {'/'.join(sw_components)}",
-        filename=args.get("filename"),
+        title=args.get("title")
+        or chart_naming.space_weather_title(
+            ground_desc, sw_desc, ground_component, sw_components
+        ),
+        filename=filename,
     )
     if plotter.is_error(result):
         return result, f"plot_space_weather_comparison failed: {result.get('error')}"
 
-    filed = _file_into_project(store, result, [ground_desc, sw_desc], "space_weather")
+    filed = _file_into_project(
+        store,
+        result,
+        handles,
+        "space_weather",
+        metadata={
+            "components": [ground_component, *sw_components],
+            "product": "space_weather",
+            "handles": handles,
+        },
+    )
     payload = {
         "ok": True,
         "path": result,
@@ -7961,6 +8153,7 @@ def run_agent_with_planner(
             shared,
             verbose=verbose,
             shared_args=args.get("shared_args"),
+            export_args=args.get("export_args"),
         )
 
     # A plan that degenerated into > MATRIX_THRESHOLD per-unit tasks (e.g. a

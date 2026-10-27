@@ -2633,7 +2633,7 @@ def test_normalize_tool_args_accepts_legacy_planner_spellings():
     ) == {
         "df_descriptor": "raw:irt:2024-09-10",
         "components": ["H"],
-        "filename": "raw_irt_2024-09-10_H.html",
+        "filename": "IRT_2024-09-10_H_INTERMAGNET.html",
     }
     assert ac.normalize_tool_args(
         "fetch_observatory_data", {"station": "IRT", "date": "2024-09-10"}
@@ -2656,7 +2656,7 @@ def test_normalize_tool_args_accepts_legacy_planner_spellings():
     ) == {
         "df_descriptor": "raw:irt:2024-09-10",
         "components": ["H"],
-        "filename": "raw_irt_2024-09-10_H.html",
+        "filename": "IRT_2024-09-10_H_INTERMAGNET.html",
     }
     # A plot plan that knows only station/date gets the exact handle the
     # preceding fetch will create.
@@ -2665,7 +2665,7 @@ def test_normalize_tool_args_accepts_legacy_planner_spellings():
     ) == {
         "df_descriptor": "raw:irt:2024-09-10",
         "components": ["H"],
-        "filename": "raw_irt_2024-09-10_H.html",
+        "filename": "IRT_2024-09-10_H_INTERMAGNET.html",
     }
     # A plan that explicitly names the output file keeps it; only the missing
     # filename is derived, so user/model naming is not overridden.
@@ -2685,7 +2685,9 @@ def test_normalize_tool_args_accepts_legacy_planner_spellings():
             "ground_component": "H",
             "solar_wind_components": ["Bz", "V"],
         },
-    )["filename"] == "space_raw_irt_2024-05-10_vs_sw_omni_2024-05-01_H.html"
+    )["filename"] == (
+        "IRT_2024-05-10_H_vs_OMNI_2024-05-01_Bz-V_INTERMAGNET-OMNI.html"
+    )
 
 
 def test_llm_planner_normalises_unknown_tools_to_free_form():
@@ -2704,7 +2706,7 @@ def test_llm_planner_normalises_unknown_tools_to_free_form():
     assert state.tasks[0].tool_args == {
         "df_descriptor": "raw:irt:2024-09-10",
         "components": ["H"],
-        "filename": "raw_irt_2024-09-10_H.html",
+        "filename": "IRT_2024-09-10_H_INTERMAGNET.html",
     }
     assert state.tasks[1].tool_name == "run_agent"
     assert state.tasks[1].tool_args == {"query": "Объясни результат"}
@@ -2861,6 +2863,25 @@ def test_shared_framestore_run_agent_two_calls_same_store(
     assert out2["plots"], "plot of a handle created in the previous call must resolve"
 
 
+def test_bare_plot_alias_gets_the_concrete_canonical_name(monkeypatch, tmp_path):
+    """A bare ``raw`` alias must name the chart by the day it actually points at."""
+    monkeypatch.setattr(ac, "OFFLINE", True)
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = ac.FrameStore()
+    for day in ("2024-09-10", "2024-09-11"):
+        payload, _ = ac.HANDLERS["fetch_observatory_data"](
+            {"station_code": "IRT", "start_date": day, "end_date": day}, store
+        )
+        assert not ac.is_error(payload), payload
+
+    payload, _ = ac.HANDLERS["plot_components"](
+        {"df_descriptor": "raw", "components": ["X"]}, store
+    )
+
+    assert not ac.is_error(payload), payload
+    assert Path(payload["path"]).name == "IRT_2024-09-11_X_INTERMAGNET.html"
+
+
 def test_planner_plot_graph_alias_executes_directly(monkeypatch, tmp_path):
     """The model's invented "plot_graph" must become plot_components, not a
     model round-trip. It also omits components; the handler's H default is the
@@ -2902,8 +2923,8 @@ def test_planner_plot_graph_alias_executes_directly(monkeypatch, tmp_path):
     assert [call["tool"] for call in plots] == ["plot_components", "plot_components"]
     assert [call["arguments"]["components"] for call in plots] == [["H"], ["H"]]
     assert [call["arguments"]["filename"] for call in plots] == [
-        "raw_irt_2024-09-10_H.html",
-        "raw_api_2024-09-10_H.html",
+        "IRT_2024-09-10_H_INTERMAGNET.html",
+        "API_2024-09-10_H_INTERMAGNET.html",
     ]
     assert len(result["plots"]) == 2, result["plots"]
     assert "Построено графиков: 2." in result["text"], result["text"]
