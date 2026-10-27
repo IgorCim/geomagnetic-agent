@@ -20,6 +20,7 @@
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -99,7 +100,26 @@ assert "brain" in globals(), "Сначала выполни ячейку заг�
 assert not isinstance(brain, ac.ScriptedBrain), "Нужен реальный brain, не ScriptedBrain."
 ac.OFFLINE = False
 
-STORE = ac.FrameStore()
+# Keep this run out of the persistent projects/ and exports/ roots.  The old
+# 258-chart science run stays there untouched; the final gate below must count
+# only the HTML written by this run.  A stale project tree was why a perfect
+# 200/50/50 matrix run was reported as 305/100/50.
+RUNS_ROOT = REPO / "stress_runs"
+RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+RUN_DIR = Path(tempfile.mkdtemp(prefix="stress_", dir=str(RUNS_ROOT)))
+RUN_PROJECTS = RUN_DIR / "projects"
+RUN_EXPORTS = RUN_DIR / "exports"
+RUN_PROJECTS.mkdir(parents=True, exist_ok=True)
+RUN_EXPORTS.mkdir(parents=True, exist_ok=True)
+
+STORE = ac.FrameStore(workspace=ps.Workspace(root=RUN_PROJECTS))
+ps.EXPORTS_ROOT = RUN_EXPORTS
+assert STORE.workspace.root != ps.PROJECTS_ROOT, (
+    "stress run must not reuse the persistent projects/ root"
+)
+print("RUN_DIR:", RUN_DIR)
+print("RUN_PROJECTS:", RUN_PROJECTS)
+print("RUN_EXPORTS:", RUN_EXPORTS)
 
 STATIONS = ["IRT", "API", "BSL", "ABG", "BRW", "SHU", "FRD", "CMO", "BOU", "TUC"]
 HIGHLAT = ["BRW", "SHU", "FRD", "CMO", "BOU"]
@@ -435,6 +455,13 @@ if len(set(comp_plots)) != len(comp_plots):
 all_paths = htmlA + htmlB + htmlC
 if len(set(all_paths)) != 300:
     failures.append("total distinct chart paths != 300")
+run_root = RUN_PROJECTS.resolve()
+for path in all_paths:
+    try:
+        path.resolve().relative_to(run_root)
+    except ValueError:
+        failures.append(f"chart outside this run's project root: {path}")
+        break
 for label, paths in (("A", htmlA), ("B", htmlB), ("C", htmlC)):
     names = [path.name for path in paths]
     if len(set(names)) != len(names):
@@ -500,9 +527,21 @@ if iswa_map.get("error") != "service_decommissioned":
 if not r_list.get("ok"):
     failures.append("list_projects stage not ok")
 
+exports_root = RUN_EXPORTS.resolve()
+for label, result in (("A", rA), ("B", rB), ("C", rC)):
+    export = result.get("export") if isinstance(result.get("export"), dict) else {}
+    archive = result.get("archive") or export.get("path") or export.get("archive")
+    if not archive:
+        continue  # check_matrix already reported the missing ZIP
+    try:
+        Path(str(archive)).resolve().relative_to(exports_root)
+    except ValueError:
+        failures.append(f"matrix {label} ZIP outside this run's export root: {archive}")
+
 print("\n" + "=" * 72)
 print("STRESS TEST SUMMARY")
 print("=" * 72)
+print("run dir:", RUN_DIR)
 print("projects:", ", ".join((PROJECT_A, PROJECT_B, PROJECT_C)))
 print("matrix A:", len(htmlA), "charts;", rA.get("coverage"))
 print("matrix B:", len(htmlB), "charts;", rB.get("coverage"))
