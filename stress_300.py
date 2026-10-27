@@ -240,6 +240,7 @@ def check_chart_cells(label, project, stations, events):
                 problems.append(
                     f"matrix {label} cell {station}/{event} has {len(charts)} HTML charts"
                 )
+                expected_paths.update(chart.resolve() for chart in charts)
                 continue
             chart = charts[0]
             if chart.stat().st_size == 0:
