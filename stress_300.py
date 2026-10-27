@@ -423,10 +423,24 @@ skipped = []
 if os.environ.get("SUPERMAG_LOGON"):
     r_smag = run_stage(
         "4/7 SuperMAG indices",
-        "Выполни ровно один вызов:\n"
-        'fetch_supermag_data(start_date="2024-05-01", '
-        'end_date="2024-05-30", data_type="indices")',
+        "Выполни ровно два вызова fetch_supermag_data для индексов SME/SML/SMU:\n"
+        '1) fetch_supermag_data(start_date="2024-05-01", '
+        'end_date="2024-05-15", data_type="indices")\n'
+        '2) fetch_supermag_data(start_date="2024-05-16", '
+        'end_date="2024-05-30", data_type="indices")\n'
+        "Не объединяй их в один запрос: сервис SuperMAG принимает "
+        "не больше 24 дней за вызов.",
     )
+    if not r_smag.get("ok"):
+        print("\nSuperMAG failure details:")
+        for call in r_smag.get("tool_calls") or []:
+            if call.get("ok") is False:
+                print("  tool:", call.get("tool"))
+                print("  error:", call.get("error"))
+                print("  message:", call.get("message"))
+                print("  hint:", call.get("hint"))
+                if call.get("detail"):
+                    print("  detail:", str(call["detail"])[:500])
 else:
     r_smag = None
     skipped.append("SuperMAG: переменная SUPERMAG_LOGON не задана")
@@ -557,8 +571,32 @@ if "sw:omni:2024-05-01" not in STORE.names():
     failures.append("missing sw:omni:2024-05-01")
 if "idx:kyoto:2024-05-01" not in STORE.names():
     failures.append("missing idx:kyoto:2024-05-01")
-if r_smag is not None and not r_smag.get("ok"):
-    failures.append("SuperMAG stage not ok")
+if r_smag is not None:
+    smag_calls = [
+        call
+        for call in r_smag.get("tool_calls") or []
+        if call.get("tool") == "fetch_supermag_data"
+    ]
+    expected_smag = {
+        ("2024-05-01", "2024-05-15"),
+        ("2024-05-16", "2024-05-30"),
+    }
+    got_smag = {
+        (
+            (call.get("arguments") or {}).get("start_date"),
+            (call.get("arguments") or {}).get("end_date"),
+        )
+        for call in smag_calls
+    }
+    if len(smag_calls) != 2 or got_smag != expected_smag:
+        failures.append(
+            "SuperMAG stage did not run the two required 15-day windows"
+        )
+    for slot in ("idx:supermag:2024-05-01", "idx:supermag:2024-05-16"):
+        if slot not in STORE.names():
+            failures.append(f"missing {slot}")
+    if not r_smag.get("ok"):
+        failures.append("SuperMAG stage not ok")
 if not r_noaa.get("ok"):
     failures.append("NOAA stage not ok")
 if not r_iswa.get("ok"):

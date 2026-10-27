@@ -7811,9 +7811,11 @@ def _planned_task_result(
     if note:
         entry["note"] = note
     if isinstance(payload, dict):
-        for key in ("error", "message", "hint", "available"):
-            if payload.get(key) is not None:
-                entry[key] = payload[key]
+        for key in ("error", "message", "hint", "available", "detail"):
+            value = payload.get(key)
+            if value is not None:
+                # Keep the tool-call log compact; details are diagnostic only.
+                entry[key] = value if key != "detail" else str(value)[:500]
         handles: list[str] = []
         handle = payload.get("frame_handle")
         if isinstance(handle, str) and handle:

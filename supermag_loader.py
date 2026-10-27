@@ -87,7 +87,9 @@ DEFAULT_MAX_RETRIES = 3
 #: A 1-minute request is 1440 rows a day. "Please be considerate when using the
 #: API" is the service's own first sentence, so the window is bounded and the
 #: caller is told to split a longer study instead of pulling a year at once.
-MAX_DAYS = 32
+#: The live service rejects 25 days with ``ERROR: Time range too long`` while
+#: 24 days is accepted, so the client-side cap must match that real limit.
+MAX_DAYS = 24
 
 #: ``data_type`` values the loader understands.
 DATA_TYPES = ("sites", "indices")
@@ -239,9 +241,25 @@ def _classify_service_error(body: str) -> dict[str, Any]:
     """Turn the service's ``ERROR: ...`` line into a contract payload."""
     text = body.strip()
     lowered = text.lower()
+    if "time range too long" in lowered or "range too long" in lowered:
+        return _error(
+            "range_too_long",
+            f"SuperMAG rejected the request: {text}",
+            max_days=MAX_DAYS,
+            hint=(
+                f"Сократите период до {MAX_DAYS} дней или разбейте его на несколько "
+                "запросов: сервис SuperMAG не принимает более длинное окно."
+            ),
+            detail=text,
+        )
     if "username" in lowered or "logon" in lowered:
         code = "missing_logon" if "no username" in lowered else "invalid_logon"
-        return _error(code, f"SuperMAG rejected the request: {text}", hint=_LOGON_HINT)
+        return _error(
+            code,
+            f"SuperMAG rejected the request: {text}",
+            hint=_LOGON_HINT,
+            detail=text,
+        )
     return _error(
         "supermag_unavailable",
         "SuperMAG Web Service returned an error.",

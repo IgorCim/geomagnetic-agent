@@ -147,6 +147,27 @@ def test_long_windows_are_refused_before_any_request(monkeypatch):
     assert seen == [], "a capped request must not reach the network"
 
 
+def test_client_cap_matches_the_service_24_day_limit(monkeypatch):
+    """The live service rejects 25 days; do not advertise a longer window."""
+    _with_logon(monkeypatch)
+    seen = _install(monkeypatch, {})
+    res = sm.fetch_supermag_data("2024-05-01", "2024-05-25", data_type="indices")
+    assert sm.MAX_DAYS == 24
+    assert sm.is_error(res) and res["error"] == "range_too_long"
+    assert seen == []
+
+
+def test_service_time_range_error_is_actionable(monkeypatch):
+    """A 24-day request reaches the service; its range error must not look like an outage."""
+    _with_logon(monkeypatch)
+    _install(monkeypatch, {"indices.php": _Resp("ERROR: Time range too long")})
+    res = sm.fetch_supermag_data("2024-05-01", "2024-05-24", data_type="indices")
+    assert sm.is_error(res) and res["error"] == "range_too_long"
+    assert res["max_days"] == sm.MAX_DAYS
+    assert "Time range too long" in res["message"]
+    assert "24" in res["hint"]
+
+
 # --------------------------------------------------------------------------- #
 # offline: station data (data_type='sites')
 # --------------------------------------------------------------------------- #
