@@ -8,8 +8,10 @@ Run with:  python -m pytest test_agent_core.py -v
 
 from __future__ import annotations
 
+import io
 import json
 import re
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -25,6 +27,23 @@ DEMO_BLOCK = (
     '<tool_call>{"name": "get_statistics", '
     '"arguments": {"df": "raw", "components": ["H"]}}</tool_call>'
 )
+
+
+def test_console_print_survives_legacy_cp1251(monkeypatch):
+    """A long matrix run must not die on an emoji in a cp1251 console."""
+
+    class LegacyStream(io.StringIO):
+        encoding = "cp1251"
+
+        def write(self, text):
+            text.encode(self.encoding)  # emulate the real console failure
+            return super().write(text)
+
+    stream = LegacyStream()
+    monkeypatch.setattr(sys, "stdout", stream)
+    ac._console_print("🏭 Матрица ✅")
+    assert "Матрица" in stream.getvalue()
+    assert "?" in stream.getvalue()
 
 
 def _text_call(name: str, arguments: str = "{}") -> str:
@@ -3197,6 +3216,24 @@ def test_create_task_matrix_groups_work_by_station(monkeypatch, tmp_path):
     ]
 
 
+def test_create_task_matrix_dedupes_events_and_rejects_unknown_actions(
+    monkeypatch, tmp_path
+):
+    store = _matrix_store(monkeypatch, tmp_path)
+    args = dict(MATRIX_ARGS)
+    args["events"] = ["2024-10-10", "2024-10-10", "2024-10-10"]
+    payload, _ = ac.HANDLERS["create_task_matrix"](args, store)
+    assert payload["ok"], payload
+    matrix = json.loads(Path(payload["matrix_path"]).read_text(encoding="utf-8"))
+    assert all(task["events"] == ["2024-10-10"] for task in matrix["tasks"])
+
+    bad = dict(MATRIX_ARGS)
+    bad["actions"] = ["fetch", "not_a_handler"]
+    refused, _ = ac.HANDLERS["create_task_matrix"](bad, store)
+    assert not refused["ok"]
+    assert refused["error"] == "invalid_actions"
+
+
 def test_comparison_matrix_uses_shared_solar_wind_and_unique_names(
     monkeypatch, tmp_path
 ):
@@ -3438,6 +3475,7 @@ def test_process_matrix_batch_run_until_complete_processes_everything_in_one_cal
         {"matrix_path": path, "run_until_complete": True, "batch_size": 1}, store
     )
     assert payload["ok"], payload
+    assert payload["job_ok"] is True
     assert payload["completed_run"] is True
     assert payload["processed"] == 3 and payload["succeeded"] == 3 and payload["failed"] == 0
     assert payload["full"] == 3 and payload["partial"] == 0 and payload["empty"] == 0
@@ -3507,7 +3545,9 @@ def test_process_matrix_batch_classifies_full_partial_and_empty_stations(
     payload, _ = ac.HANDLERS["process_matrix_batch"](
         {"matrix_path": str(path), "run_until_complete": True}, store
     )
-    assert payload["ok"], payload
+    # A partial matrix is not a green run, even though the tool itself worked.
+    assert not payload["ok"], payload
+    assert payload["job_ok"] is False
     assert payload["full"] == 1 and payload["partial"] == 1 and payload["empty"] == 1
     assert payload["empty_stations"] == ["IRT"]
     assert payload["partial_stations"] == ["SHU"]
@@ -3532,6 +3572,96 @@ def test_process_matrix_batch_classifies_full_partial_and_empty_stations(
     assert len(refreshed["missing_cells"]) == 3
     statuses = {t["station_code"]: t["status"] for t in refreshed["tasks"]}
     assert statuses == {"BRW": "done", "SHU": "partial", "IRT": "failed"}
+
+
+def test_process_matrix_batch_retries_partial_and_failed_tasks(monkeypatch, tmp_path):
+    """A second run_until_complete call must retry failed/partial stations.
+
+    Previously it selected only ``pending`` tasks, so a transient network error
+    left the matrix permanently failed and a retry reported processed=0.
+    """
+    store = _matrix_store(monkeypatch, tmp_path)
+    real_fetch = ac.HANDLERS["fetch_observatory_data"]
+    calls = {"count": 0}
+
+    def flaky_fetch(args, store_):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return ac._error("network", "temporary failure"), "fetch failed: network"
+        return real_fetch(args, store_)
+
+    monkeypatch.setitem(ac.HANDLERS, "fetch_observatory_data", flaky_fetch)
+    project = "retry"
+    store.workspace.create(project)
+    matrix = {
+        "project": project,
+        "total": 1,
+        "completed": 0,
+        "failed": 0,
+        "pending": 1,
+        "tasks": [
+            {
+                "id": "station_BRW",
+                "station_code": "BRW",
+                "events": ["2024-10-10"],
+                "actions": ["fetch_observatory_data"],
+                "status": "pending",
+                "attempts": 0,
+                "error": None,
+            }
+        ],
+    }
+    path = ac._matrix_path(project, store.workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(matrix), encoding="utf-8")
+
+    first, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": str(path), "run_until_complete": True}, store
+    )
+    assert not first["ok"], first
+    assert first["job_ok"] is False
+    assert first["processed"] == 1
+    assert first["failed"] == 1
+    assert calls["count"] == 1
+
+    second, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": str(path), "run_until_complete": True}, store
+    )
+    assert second["ok"], second
+    assert second["processed"] == 1
+    assert second["succeeded"] == 1
+    assert second["failed"] == 0
+    assert calls["count"] == 2
+    refreshed = json.loads(path.read_text(encoding="utf-8"))
+    assert refreshed["tasks"][0]["attempts"] == 2
+    assert refreshed["tasks"][0]["status"] == "done"
+    assert refreshed["tasks"][0]["events_ok"] == ["2024-10-10"]
+
+
+def test_run_matrix_job_reports_zero_coverage_when_every_cell_fails(
+    monkeypatch, tmp_path
+):
+    """An all-failed batch must still return a coverage report, not a traceback."""
+    store = _matrix_store(monkeypatch, tmp_path)
+
+    def dead_fetch(args, store_):
+        return ac._error("network", "offline"), "fetch failed: network"
+
+    monkeypatch.setitem(ac.HANDLERS, "fetch_observatory_data", dead_fetch)
+    result = ac._run_matrix_job(
+        ["2024-10-10"],
+        ["BRW"],
+        ["fetch_observatory_data"],
+        "allfail",
+        store,
+    )
+
+    assert result["ok"] is False
+    assert result["coverage"] == "0/1"
+    assert result["produced_cells"] == 0
+    assert result["missing_cells"]
+    assert result["job_ok"] is False
+    assert Path(result["matrix_path"]).is_file()
 
 
 def test_run_matrix_job_is_not_green_when_a_cell_is_missing(
@@ -3628,6 +3758,150 @@ def test_create_task_matrix_returns_the_exact_matrix_path(monkeypatch, tmp_path)
     assert payload["matrix_path"] and Path(payload["matrix_path"]).is_file()
     assert Path(payload["matrix_path"]).name == "events_matrix.json"
     assert payload["matrix_path"] in payload["summary"]
+
+
+def test_create_task_matrix_rejects_plot_overlay_as_a_per_cell_action(
+    monkeypatch, tmp_path
+):
+    """plot_overlay needs several stations at once; a matrix cell has one."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    args = dict(MATRIX_ARGS)
+    args["actions"] = ["fetch", "plot_overlay"]
+
+    payload, note = ac.HANDLERS["create_task_matrix"](args, store)
+
+    assert not payload["ok"]
+    assert payload["error"] == "unsupported_matrix_action"
+    assert payload["action"] == "plot_overlay"
+    assert "plot_overlay" in note
+    assert not (tmp_path / "projects" / "events" / "events_matrix.json").exists()
+
+
+def test_process_matrix_batch_rejects_an_old_overlay_matrix_before_running(
+    monkeypatch, tmp_path
+):
+    """A matrix written by an older build must not fail cell-by-cell silently."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    matrix_path = Path(created["matrix_path"])
+    matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    for task in matrix["tasks"]:
+        task["actions"] = ["plot_overlay"]
+    matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+    before = matrix_path.read_text(encoding="utf-8")
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": str(matrix_path), "run_until_complete": True}, store
+    )
+
+    assert not payload["ok"]
+    assert payload["error"] == "unsupported_matrix_action"
+    assert matrix_path.read_text(encoding="utf-8") == before
+
+
+def test_create_task_matrix_keeps_a_path_shaped_project_inside_its_project(
+    monkeypatch, tmp_path
+):
+    """A model-supplied ``../../evil`` must not put the ledger outside the project.
+
+    The project itself is normalised to ``evil`` by project_dir; the matrix
+    filename used to be built from the raw value and escaped one level up.
+    """
+    store = _matrix_store(monkeypatch, tmp_path)
+    args = dict(MATRIX_ARGS)
+    args["project_name"] = "../../evil"
+
+    payload, _ = ac.HANDLERS["create_task_matrix"](args, store)
+
+    assert payload["ok"], payload
+    assert payload["project"] == "evil"
+    matrix_path = Path(payload["matrix_path"]).resolve()
+    project_root = (tmp_path / "projects" / "evil").resolve()
+    assert matrix_path.parent == project_root
+    assert matrix_path.name == "evil_matrix.json"
+    assert not (tmp_path / "evil_matrix.json").exists()
+    assert not (tmp_path / "projects" / "evil_matrix.json").exists()
+
+
+def test_create_task_matrix_confines_windows_and_absolute_project_names(
+    monkeypatch, tmp_path
+):
+    """Both slash styles and an absolute-looking name stay in the workspace."""
+    for index, raw_name in enumerate(
+        ("C:\\Windows\\System32", "..\\..\\evil", "/tmp/absolute")
+    ):
+        case = tmp_path / f"case_{index}"
+        store = _matrix_store(monkeypatch, case)
+        args = dict(MATRIX_ARGS)
+        args["project_name"] = raw_name
+
+        payload, _ = ac.HANDLERS["create_task_matrix"](args, store)
+
+        assert payload["ok"], payload
+        matrix_path = Path(payload["matrix_path"]).resolve()
+        projects_root = (case / "projects").resolve()
+        matrix_path.relative_to(projects_root)
+        assert matrix_path.parent.name == payload["project"]
+        assert matrix_path.name == f"{payload['project']}_matrix.json"
+
+
+def test_process_matrix_batch_rejects_a_matrix_outside_the_workspace(
+    monkeypatch, tmp_path
+):
+    """The model must not be able to make the batch read/rewrite arbitrary JSON."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    outside = tmp_path / "outside_matrix.json"
+    outside.write_text(
+        Path(created["matrix_path"]).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    before = outside.read_text(encoding="utf-8")
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": str(outside), "run_until_complete": True}, store
+    )
+
+    assert not payload["ok"]
+    assert payload["error"] == "matrix_outside_workspace"
+    assert outside.read_text(encoding="utf-8") == before
+
+
+def test_run_matrix_job_returns_a_structured_error_for_a_reserved_project_name(
+    monkeypatch, tmp_path
+):
+    store = _matrix_store(monkeypatch, tmp_path)
+    for project_name in ("NUL", "a" * 300):
+        result = ac._run_matrix_job(
+            ["2024-10-10"],
+            ["BRW"],
+            ["fetch_observatory_data"],
+            project_name,
+            store,
+        )
+        assert result["ok"] is False
+        assert result["matrix_path"] is None
+        assert result["export"]["error"] == "invalid_project_name"
+
+
+def test_process_matrix_batch_rejects_a_matrix_not_at_a_project_root(
+    monkeypatch, tmp_path
+):
+    """A nested JSON file is not a matrix, even when it is inside the workspace."""
+    store = _matrix_store(monkeypatch, tmp_path)
+    created, _ = ac.HANDLERS["create_task_matrix"](dict(MATRIX_ARGS), store)
+    nested = tmp_path / "projects" / "events" / "nested"
+    nested.mkdir(parents=True)
+    candidate = nested / "nested_matrix.json"
+    candidate.write_text(
+        Path(created["matrix_path"]).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    payload, _ = ac.HANDLERS["process_matrix_batch"](
+        {"matrix_path": str(candidate), "run_until_complete": True}, store
+    )
+
+    assert not payload["ok"]
+    assert payload["error"] == "matrix_outside_workspace"
 
 
 def test_run_agent_short_circuits_a_completed_matrix(monkeypatch, tmp_path):

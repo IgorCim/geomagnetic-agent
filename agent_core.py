@@ -237,6 +237,25 @@ def _error(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return payload
 
 
+def _console_print(text: Any) -> None:
+    """Print progress without crashing on a legacy Windows console.
+
+    The Russian summaries contain emoji.  A cp1251 stdout raises
+    ``UnicodeEncodeError`` on the first one, which used to abort a long matrix
+    run *after* the data work had already started.  Replacing unencodable
+    characters is better than losing the run.
+    """
+    message = str(text)
+    try:
+        print(message, flush=True)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        safe = message.encode(encoding, errors="replace").decode(
+            encoding, errors="replace"
+        )
+        print(safe, flush=True)
+
+
 def _jsonable(value: Any, digits: int = 2) -> Any:
     """numpy/pandas -> plain Python, NaN/inf -> None. Keeps payloads JSON-safe."""
     if value is None:
@@ -1304,6 +1323,10 @@ MATRIX_ACTION_ALIASES = {
     "statistics": "get_statistics",
     "anomalies": "detect_anomalies",
 }
+# A matrix cell is one station on one date. plot_overlay is a multi-station
+# view and cannot be expressed as a per-cell action; reject it explicitly
+# instead of building a matrix in which every cell fails with invalid_input.
+MATRIX_UNSUPPORTED_ACTIONS = {"plot_overlay"}
 # Handler names that do one unit of per-(station, date) work. When a generated
 # plan is made *entirely* of these the runner can factor it back into a matrix
 # without asking the model to re-enumerate the combos.
@@ -1314,7 +1337,6 @@ _MATRIX_PER_UNIT_TOOLS = {
     "detect_anomalies",
     "calculate_derived_math",
     "plot_components",
-    "plot_overlay",
     "plot_space_weather_comparison",
     "calculate_mlt",
     "calculate_local_time",
@@ -5158,15 +5180,22 @@ def _handle_export_project(args: dict[str, Any], store: FrameStore) -> tuple[Any
             "No project is open. Call create_project first, or pass 'name'.",
             available=store.workspace.known(),
         ), "export_project refused: no project to export."
-    result = projects.export_project(
-        name,
-        root=store.workspace.root,
-        archive_name=args.get("archive_name"),
-        folders=args.get("folders"),
-        sort_by=args.get("sort_by"),
-        source_order=args.get("source_order"),
-        include_index=args.get("include_index", True),
-    )
+    try:
+        result = projects.export_project(
+            name,
+            root=store.workspace.root,
+            archive_name=args.get("archive_name"),
+            folders=args.get("folders"),
+            sort_by=args.get("sort_by"),
+            source_order=args.get("source_order"),
+            include_index=args.get("include_index", True),
+        )
+    except OSError as exc:
+        return _error(
+            "export_failed",
+            f"{type(exc).__name__}: {exc}",
+            project=name,
+        ), f"export_project failed: {exc}"
     if projects.is_error(result):
         return result, f"export_project failed: {result['error']}"
     return {
@@ -5189,11 +5218,37 @@ def _matrix_dir(workspace: Any) -> Path:
     return Path(workspace.root) if workspace else Path(".matrices")
 
 
-def _matrix_path(project_name: str, workspace: Any) -> Path:
-    """``<project>/<project_name>_matrix.json`` -- inside the project, so the
-    archive that export_project builds carries the job ledger with it."""
+def _matrix_path(project_name: str, workspace: Any) -> Path | None:
+    """``<project>/<canonical-project>_matrix.json``, inside the project.
+
+    The filename is built from the *resolved* project directory name, never
+    from the raw model-supplied string.  A prompt such as ``../../evil`` is
+    normalised by ``project_dir`` to ``evil``; using the raw value here would
+    make the matrix escape the project even though the project itself is safe.
+    """
     target = projects.project_dir(project_name, workspace.root)
-    return target / f"{project_name}_matrix.json"
+    if target is None:
+        return None
+    return target / f"{target.name}_matrix.json"
+
+
+def _matrix_path_is_allowed(path: Path, workspace: Any) -> bool:
+    """True when *path* is a matrix file directly inside a known project.
+
+    ``process_matrix_batch`` accepts a path from the model, so it must not be
+    able to read or rewrite arbitrary JSON.  Resolve links before checking:
+    a matrix symlinked out of the workspace is not a project matrix either.
+    """
+    try:
+        resolved = path.resolve()
+        root = Path(workspace.root).resolve()
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return False
+    if not resolved.is_file() or not resolved.name.endswith("_matrix.json"):
+        return False
+    project = projects.project_dir(resolved.parent.name, root)
+    return project is not None and project.resolve() == resolved.parent
 
 
 def _normalise_matrix_events(raw: Any) -> list[str]:
@@ -5205,7 +5260,8 @@ def _normalise_matrix_events(raw: Any) -> list[str]:
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
             try:
                 date(int(text[:4]), int(text[5:7]), int(text[8:10]))
-                out.append(text)
+                if text not in out:
+                    out.append(text)
             except ValueError:
                 continue
     return out
@@ -5230,7 +5286,11 @@ def _normalise_matrix_actions(raw: Any) -> list[str] | None:
     for item in items:
         word = str(item or "").strip()
         tool = MATRIX_ACTION_ALIASES.get(word.lower(), word)
-        if tool in HANDLERS and tool not in resolved:
+        if tool not in HANDLERS:
+            # Do not silently drop a misspelled action and run a smaller job
+            # than the caller asked for.  The whole action list is invalid.
+            return None
+        if tool not in resolved:
             resolved.append(tool)
     return resolved or None
 
@@ -5267,7 +5327,7 @@ def _matrix_task_args(
         args.setdefault("solar_wind_components", ["Bz", "V"])
         args["filename"] = _default_plot_filename(tool, args)
         return args
-    if tool in ("plot_components", "plot_overlay"):
+    if tool == "plot_components":
         frame = store.get(derived_slot)
         descriptor = derived_slot if frame is not None else raw_slot
         components = ["H", "D", "I"]
@@ -5371,7 +5431,7 @@ def _execute_matrix_task(task: dict[str, Any], store: FrameStore) -> tuple[bool,
                 if not ok:
                     event_failures[event].append(note)
                     break
-            if tool in ("plot_components", "plot_overlay"):
+            if tool == "plot_components":
                 derived_slot = f"derived:{station.lower()}:{event}"
                 if store.get(derived_slot) is None:
                     ok, note = _ensure_matrix_derived(station, event, store)
@@ -5469,6 +5529,35 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
             received=args.get("stations"),
         ), "create_task_matrix refused: no valid station codes."
     actions = _normalise_matrix_actions(args.get("actions"))
+    raw_actions = args.get("actions")
+    raw_items = (
+        [raw_actions]
+        if isinstance(raw_actions, str)
+        else list(raw_actions or [])
+    )
+    unsupported = [
+        tool
+        for item in raw_items
+        for tool in [MATRIX_ACTION_ALIASES.get(str(item or "").strip().lower(), str(item or "").strip())]
+        if tool in MATRIX_UNSUPPORTED_ACTIONS
+    ]
+    if unsupported:
+        return _error(
+            "unsupported_matrix_action",
+            "plot_overlay is a multi-station view and cannot be a per-cell "
+            "matrix action. Run it as a standalone plot_overlay task.",
+            action=unsupported[0],
+            supported=sorted(
+                set(_DEFAULT_MATRIX_ACTIONS)
+                | {
+                    "get_statistics",
+                    "detect_anomalies",
+                    "plot_space_weather_comparison",
+                    "calculate_mlt",
+                    "calculate_local_time",
+                }
+            ),
+        ), "create_task_matrix refused: plot_overlay is not a matrix action."
     if not actions:
         return _error(
             "invalid_actions",
@@ -5545,12 +5634,29 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
 
     # Open (or reuse) the project so data and charts are filed under it and the
     # final export_project has a tree to zip. create_project is idempotent.
+    # Keep only the canonical name from here on: the raw model string may be
+    # path-shaped ("../../evil"), and the matrix filename must not inherit it.
     if project_name not in store.workspace.known():
         created = store.workspace.create(project_name)
         if is_error(created):
             return created, f"create_task_matrix failed: {created['error']}"
+        project_name = str(created.get("project") or store.workspace.project or "")
     else:
+        resolved_project = store.workspace.resolve(project_name)
+        if not resolved_project:
+            return _error(
+                "invalid_project_name",
+                f"Project name {project_name!r} is not usable.",
+                requested=project_name,
+            ), "create_task_matrix refused: invalid project name."
+        project_name = resolved_project
         store.workspace.project = project_name
+    if not project_name:
+        return _error(
+            "invalid_project_name",
+            "The project could not be resolved to a safe folder name.",
+            requested=args.get("project_name"),
+        ), "create_task_matrix refused: invalid project name."
 
     tasks = [
         {
@@ -5576,8 +5682,24 @@ def _handle_create_task_matrix(args: dict[str, Any], store: FrameStore) -> tuple
         "tasks": tasks,
     }
     path = _matrix_path(project_name, store.workspace)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if path is None:
+        return _error(
+            "invalid_project_name",
+            "The project could not be resolved to a safe folder name.",
+            requested=args.get("project_name"),
+        ), "create_task_matrix refused: invalid project name."
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(matrix, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return _error(
+            "matrix_write_failed",
+            f"{type(exc).__name__}: {exc}",
+            path=str(path),
+        ), f"create_task_matrix failed: {exc}"
 
     summary = (
         f"✅ Матрица создана. Всего задач: {len(tasks)}. Файл: {path}. "
@@ -5632,19 +5754,34 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     """
     value = str(args.get("matrix_path") or "").strip()
     path: Path | None = None
+    explicit_outside = False
     if value:
         candidate = Path(os.path.expanduser(value))
         if candidate.is_file():
-            path = candidate
+            if _matrix_path_is_allowed(candidate, store.workspace):
+                path = candidate
+            else:
+                explicit_outside = True
         elif "/" in value or "\\" in value:
-            path = candidate if candidate.is_file() else None
+            # An explicit path that does not exist is simply not a matrix.
+            path = None
         else:
             # A bare file name: look inside every project under this workspace.
             for known in projects.list_projects(store.workspace.root):
-                probe = projects.project_dir(known, store.workspace.root) / value
-                if probe.is_file():
+                project = projects.project_dir(known, store.workspace.root)
+                if project is None:
+                    continue
+                probe = project / value
+                if probe.is_file() and _matrix_path_is_allowed(probe, store.workspace):
                     path = probe
                     break
+    if explicit_outside:
+        return _error(
+            "matrix_outside_workspace",
+            "A matrix must live directly inside a project in this workspace.",
+            received=value,
+            hint="Pass the matrix_path returned by create_task_matrix.",
+        ), f"process_matrix_batch refused: {value!r} is outside the workspace."
     if path is None:
         # The model guessed a wrong file name (e.g. "task_matrix.json"). Rather
         # than fail and burn another round-trip, fall back to the matrix of the
@@ -5652,16 +5789,18 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
         current = store.workspace.project
         if current:
             probe = _matrix_path(current, store.workspace)
-            if probe.is_file():
+            if probe is not None and probe.is_file() and _matrix_path_is_allowed(
+                probe, store.workspace
+            ):
                 path = probe
         if path is None:
             found = sorted(
                 p
                 for known in projects.list_projects(store.workspace.root)
-                for p in projects.project_dir(known, store.workspace.root).glob(
-                    "*_matrix.json"
-                )
-                if p.is_file()
+                for project in [projects.project_dir(known, store.workspace.root)]
+                if project is not None
+                for p in project.glob("*_matrix.json")
+                if p.is_file() and _matrix_path_is_allowed(p, store.workspace)
             )
             if len(found) == 1:
                 path = found[0]
@@ -5696,8 +5835,32 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
         batch_size = MATRIX_BATCH_SIZE
 
     tasks = matrix.get("tasks") or []
+    unsupported = sorted(
+        {
+            str(action)
+            for task in tasks
+            for action in (task.get("actions") or [])
+            if str(action) in MATRIX_UNSUPPORTED_ACTIONS
+        }
+    )
+    if unsupported:
+        return _error(
+            "unsupported_matrix_action",
+            "This matrix contains an action that cannot run per cell: "
+            f"{', '.join(unsupported)}. Recreate it without that action.",
+            action=unsupported[0],
+        ), "process_matrix_batch refused: unsupported matrix action."
     pending = [t for t in tasks if t.get("status") == "pending"]
-    chunk = pending if run_until_complete else pending[:batch_size]
+    # ``run_until_complete`` is also the retry path: a station that was partial
+    # or empty because of a transient network/API failure is not finished work.
+    # Retrying it is what makes a second call meaningful (the previous version
+    # selected only ``pending`` and returned processed=0, attempts=0).
+    retryable = {"pending", "partial", "failed"}
+    chunk = (
+        [t for t in tasks if t.get("status") in retryable]
+        if run_until_complete
+        else pending[:batch_size]
+    )
 
     succeeded = 0
     failed_here = 0
@@ -5764,7 +5927,17 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
     matrix["expected_cells"] = expected_cells
     matrix["produced_cells"] = produced_cells
     matrix["missing_cells"] = missing_cells
-    path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        path.write_text(
+            json.dumps(matrix, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return _error(
+            "matrix_write_failed",
+            f"{type(exc).__name__}: {exc}",
+            path=str(path),
+        ), f"process_matrix_batch failed: {exc}"
 
     archive: str | None = None
     export_payload: Any = None
@@ -5787,8 +5960,23 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
             else:
                 export_error = export_payload.get("message") or export_note
 
+    # ``ok`` answers "did this tool call run without a tool-level failure?";
+    # ``job_ok`` answers "did every requested cell produce data?".  They differ
+    # for a partial matrix.  The old code always returned ok=True, including a
+    # batch in which every station failed, which made a red run look green.
+    job_ok = (
+        remaining == 0
+        and produced_cells == expected_cells
+        and not missing_cells
+    )
+    attempted = len(chunk)
+    tool_ok = not (attempted > 0 and succeeded == 0 and partial_here == 0)
+    # A run_until_complete call is the production gate: it is green only when
+    # every requested cell produced data.  A debug batch (run_until_complete
+    # false) may legitimately leave pending work and is judged only by tool_ok.
+    ok = tool_ok and (job_ok if run_until_complete else True)
     if run_until_complete:
-        if archive:
+        if archive and job_ok:
             summary = (
                 f"✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ. "
                 f"Станций всего: {total}. Полностью успешных: {full}. "
@@ -5799,11 +5987,23 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
                 f"отчет на основе этих данных. Больше не нужно вызывать никакие "
                 f"инструменты."
             )
+        elif archive:
+            summary = (
+                f"⚠️ ОБРАБОТКА ЗАВЕРШЕНА, НО ПОКРЫТИЕ НЕПОЛНОЕ. "
+                f"Станций всего: {total}. Полностью успешных: {full}. "
+                f"Частичных: {partial}. Полностью пустых: {empty}. "
+                f"Список пустых станций: [{', '.join(empty_stations)}]. "
+                f"Ячеек: {produced_cells}/{expected_cells}; "
+                f"пропущено: {len(missing_cells)}. "
+                f"Архив с доступными данными собран: {archive}. "
+                f"СЛЕДУЮЩИЙ ШАГ: сообщи пользователю, какие ячейки отсутствуют "
+                f"и почему; не называй этот прогон полным."
+            )
         else:
             summary = (
-                f"✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА. Станций всего: {total}. "
-                f"Полностью успешных: {full}. Частичных: {partial}. "
-                f"Полностью пустых: {empty}. "
+                f"⚠️ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА, АРХИВ НЕ СОБРАН. "
+                f"Станций всего: {total}. Полностью успешных: {full}. "
+                f"Частичных: {partial}. Полностью пустых: {empty}. "
                 f"Список пустых станций: [{', '.join(empty_stations)}]. "
                 f"Не удалось собрать архив: {export_error}. "
                 f"СЛЕДУЮЩИЙ ШАГ: сообщи пользователю итог и причину."
@@ -5814,7 +6014,8 @@ def _handle_process_matrix_batch(args: dict[str, Any], store: FrameStore) -> tup
             f"Осталось задач: {remaining}."
         )
     return {
-        "ok": True,
+        "ok": ok,
+        "job_ok": job_ok,
         "completed_run": run_until_complete,
         "processed": len(chunk),
         "succeeded": succeeded,
@@ -5947,7 +6148,7 @@ def _run_matrix_job(
     comparison matrix. The result reports cell coverage, not just station counts.
     """
     if verbose:
-        print(
+        _console_print(
             f"🏭 Матрица: {len(events)} событий x {len(stations)} станций = "
             f"{len(stations)} задач (проект {project_name!r})."
         )
@@ -5979,7 +6180,7 @@ def _run_matrix_job(
         store,
     )
     batches = [{"ok": not is_error(payload), "payload": payload, "note": note}]
-    if is_error(payload):
+    if is_error(payload) and "expected_cells" not in payload:
         return {
             "ok": False,
             "text": payload.get("message", note),
@@ -5997,7 +6198,7 @@ def _run_matrix_job(
     produced_cells = int(payload.get("produced_cells", 0))
     missing_cells = payload.get("missing_cells") or []
     if verbose:
-        print(f"   {payload['summary']}")
+        _console_print(f"   {payload['summary']}")
 
     # process_matrix_batch now collects the archive itself once every station is
     # done, so only export here if it somehow did not (keeps the ZIP path in the
@@ -6024,12 +6225,14 @@ def _run_matrix_job(
         "text": text,
         "results": batches,
         "matrix_path": path,
+        "archive": archive,
         "export": export_payload,
         "summary": text,
         "expected_cells": expected_cells,
         "produced_cells": produced_cells,
         "missing_cells": missing_cells,
         "coverage": f"{produced_cells}/{expected_cells}",
+        "job_ok": bool(payload.get("job_ok")),
         "store": store,
     }
 
@@ -7920,6 +8123,7 @@ def run_agent(
                 name == "process_matrix_batch"
                 and entry["ok"]
                 and isinstance(payload, dict)
+                and payload.get("job_ok", True)
                 and (payload.get("completed_run") is True or payload.get("archive"))
             ):
                 text = str(payload.get("summary") or "").strip()
@@ -8132,11 +8336,11 @@ def run_agent_with_planner(
     shared = store if store is not None else FrameStore()
 
     if verbose:
-        print(f"📋 План: {len(state.tasks)} подзадач")
+        _console_print(f"📋 План: {len(state.tasks)} подзадач")
         for task in state.tasks[:10]:
-            print(f"   - {task.id}: {task.description}")
+            _console_print(f"   - {task.id}: {task.description}")
         if len(state.tasks) > 10:
-            print(f"   ... и ещё {len(state.tasks) - 10} подзадач")
+            _console_print(f"   ... и ещё {len(state.tasks) - 10} подзадач")
 
     # A single "create_task_matrix" task means the model already switched to the
     # Generator-Executor pattern: run the whole matrix job (create -> batch loop
@@ -8144,7 +8348,7 @@ def run_agent_with_planner(
     if len(state.tasks) == 1 and state.tasks[0].tool_name == "create_task_matrix":
         args = state.tasks[0].tool_args or {}
         if verbose:
-            print("🏭 План — одна задача create_task_matrix: запускаю матричный цикл...")
+            _console_print("🏭 План — одна задача create_task_matrix: запускаю матричный цикл...")
         return _run_matrix_job(
             _normalise_matrix_events(args.get("events")),
             _normalise_matrix_stations(args.get("stations")),
@@ -8165,7 +8369,7 @@ def run_agent_with_planner(
         if factored is not None:
             events, stations, actions, project_name, shared_args = factored
             if verbose:
-                print(
+                _console_print(
                     f"🔄 План из {len(state.tasks)} подзадач свернут в матрицу "
                     f"({len(events)}x{len(stations)}, действия: {actions})."
                 )
@@ -8196,7 +8400,7 @@ def run_agent_with_planner(
     results: list[dict[str, Any]] = []
     for task in state.tasks:
         if verbose:
-            print(f"\n🔧 Выполняю: {task.id} — {task.description}")
+            _console_print(f"\n🔧 Выполняю: {task.id} — {task.description}")
 
         # A plan that names a real tool and carries every required argument is
         # already a complete instruction. Execute it directly; only a task that

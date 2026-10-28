@@ -8,6 +8,7 @@ models/
 # --- Generated output and downloads ---
 plots/
 archives/
+stress_runs/
 
 # --- Caches and build artefacts ---
 __pycache__/

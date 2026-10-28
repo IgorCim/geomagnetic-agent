@@ -74,6 +74,11 @@ def test_overlay_name_and_custom_suffix():
     ) == "IRT_2024-12-10_F_INTERMAGNET-OMNI.html"
     assert cn.safe_filename("mine.html", ["OMNI"]) == "mine_OMNI.html"
     assert cn.safe_filename("mine.html") == "mine_UNKNOWN.html"
+    # The old spelling used two source tokens; replacing it must not leave the
+    # first one in the stem and create a double suffix.
+    assert cn.ensure_source_suffix(
+        "IRT_2024-12-10_F_INTERMAGNET_OMNI.html", ["INTERMAGNET", "OMNI"]
+    ) == "IRT_2024-12-10_F_INTERMAGNET-OMNI.html"
 
 
 def test_long_names_are_bounded_and_source_remains_last():
@@ -89,3 +94,31 @@ def test_unknown_handle_is_honest():
         "INTERMAGNET"
     )
     assert cn.source_from_filename("components.html") == "UNKNOWN"
+
+
+def test_duplicate_components_and_stations_are_not_repeated():
+    assert (
+        cn.components_filename("raw:irt:2024-12-10", ["H", "H"])
+        == "IRT_2024-12-10_H_INTERMAGNET.html"
+    )
+    assert (
+        cn.overlay_filename(["IRT", "IRT"], "2024-05-14", "H")
+        == "OVERLAY_IRT_2024-05-14_H_INTERMAGNET.html"
+    )
+
+
+def test_an_invalid_calendar_date_is_not_used_as_a_token():
+    info = cn.parse_handle("raw:irt:2024-13-01")
+    assert info.start is None
+    assert "2024-13-01" not in cn.components_filename(
+        "raw:irt:2024-13-01", ["H"]
+    )
+
+
+def test_an_arbitrary_long_source_becomes_unknown_and_stays_bounded():
+    name = cn.ensure_source_suffix("chart.html", ["X" * 300])
+    assert len(name) <= cn.MAX_STEM + 5
+    assert name.endswith("_UNKNOWN.html")
+    assert cn.source_from_filename("IRT_2024-01-01_F_" + "X" * 300 + ".html") == (
+        "UNKNOWN"
+    )

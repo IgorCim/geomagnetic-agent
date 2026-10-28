@@ -4,6 +4,11 @@ These run against a temporary root rather than the real ``projects/`` directory,
 so the suite neither depends on nor pollutes whatever the user has already made.
 """
 
+import json
+import os
+import subprocess
+import time
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -91,6 +96,24 @@ def test_ordinary_names_become_one_folder(root, name):
     assert (root / created["project"]).is_dir()
 
 
+@pytest.mark.parametrize(
+    "name", ["CON", "NUL", "COM1", "AUX", "PRN", "LPT1", "a" * 300]
+)
+def test_reserved_and_overlong_project_names_are_structured_errors(root, name):
+    result = ps.create_project(name, root=root)
+    assert not result["ok"]
+    assert result["error"] == "invalid_project_name"
+    assert ps.list_projects(root) == []
+
+
+def test_artifact_with_a_device_station_name_is_refused(root, frame):
+    ps.create_project("P", root=root)
+    saved = ps.save_artifact("P", "NUL", "2024-09-10", frame, root=root)
+    assert not saved["ok"]
+    assert saved["error"] == "invalid_artifact_path"
+    assert not list((root / "p").glob("nul*"))
+
+
 def test_a_leaf_manifest_records_station_data_version_time_and_commit(root, frame):
     import json
 
@@ -153,6 +176,60 @@ def test_re_export_replaces_a_stale_member(tmp_path, root, frame):
         assert "irt/2024-09-10/raw.csv" not in archive.namelist()
 
 
+def test_include_index_accepts_string_booleans(root, frame):
+    ps.create_project("P", root=root)
+    ps.save_artifact("P", "IRT", "2024-09-10", frame, root=root)
+    exports = root / "out"
+
+    without = ps.export_project(
+        "P", root=root, exports=exports, include_index="false"
+    )
+    assert without["ok"], without
+    assert without["index"] is None
+    with zipfile.ZipFile(without["path"]) as archive:
+        assert "index.csv" not in archive.namelist()
+        assert "index.html" not in archive.namelist()
+
+    with_index = ps.export_project(
+        "P", root=root, exports=exports, include_index="true"
+    )
+    assert with_index["ok"], with_index
+    assert with_index["index"] == {"csv": "index.csv", "html": "index.html"}
+    with zipfile.ZipFile(with_index["path"]) as archive:
+        assert "index.csv" in archive.namelist()
+
+
+def test_export_preserves_created_at_and_rejected_export_does_not_touch_manifest(
+    root, frame
+):
+    ps.create_project("P", root=root)
+    ps.save_artifact("P", "IRT", "2024-09-10", frame, root=root)
+    exports = root / "out"
+    first = ps.export_project("P", root=root, exports=exports)
+    assert first["ok"], first
+    manifest = root / "p" / "manifest.json"
+    first_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    time.sleep(1.1)
+    second = ps.export_project("P", root=root, exports=exports)
+    assert second["ok"], second
+    second_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert second_payload["created_at"] == first_payload["created_at"]
+    assert second_payload["updated_at"] != first_payload["updated_at"]
+
+    before = manifest.read_text(encoding="utf-8")
+    bad_archive = ps.export_project(
+        "P", root=root, exports=exports, archive_name="../evil"
+    )
+    assert not bad_archive["ok"]
+    assert manifest.read_text(encoding="utf-8") == before
+
+    bad_folders = ps.export_project(
+        "P", root=root, exports=exports, folders={"1": ["../outside"]}
+    )
+    assert not bad_folders["ok"]
+    assert manifest.read_text(encoding="utf-8") == before
+
+
 def test_project_tree_reports_sizes(root, frame):
     ps.create_project("P", root=root)
     ps.save_artifact("P", "IRT", "2024-09-10", frame, root=root)
@@ -160,6 +237,59 @@ def test_project_tree_reports_sizes(root, frame):
     assert "irt/2024-09-10/raw.csv" in rows
     assert rows["irt/2024-09-10/raw.csv"]["bytes"] > 0
     assert rows["irt/2024-09-10/raw.csv"]["size"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="junction creation is Windows-specific")
+def test_project_tree_and_default_export_do_not_follow_junctions(root, tmp_path):
+    """A junction to another folder must not leak its files into the ZIP."""
+    ps.create_project("P", root=root)
+    day = root / "p" / "irt" / "2024-09-10"
+    day.mkdir(parents=True)
+    (day / "IRT_2024-09-10_H_INTERMAGNET.html").write_text(
+        "<html>real</html>", encoding="utf-8"
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.html").write_text("TOP SECRET", encoding="utf-8")
+    junction = day / "leakdir"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"cannot create a junction: {result.stderr or result.stdout}")
+
+    rows = ps.project_tree("P", root=root)
+    assert not any("leakdir" in row["path"] for row in rows)
+
+    exported = ps.export_project("P", root=root, exports=tmp_path / "exports")
+    assert exported["ok"], exported
+    with zipfile.ZipFile(exported["path"]) as archive:
+        names = archive.namelist()
+    assert not any("leakdir" in name or "secret.html" in name for name in names)
+    assert "irt/2024-09-10/IRT_2024-09-10_H_INTERMAGNET.html" in names
+
+
+@pytest.mark.skipif(os.name != "nt", reason="junction creation is Windows-specific")
+def test_save_artifact_refuses_a_station_folder_that_is_a_junction(root, frame, tmp_path):
+    """Writing must not follow a junction out of the project."""
+    ps.create_project("P", root=root)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    junction = root / "p" / "irt"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"cannot create a junction: {result.stderr or result.stdout}")
+
+    saved = ps.save_artifact("P", "IRT", "2024-09-10", frame, root=root)
+    assert not saved["ok"]
+    assert saved["error"] == "invalid_artifact_path"
+    assert not list(outside.iterdir())
 
 
 # --------------------------------------------------------------------------- #
@@ -409,6 +539,18 @@ def test_save_chart_preserves_canonical_name_and_records_metadata(root, tmp_path
     assert charts[0]["relative_path"] == (
         "irt/2024-05-14/IRT_2024-05-14_H-D-I_INTERMAGNET.html"
     )
+
+
+def test_legacy_chart_without_a_source_tag_is_unknown(root):
+    ps.create_project("P", root=root)
+    day = root / "p" / "irt" / "2024-09-10"
+    day.mkdir(parents=True)
+    (day / "chart.html").write_text("<html>legacy</html>", encoding="utf-8")
+
+    charts = ps.read_chart_index("P", root=root)
+
+    assert len(charts) == 1
+    assert charts[0]["source"] == "UNKNOWN"
 
 
 def test_save_chart_adds_source_to_an_explicit_name(root, tmp_path):

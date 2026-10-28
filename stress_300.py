@@ -942,6 +942,34 @@ def check_matrix(label, result, expected):
     problems = []
     if not result.get("ok"):
         problems.append(f"matrix {label} not ok")
+    if result.get("job_ok") is not True:
+        problems.append(f"matrix {label} job_ok={result.get('job_ok')!r}")
+    matrix_path = result.get("matrix_path")
+    if not matrix_path:
+        problems.append(f"matrix {label} has no matrix_path")
+    else:
+        project = result.get("project") or {
+            "A": PROJECT_A,
+            "B": PROJECT_B,
+            "C": PROJECT_C,
+        }.get(label)
+        target = (
+            ps.project_dir(project, root=STORE.workspace.root)
+            if project
+            else None
+        )
+        try:
+            resolved = Path(str(matrix_path)).resolve()
+            if target is None or resolved.parent != target.resolve():
+                problems.append(
+                    f"matrix {label} JSON is outside its project: {matrix_path}"
+                )
+            elif resolved.name != f"{target.name}_matrix.json":
+                problems.append(
+                    f"matrix {label} JSON name {resolved.name!r} is not canonical"
+                )
+        except OSError:
+            problems.append(f"matrix {label} JSON path is unusable: {matrix_path}")
     if result.get("expected_cells") != expected:
         problems.append(
             f"matrix {label} expected_cells={result.get('expected_cells')} != {expected}"
@@ -965,6 +993,163 @@ def check_matrix(label, result, expected):
     elif Path(str(archive)).stat().st_size == 0:
         problems.append(f"matrix {label} ZIP archive is empty")
     return problems
+
+
+def check_security_and_export_contract():
+    """Exercise the P0/P1 contract on a disposable project.
+
+    This is deliberately outside the 300-chart science cells: it creates a
+    symlink/junction if the host allows one, tries path-shaped export options,
+    and verifies that a rejected export cannot mutate the project manifest.
+    """
+    problems = []
+    notes = []
+    project = "security_probe"
+    created = ps.create_project(project, root=STORE.workspace.root)
+    if ac.is_error(created):
+        return [f"security probe project could not be created: {created}"], notes
+    target = ps.project_dir(project, root=STORE.workspace.root)
+    if target is None:
+        return ["security probe project directory is missing"], notes
+    day = target / "irt" / "2024-05-14"
+    day.mkdir(parents=True, exist_ok=True)
+    (day / "IRT_2024-05-14_H_INTERMAGNET.html").write_text(
+        "<html>security probe</html>", encoding="utf-8"
+    )
+    manifest_path = target / "manifest.json"
+    try:
+        before_manifest = manifest_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"security probe manifest is unreadable: {exc}"], notes
+
+    bad_archive = ps.export_project(
+        project,
+        root=STORE.workspace.root,
+        exports=RUN_EXPORTS,
+        archive_name="../evil",
+    )
+    if not ac.is_error(bad_archive):
+        problems.append("path-shaped archive_name was accepted")
+    bad_folders = ps.export_project(
+        project,
+        root=STORE.workspace.root,
+        exports=RUN_EXPORTS,
+        folders={"1": ["../outside"]},
+    )
+    if not ac.is_error(bad_folders):
+        problems.append("path-shaped folder pattern was accepted")
+    try:
+        after_manifest = manifest_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        problems.append(f"security probe manifest became unreadable: {exc}")
+    else:
+        if before_manifest != after_manifest:
+            problems.append("a rejected export mutated the project manifest")
+
+    without_index = ps.export_project(
+        project,
+        root=STORE.workspace.root,
+        exports=RUN_EXPORTS,
+        archive_name="security_no_index",
+        include_index="false",
+    )
+    if ac.is_error(without_index):
+        problems.append("include_index='false' export failed")
+    else:
+        try:
+            with zipfile.ZipFile(without_index["path"]) as bundle:
+                if "index.csv" in bundle.namelist() or "index.html" in bundle.namelist():
+                    problems.append("include_index='false' still wrote an index")
+        except (OSError, zipfile.BadZipFile) as exc:
+            problems.append(f"include_index='false' ZIP is unreadable: {exc}")
+
+    first = ps.export_project(
+        project,
+        root=STORE.workspace.root,
+        exports=RUN_EXPORTS,
+        archive_name="security_created_a",
+    )
+    first_created_at = None
+    if not ac.is_error(first):
+        try:
+            first_created_at = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            ).get("created_at")
+        except (OSError, ValueError) as exc:
+            problems.append(f"created_at probe manifest is unreadable: {exc}")
+    time.sleep(1.1)
+    second = ps.export_project(
+        project,
+        root=STORE.workspace.root,
+        exports=RUN_EXPORTS,
+        archive_name="security_created_b",
+    )
+    if ac.is_error(first) or ac.is_error(second):
+        problems.append("created_at probe export failed")
+    else:
+        try:
+            second_created_at = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            ).get("created_at")
+        except (OSError, ValueError) as exc:
+            problems.append(f"created_at probe manifest is unreadable: {exc}")
+        else:
+            if not second_created_at:
+                problems.append("created_at was not recorded")
+            elif first_created_at != second_created_at:
+                problems.append("re-export changed created_at")
+
+    outside = RUN_DIR / "outside_secret"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "secret.html").write_text("TOP SECRET", encoding="utf-8")
+    link_created = False
+    try:
+        os.symlink(outside / "secret.html", day / "leak.html")
+        link_created = True
+    except OSError as exc:
+        notes.append(f"file symlink unavailable: {type(exc).__name__}")
+    try:
+        os.symlink(outside, day / "leakdir", target_is_directory=True)
+        link_created = True
+    except OSError as exc:
+        notes.append(f"directory symlink unavailable: {type(exc).__name__}")
+    if link_created:
+        try:
+            tree = ps.project_tree(project, root=STORE.workspace.root)
+        except OSError as exc:
+            problems.append(f"project_tree failed on symlink probe: {exc}")
+        else:
+            leaked = [row.get("path") for row in tree if "leak" in str(row.get("path"))]
+            if leaked:
+                problems.append(f"project_tree leaked symlink members: {leaked[:3]}")
+        try:
+            exported = ps.export_project(
+                project,
+                root=STORE.workspace.root,
+                exports=RUN_EXPORTS,
+                archive_name="security_symlink",
+            )
+        except OSError as exc:
+            problems.append(f"export failed on symlink probe: {exc}")
+        else:
+            if ac.is_error(exported):
+                problems.append(f"symlink probe export failed: {exported}")
+            else:
+                try:
+                    with zipfile.ZipFile(exported["path"]) as bundle:
+                        leaked = [
+                            name
+                            for name in bundle.namelist()
+                            if "leak" in name.lower()
+                        ]
+                        if leaked:
+                            problems.append(f"ZIP leaked symlink members: {leaked[:3]}")
+                        for name in leaked:
+                            if b"TOP SECRET" in bundle.read(name):
+                                problems.append("ZIP leaked outside file contents")
+                except (OSError, zipfile.BadZipFile) as exc:
+                    problems.append(f"symlink probe ZIP is unreadable: {exc}")
+    return problems, notes
 
 
 # ---------------------------------------------------------------------------
@@ -1069,6 +1254,16 @@ print("HTML C:", len(htmlC))
 # ---------------------------------------------------------------------------
 # 8. Prompt-driven custom archive/folders
 # ---------------------------------------------------------------------------
+project_c_dir = ps.project_dir(PROJECT_C, root=STORE.workspace.root)
+created_before_custom = None
+if project_c_dir is not None:
+    try:
+        created_before_custom = json.loads(
+            (project_c_dir / "manifest.json").read_text(encoding="utf-8")
+        ).get("created_at")
+    except (OSError, ValueError):
+        pass
+
 r_export = run_stage(
     "8/9 Custom archive/folders export",
     custom_export_prompt(PROJECT_C),
@@ -1085,6 +1280,8 @@ r_list = run_stage(
 # Final gate
 # ---------------------------------------------------------------------------
 failures = []
+security_problems, security_notes = check_security_and_export_contract()
+failures.extend(security_problems)
 MATRIX_META = {
     "A": ("INTERMAGNET", ["H", "D", "I"], "components", "components"),
     "B": ("INTERMAGNET", ["H", "D", "I"], "components", "components"),
@@ -1241,6 +1438,15 @@ if not r_list.get("ok"):
     failures.append("list_projects stage not ok")
 if htmlC_after != htmlC:
     failures.append("custom export stage changed the canonical C chart set")
+if project_c_dir is not None:
+    try:
+        created_after_custom = json.loads(
+            (project_c_dir / "manifest.json").read_text(encoding="utf-8")
+        ).get("created_at")
+    except (OSError, ValueError):
+        created_after_custom = None
+    if created_before_custom != created_after_custom:
+        failures.append("custom export changed the project's created_at")
 failures.extend(
     check_custom_export(r_export, PROJECT_C, STATIONS, STORM_DATES, htmlC)
 )
@@ -1275,6 +1481,8 @@ print(
     "folders:", sorted(CUSTOM_FOLDERS),
 )
 print("skipped:", skipped or "none")
+print("security probe:", security_problems or "ok")
+print("security notes:", security_notes or "none")
 print(
     "coverage note: BOX excluded (no May 2024 data); ABG replaces BOX; "
     "window starts 14 May because ABG has no 13 May day and ends 2 June "

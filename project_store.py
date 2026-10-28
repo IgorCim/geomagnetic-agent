@@ -136,6 +136,9 @@ def agent_commit() -> str | None:
 # --------------------------------------------------------------------------- #
 # names
 # --------------------------------------------------------------------------- #
+MAX_SLUG_LENGTH = 80
+
+
 def _slug(name: Any) -> str:
     """A folder name that cannot escape the projects root.
 
@@ -143,11 +146,100 @@ def _slug(name: Any) -> str:
     input rather than a label: ``../..`` and absolute paths are rejected outright
     instead of being sanitised into something that looks safe. Restricting the
     alphabet also keeps the tree readable and the ZIP safe to extract on Windows.
+
+    Windows device names (``CON``, ``NUL``, ``COM1`` ...) and overlong names are
+    rejected as well.  Creating a directory called ``NUL`` can silently write to
+    a device or raise halfway through, so treating it as an ordinary slug is not
+    safe even though it looks harmless.
     """
     text = str(name or "").strip().lower()
     cleaned = "".join(ch if (ch.isalnum() or ch in "-_") else "-" for ch in text)
     cleaned = "-".join(part for part in cleaned.split("-") if part)
-    return cleaned.strip("-")
+    cleaned = cleaned.strip("-")
+    if not cleaned or len(cleaned) > MAX_SLUG_LENGTH:
+        return ""
+    if cleaned.casefold() in _WINDOWS_RESERVED:
+        return ""
+    return cleaned
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """Accept the boolean spellings a JSON/LLM caller actually sends.
+
+    ``"false"`` is a truthy Python string.  Tool arguments arrive as JSON, but a
+    model that serialises them itself may send ``"false"`` or ``0``; treating
+    those as true silently produces an index the user asked not to have.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def _is_link_like(path: Path) -> bool:
+    """True for a symlink or Windows junction (a reparse-point directory).
+
+    Project trees are written by us, but a project can be copied from somewhere
+    else or edited by hand.  Following a link while listing or zipping would
+    turn ``export_project`` into a way to read files outside the project.
+    """
+    try:
+        if path.is_symlink():
+            return True
+    except OSError:
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    if callable(is_junction):
+        try:
+            if is_junction():
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _is_within(target: Path, path: Path) -> bool:
+    """True when *path* resolves inside *target* (links included)."""
+    try:
+        path.resolve().relative_to(target.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _iter_safe_children(target: Path, directory: Path) -> Iterable[Path]:
+    """Yield immediate children of *directory* that stay inside *target*."""
+    try:
+        entries = sorted(directory.iterdir(), key=lambda item: item.name.casefold())
+    except OSError:
+        return
+    for path in entries:
+        if _is_link_like(path) or not _is_within(target, path):
+            continue
+        yield path
+
+
+def _walk_project(target: Path, directory: Path | None = None) -> Iterable[Path]:
+    """Walk a project without following symlinks or junctions.
+
+    ``Path.rglob`` follows directory links on some platforms.  A link to a
+    directory outside the project would then make the tree listing and the
+    default ZIP include files the project does not own.  This walker skips the
+    link itself *and* never descends through it.
+    """
+    current = directory if directory is not None else target
+    for path in _iter_safe_children(target, current):
+        yield path
+        if path.is_dir():
+            yield from _walk_project(target, path)
 
 
 def project_dir(name: str, root: str | Path | None = None) -> Path | None:
@@ -161,10 +253,13 @@ def project_dir(name: str, root: str | Path | None = None) -> Path | None:
     slug = _slug(name)
     if not slug:
         return None
-    target = (base / slug).resolve()
-    # Belt and braces: even after the alphabet filter, confirm the result is a
-    # direct child of the root. Cheap, and it makes the invariant local.
-    if target.parent != base.resolve():
+    try:
+        target = (base / slug).resolve()
+        # Belt and braces: even after the alphabet filter, confirm the result is
+        # a direct child of the root. Cheap, and it makes the invariant local.
+        if target.parent != base.resolve():
+            return None
+    except OSError:
         return None
     return target
 
@@ -192,6 +287,8 @@ def is_error(value: Any) -> bool:
 def write_manifest(path: str | Path, payload: dict[str, Any]) -> Path:
     """Write ``payload`` as pretty UTF-8 JSON, creating parent directories."""
     target = Path(path)
+    if _is_link_like(target):
+        raise OSError(f"refusing to write through a link: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -209,7 +306,11 @@ def read_project_manifest(name: str, root: str | Path | None = None) -> dict[str
             requested=name,
         )
     manifest = target / _MANIFEST
-    if not manifest.is_file():
+    if (
+        not manifest.is_file()
+        or _is_link_like(manifest)
+        or not _is_within(target, manifest)
+    ):
         return _error(
             "project_not_found",
             f"No project {target.name!r}. Known projects: {', '.join(list_projects(root)) or '(none)'}",
@@ -258,7 +359,7 @@ def _archive_filename(value: Any, default: str) -> str | None:
 
 def _load_chart_index(target: Path) -> list[dict[str, Any]]:
     path = target / CHARTS_INDEX
-    if not path.is_file():
+    if not path.is_file() or _is_link_like(path) or not _is_within(target, path):
         return []
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -269,12 +370,15 @@ def _load_chart_index(target: Path) -> list[dict[str, Any]]:
 
 
 def _write_chart_index(target: Path, charts: Sequence[dict[str, Any]]) -> Path:
+    path = target / CHARTS_INDEX
+    if _is_link_like(path):
+        raise OSError(f"refusing to write through a link: {path}")
     payload = {
         "project": target.name,
         "updated_at": utc_now(),
         "charts": list(charts),
     }
-    return write_manifest(target / CHARTS_INDEX, payload)
+    return write_manifest(path, payload)
 
 
 def _upsert_chart_index(target: Path, entry: dict[str, Any]) -> None:
@@ -305,7 +409,7 @@ def _source_from_relative_path(relative_path: str, filename: str) -> str:
         "supermag": "SUPERMAG",
         "noaa": "NOAA",
         "iswa": "ISWA",
-    }.get(first, "INTERMAGNET")
+    }.get(first, "UNKNOWN")
 
 
 def _fallback_chart_row(target: Path, path: Path) -> dict[str, Any]:
@@ -347,7 +451,10 @@ def _chart_rows(target: Path) -> list[dict[str, Any]]:
         (str(row.get("relative_path") or ""), str(row.get("file") or ""))
         for row in rows
     }
-    for path in sorted(target.rglob("*.html")):
+    for path in sorted(
+        (p for p in _walk_project(target) if p.suffix.lower() == ".html"),
+        key=lambda item: item.relative_to(target).as_posix(),
+    ):
         if not path.is_file():
             continue
         relative = path.relative_to(target).as_posix()
@@ -626,7 +733,11 @@ def _resolve_export_folders(
             if any(ch in text for ch in "*?["):
                 try:
                     candidates = [
-                        p for p in _glob_case_insensitive(target, text) if p.is_file()
+                        p
+                        for p in _glob_case_insensitive(target, text)
+                        if p.is_file()
+                        and not _is_link_like(p)
+                        and _is_within(target, p)
                     ]
                 except (OSError, ValueError) as exc:
                     return None, _error(
@@ -637,14 +748,24 @@ def _resolve_export_folders(
                 candidate = target / text
                 if not candidate.exists():
                     candidate = _resolve_case_insensitive(target, text)
-                if candidate.is_dir():
-                    candidates = [p for p in candidate.rglob("*") if p.is_file()]
-                elif candidate.is_file():
+                if (
+                    candidate.is_dir()
+                    and not _is_link_like(candidate)
+                    and _is_within(target, candidate)
+                ):
+                    candidates = [
+                        p for p in _walk_project(target, candidate) if p.is_file()
+                    ]
+                elif (
+                    candidate.is_file()
+                    and not _is_link_like(candidate)
+                    and _is_within(target, candidate)
+                ):
                     candidates = [candidate]
             for path in candidates:
                 try:
                     relative = path.resolve().relative_to(target.resolve()).as_posix()
-                except ValueError:
+                except (OSError, ValueError):
                     continue
                 member = f"{folder}/{relative}"
                 if member in seen_members:
@@ -668,6 +789,7 @@ def project_manifest(
     artifacts: Sequence[dict[str, Any]] | None = None,
     root: str | Path | None = None,
     extra: dict[str, Any] | None = None,
+    created_at: str | None = None,
 ) -> dict[str, Any]:
     """The project-level manifest.
 
@@ -681,7 +803,7 @@ def project_manifest(
         "stations": sorted({_slug(s) for s in stations if _slug(s)}),
         "dates": sorted({str(d) for d in dates if d}),
         "artifacts": list(artifacts or []),
-        "created_at": utc_now(),
+        "created_at": created_at or utc_now(),
         "updated_at": utc_now(),
         "agent_commit": agent_commit(),
     }
@@ -710,15 +832,31 @@ def create_project(
     if target is None:
         return _error(
             "invalid_project_name",
-            "A project name must be non-empty and use only letters, digits, '-' or '_'.",
+            "A project name must be non-empty, at most 80 characters, use only "
+            "letters, digits, '-' or '_', and not be a Windows device name.",
             requested=name,
         )
-    existed = (target / _MANIFEST).is_file()
-    target.mkdir(parents=True, exist_ok=True)
-    if not existed:
-        write_manifest(
-            target / _MANIFEST,
-            project_manifest(target.name, stations or [], dates or [], root=root),
+    manifest_path = target / _MANIFEST
+    if _is_link_like(manifest_path):
+        return _error(
+            "unsafe_project_path",
+            "The project manifest is a symlink or junction; refusing to use it.",
+            path=str(manifest_path),
+        )
+    existed = manifest_path.is_file()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        if not existed:
+            write_manifest(
+                manifest_path,
+                project_manifest(target.name, stations or [], dates or [], root=root),
+            )
+    except OSError as exc:
+        return _error(
+            "project_create_failed",
+            f"{type(exc).__name__}: {exc}",
+            requested=name,
+            path=str(target),
         )
     return {
         "ok": True,
@@ -788,8 +926,14 @@ def save_artifact(
     observatory published. Collapsing them loses the ability to tell a re-derivation
     from a re-download.
     """
+    project_path = project_dir(project, root)
     target = artifact_dir(project, station, day, root)
-    if target is None:
+    if (
+        target is None
+        or project_path is None
+        or _is_link_like(target)
+        or not _is_within(project_path, target)
+    ):
         return _error(
             "invalid_artifact_path",
             "A project, station and date are all required to save an artifact.",
@@ -798,6 +942,12 @@ def save_artifact(
     target.mkdir(parents=True, exist_ok=True)
     filename = f"{_slug(kind) or 'data'}.csv"
     csv_path = target / filename
+    if _is_link_like(csv_path) or _is_link_like(target / _MANIFEST):
+        return _error(
+            "unsafe_artifact_path",
+            "Refusing to write an artifact through a symlink or junction.",
+            path=str(target),
+        )
     try:
         frame.to_csv(csv_path, index=False)
     except Exception as exc:  # pragma: no cover - defensive, mirrors the loop
@@ -851,7 +1001,9 @@ def project_tree(name: str, root: str | Path | None = None) -> list[dict[str, An
     if target is None or not target.is_dir():
         return []
     rows: list[dict[str, Any]] = []
-    for path in sorted(target.rglob("*")):
+    for path in sorted(
+        _walk_project(target), key=lambda item: item.relative_to(target).as_posix()
+    ):
         relative = path.relative_to(target).as_posix()
         if path.is_dir():
             rows.append({"path": relative + "/", "kind": "dir", "size": "", "bytes": 0})
@@ -912,17 +1064,38 @@ def export_project(
             f"No project {name!r} to export.",
             available=list_projects(root),
         )
+    include_index = _as_bool(include_index, True)
+
+    manifest_path = target / _MANIFEST
+    if _is_link_like(manifest_path):
+        return _error(
+            "unsafe_project_path",
+            "The project manifest is a symlink or junction; refusing to export it.",
+            path=str(manifest_path),
+        )
+    created_at: str | None = None
+    if manifest_path.is_file() and _is_within(target, manifest_path):
+        try:
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(previous, dict):
+                created_at = previous.get("created_at")
+        except (OSError, ValueError):
+            created_at = None
 
     # Refresh the project manifest from what is actually on disk, so the archive
     # describes the files it contains rather than what was planned at creation.
     stations: list[str] = []
     dates: set[str] = set()
     artifacts: list[dict[str, Any]] = []
-    for station_dir in sorted(p for p in target.iterdir() if p.is_dir()):
+    for station_dir in (
+        p for p in _iter_safe_children(target, target) if p.is_dir()
+    ):
         stations.append(station_dir.name)
-        for day_dir in sorted(p for p in station_dir.iterdir() if p.is_dir()):
+        for day_dir in (
+            p for p in _iter_safe_children(target, station_dir) if p.is_dir()
+        ):
             dates.add(day_dir.name)
-            for item in sorted(day_dir.iterdir()):
+            for item in _iter_safe_children(target, day_dir):
                 if item.is_file():
                     artifacts.append(
                         {
@@ -932,13 +1105,6 @@ def export_project(
                             "bytes": item.stat().st_size,
                         }
                     )
-    write_manifest(
-        target / _MANIFEST,
-        project_manifest(
-            target.name, stations, sorted(dates), artifacts, root=root,
-            extra={"exported_at": utc_now()},
-        ),
-    )
 
     zip_name = _archive_filename(archive_name, f"{target.name}.zip")
     if zip_name is None:
@@ -960,6 +1126,22 @@ def export_project(
         assert mapping is not None
         for folder, _relative, _path in mapping:
             folder_counts[folder] = folder_counts.get(folder, 0) + 1
+
+    # Only now that the archive name and every folder pattern have validated do
+    # we touch the project manifest.  A rejected export must leave the project
+    # exactly as it was.
+    write_manifest(
+        manifest_path,
+        project_manifest(
+            target.name,
+            stations,
+            sorted(dates),
+            artifacts,
+            root=root,
+            extra={"exported_at": utc_now()},
+            created_at=created_at,
+        ),
+    )
 
     charts = _chart_rows(target)
     sorted_charts = sort_charts(charts, sort_by, source_order=source_order)
@@ -988,7 +1170,10 @@ def export_project(
     if mapping is None:
         planned = [
             path.relative_to(target).as_posix()
-            for path in sorted(target.rglob("*"))
+            for path in sorted(
+                _walk_project(target),
+                key=lambda item: item.relative_to(target).as_posix(),
+            )
             if path.is_file()
             and path.relative_to(target).as_posix()
             not in {_EXPORT_INDEX_CSV, _EXPORT_INDEX_HTML, _EXPORT_MANIFEST}
@@ -1040,7 +1225,10 @@ def export_project(
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
         if mapping is None:
-            for path in sorted(target.rglob("*")):
+            for path in sorted(
+                _walk_project(target),
+                key=lambda item: item.relative_to(target).as_posix(),
+            ):
                 if not path.is_file():
                     continue
                 arcname = path.relative_to(target).as_posix()
@@ -1213,11 +1401,18 @@ class Workspace:
             seen.add(parsed)
             station, day = parsed
             target = artifact_dir(self.project, station, day, self.root)
-            if target is None or not target.is_dir():
+            if (
+                target is None
+                or not target.is_dir()
+                or _is_link_like(target)
+                or not _is_within(project_target, target)
+            ):
                 # Only write into a day that actually exists in the project.
                 # Creating it here would invent a folder that no fetch produced.
                 continue
             destination = target / filename
+            if _is_link_like(destination):
+                continue
             try:
                 target.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(payload)
@@ -1265,7 +1460,10 @@ def iter_manifests(name: str, root: str | Path | None = None) -> Iterable[dict[s
     if target is None or not target.is_dir():
         return []
     out = []
-    for manifest in sorted(target.rglob(_MANIFEST)):
+    for manifest in sorted(
+        (p for p in _walk_project(target) if p.name == _MANIFEST),
+        key=lambda item: item.relative_to(target).as_posix(),
+    ):
         try:
             out.append(json.loads(manifest.read_text(encoding="utf-8")))
         except (OSError, ValueError):

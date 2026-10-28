@@ -49,6 +49,7 @@ __all__ = [
 ]
 
 KNOWN_SOURCES = ("INTERMAGNET", "OMNI", "KYOTO", "SUPERMAG", "NOAA", "ISWA")
+_ALLOWED_SOURCE_TOKENS = set(KNOWN_SOURCES) | {"UNKNOWN"}
 MAX_STEM = 140
 
 _SOURCE_BY_FAMILY = {
@@ -115,16 +116,35 @@ def _date_span(start: Any, end: Any = None) -> str:
 def _components_token(components: Iterable[Any]) -> str:
     if isinstance(components, str):
         components = [components]
-    tokens = [_safe_token(c) for c in components if str(c or "").strip()]
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for component in components:
+        token = _safe_token(component)
+        key = token.casefold()
+        if token and key not in seen:
+            seen.add(key)
+            tokens.append(token)
     return "-".join(tokens)
 
 
 def _sources_token(sources: Iterable[Any]) -> str:
+    """A validated, de-duplicated source suffix (``INTERMAGNET-OMNI``).
+
+    A source is an enum, not free text.  An arbitrary long token from a legacy
+    filename must become ``UNKNOWN`` rather than a 200-character suffix that
+    makes the chart impossible to open on Windows.
+    """
     unique: list[str] = []
     for source in sources:
         text = str(source or "").strip().upper()
-        if text and text not in unique:
-            unique.append(text)
+        for piece in text.split("-"):
+            piece = piece.strip()
+            if not piece:
+                continue
+            if piece not in _ALLOWED_SOURCE_TOKENS:
+                piece = "UNKNOWN"
+            if piece not in unique:
+                unique.append(piece)
     return "-".join(unique) or "UNKNOWN"
 
 
@@ -133,6 +153,9 @@ def _limit_stem(stem: str, suffix: str) -> str:
     if len(stem) <= MAX_STEM:
         return stem
     digest = hashlib.sha1(stem.encode("utf-8")).hexdigest()[:8]
+    max_suffix = max(1, MAX_STEM - len(digest) - 4)
+    if len(suffix) > max_suffix:
+        suffix = suffix[:max_suffix].rstrip("._-") or "UNKNOWN"
     room = MAX_STEM - len(suffix) - len(digest) - 3
     head = stem[: max(1, room)].rstrip("._-")
     return f"{head}__{digest}_{suffix}"
@@ -165,17 +188,19 @@ def parse_handle(handle: Any) -> HandleInfo:
         if len(parts) > 1:
             station = _safe_token(parts[1]).upper() or None
         if len(parts) > 2:
-            start = _date_token(parts[2]) or _safe_token(parts[2]) or None
+            # An invalid calendar date must not become a date token.  A handle
+            # like ``raw:irt:2024-13-01`` is not a usable cell coordinate.
+            start = _date_token(parts[2]) or None
         source = _SOURCE_BY_FAMILY.get(family, "UNKNOWN")
     elif family in ("sw", "idx"):
         if len(parts) > 2:
-            start = _date_token(parts[2]) or _safe_token(parts[2]) or None
+            start = _date_token(parts[2]) or None
         source = _SOURCE_BY_NAMESPACE.get(dataset or "", "UNKNOWN")
     else:
         if len(parts) > 1:
             station = _safe_token(parts[1]).upper() or None
         if len(parts) > 2:
-            start = _date_token(parts[2]) or _safe_token(parts[2]) or None
+            start = _date_token(parts[2]) or None
         source = _SOURCE_BY_FAMILY.get(family) or _SOURCE_BY_NAMESPACE.get(
             family, "UNKNOWN"
         )
@@ -274,9 +299,12 @@ def overlay_filename(
     """Name a multi-station overlay, with the source still last."""
     if isinstance(stations, str):
         stations = [stations]
-    station_token = "-".join(
-        token for token in (_safe_token(s).upper() for s in stations) if token
-    )
+    station_tokens: list[str] = []
+    for station in stations:
+        token = _safe_token(station).upper()
+        if token and token not in station_tokens:
+            station_tokens.append(token)
+    station_token = "-".join(station_tokens)
     parts: list[Any] = ["OVERLAY"]
     if station_token:
         parts.append(station_token)
@@ -325,14 +353,20 @@ def space_weather_filename(
 
 
 def _strip_source_suffix(stem: str) -> str:
-    """Drop a trailing ``_INTERMAGNET`` / ``_INTERMAGNET-OMNI`` token."""
-    head, separator, last = stem.rpartition("_")
-    if not separator:
-        return stem
-    pieces = last.upper().split("-")
-    if pieces and all(piece in KNOWN_SOURCES for piece in pieces):
-        return head
-    return stem
+    """Drop one or more trailing source tokens.
+
+    Handles both ``..._INTERMAGNET-OMNI`` and the older two-token spelling
+    ``..._INTERMAGNET_OMNI``.  Only the trailing run is removed, so a station
+    or component named like a source cannot be mistaken for provenance.
+    """
+    parts = stem.split("_")
+    end = len(parts)
+    while end > 1:
+        pieces = parts[end - 1].upper().split("-")
+        if not pieces or not all(piece in _ALLOWED_SOURCE_TOKENS for piece in pieces):
+            break
+        end -= 1
+    return "_".join(parts[:end])
 
 
 def ensure_source_suffix(filename: Any, sources: Iterable[Any]) -> str:
@@ -374,7 +408,7 @@ def source_from_filename(filename: Any) -> str:
     if not token:
         return "UNKNOWN"
     pieces = token.upper().split("-")
-    if pieces and all(piece in KNOWN_SOURCES for piece in pieces):
+    if pieces and all(piece in _ALLOWED_SOURCE_TOKENS for piece in pieces):
         return token.upper()
     return "UNKNOWN"
 
