@@ -4,6 +4,10 @@
 данные, пустые ячейки, небезопасные пути и сетевые ошибки. Запускать после
 загрузки реального `brain` (Qwen 2.5 14B), с `GEOMAG_OFFLINE=0`.
 
+Для live-прогона на Kaggle используйте `KAGGLE_DEMO_50.md` и
+`kaggle_demo_50.ipynb`: GPU T4, Internet On, 50 графиков, ABG 13 May,
+custom ZIP, security и multi-turn.
+
 На Windows перед запуском полезно выставить UTF-8, иначе emoji в старых
 консольных сообщениях могут дать `UnicodeEncodeError`:
 
