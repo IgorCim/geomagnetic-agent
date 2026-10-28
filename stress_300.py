@@ -16,12 +16,21 @@
 #   1-4: one 10-station x 20-date matrix = 200 component charts
 #   5:   one 5-station x 10-date matrix   =  50 component charts
 #   6:   one 10-station x 5-date matrix   =  50 ground-vs-solar-wind charts
+#
+# Final gate also verifies the naming/export contract added around the data:
+#   * every cell has the deterministic canonical basename and source suffix;
+#   * charts.json carries source(s), station, date, components, kind, product;
+#   * the normal matrix ZIP keeps its default name and canonical tree;
+#   * a prompt-named archive/folders export is a view, not a project mutation.
 # ============================================================
+import csv
+import io
 import json
 import os
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 
@@ -89,6 +98,7 @@ if str(REPO) not in sys.path:
 print("REPO:", REPO)
 
 import agent_core as ac
+import chart_naming as cn
 import project_store as ps
 
 print("agent_core:", ac.__file__)
@@ -139,6 +149,17 @@ STORM_DATES = [f"2024-05-{day:02d}" for day in range(14, 19)]
 PROJECT_A = "may2024_matrix_A_200"
 PROJECT_B = "may2024_matrix_B_50"
 PROJECT_C = "may2024_spaceweather_50"
+
+# Prompt-driven custom export: these names must survive from the prompt into
+# the ZIP.  The project tree itself must stay canonical.
+CUSTOM_ARCHIVE = "storm_report_2024"
+CUSTOM_FOLDERS = {
+    "1": ["irt", "api", "bsl", "abg"],
+    "2": ["brw", "shu", "frd"],
+    "3": ["cmo", "bou", "tuc"],
+}
+CUSTOM_SORT = ["date", "station"]
+CUSTOM_SOURCE_ORDER = ["OMNI", "INTERMAGNET", "KYOTO", "SUPERMAG", "NOAA", "ISWA"]
 
 assert len(STATIONS) == 10
 assert len(HIGHLAT) == 5
@@ -218,13 +239,33 @@ def project_html(project):
     return sorted(path.rglob("*.html"))
 
 
-def check_chart_cells(label, project, stations, events):
-    """Each requested station/date cell must own exactly one non-empty chart.
+def canonical_chart_name(label, station, event):
+    """The deterministic filename the code must produce for one matrix cell.
 
-    The chart file is deliberately called ``chart.html`` inside every cell.
+    A/B use the H/D/I component matrix; C is the ground-vs-OMNI chart.  Both
+    sides of A/B resolve to the same name whether the matrix used ``raw:`` or
+    ``derived:``, so this checks the naming contract, not an implementation
+    detail of the cell.
+    """
+    if label == "C":
+        return cn.space_weather_filename(
+            f"raw:{station.lower()}:{event}",
+            "sw:omni:2024-05-01",
+            "H",
+            ["Bz", "V"],
+        )
+    return cn.components_filename(
+        f"raw:{station.lower()}:{event}", ["H", "D", "I"]
+    )
+
+
+def check_chart_cells(label, project, stations, events, expected_name, expected_source):
+    """Each requested station/date cell must own exactly one canonical chart.
+
     Uniqueness is the full project-relative path, not the basename: counting
     basenames rejects a perfectly good matrix tree where 200 cells each contain
-    ``irt/2024-05-14/chart.html`` and so on.
+    ``irt/2024-05-14/...html`` and so on.  The basename itself is checked
+    against the deterministic naming function, including the source suffix.
     """
     problems = []
     root = ps.project_dir(project, root=STORE.workspace.root)
@@ -243,6 +284,18 @@ def check_chart_cells(label, project, stations, events):
                 expected_paths.update(chart.resolve() for chart in charts)
                 continue
             chart = charts[0]
+            expected = expected_name(station, event)
+            if chart.name != expected:
+                problems.append(
+                    f"matrix {label} cell {station}/{event}: "
+                    f"{chart.name!r} != canonical {expected!r}"
+                )
+            if cn.source_from_filename(chart.name) != expected_source:
+                problems.append(
+                    f"matrix {label} cell {station}/{event}: "
+                    f"source suffix {cn.source_from_filename(chart.name)!r} "
+                    f"!= {expected_source!r}"
+                )
             if chart.stat().st_size == 0:
                 problems.append(
                     f"matrix {label} cell {station}/{event} has an empty chart"
@@ -258,6 +311,234 @@ def check_chart_cells(label, project, stations, events):
         problems.append(
             f"matrix {label} has {len(extras)} HTML charts outside the requested cells"
         )
+    return problems
+
+
+def check_chart_metadata(
+    label,
+    project,
+    stations,
+    events,
+    expected_name,
+    expected_source,
+    components,
+    kind,
+    product,
+):
+    """``charts.json`` must describe every cell, not just the file on disk."""
+    problems = []
+    root = ps.project_dir(project, root=STORE.workspace.root)
+    if root is None or not root.is_dir():
+        return [f"matrix {label} project directory is missing"]
+
+    rows = ps.read_chart_index(project, root=STORE.workspace.root)
+    by_key = {
+        (str(row.get("relative_path") or ""), str(row.get("file") or "")): row
+        for row in rows
+    }
+    expected_keys = set()
+    expected_sources = expected_source.split("-")
+    for station in stations:
+        for event in events:
+            filename = expected_name(station, event)
+            relative = f"{station.lower()}/{event}/{filename}"
+            key = (relative, filename)
+            expected_keys.add(key)
+            row = by_key.get(key)
+            if row is None:
+                problems.append(f"matrix {label} charts.json is missing {relative}")
+                continue
+            checks = (
+                ("file", row.get("file"), filename),
+                ("source", row.get("source"), expected_source),
+                ("sources", list(row.get("sources") or []), expected_sources),
+                ("station", row.get("station"), station),
+                ("date", row.get("date"), event),
+                ("components", list(row.get("components") or []), components),
+                ("kind", row.get("kind"), kind),
+                ("product", row.get("product"), product),
+            )
+            for field, got, want in checks:
+                if got != want:
+                    problems.append(
+                        f"matrix {label} charts.json {relative}: "
+                        f"{field}={got!r} != {want!r}"
+                    )
+            handles = list(row.get("handles") or [])
+            if label == "C":
+                want_handles = [
+                    f"raw:{station.lower()}:{event}",
+                    "sw:omni:2024-05-01",
+                ]
+                if handles != want_handles:
+                    problems.append(
+                        f"matrix {label} charts.json {relative}: "
+                        f"handles={handles!r} != {want_handles!r}"
+                    )
+            else:
+                allowed = {
+                    f"raw:{station.lower()}:{event}",
+                    f"derived:{station.lower()}:{event}",
+                }
+                if len(handles) != 1 or handles[0] not in allowed:
+                    problems.append(
+                        f"matrix {label} charts.json {relative}: "
+                        f"handles={handles!r} do not name the cell"
+                    )
+            if len(str(row.get("sha256") or "")) != 64:
+                problems.append(
+                    f"matrix {label} charts.json {relative}: sha256 is missing"
+                )
+            if int(row.get("bytes") or 0) <= 0:
+                problems.append(
+                    f"matrix {label} charts.json {relative}: bytes is not positive"
+                )
+
+    extras = set(by_key) - expected_keys
+    if extras:
+        problems.append(
+            f"matrix {label} charts.json has {len(extras)} unexpected rows"
+        )
+    return problems
+
+
+def _archive_path(result):
+    export = result.get("export") if isinstance(result.get("export"), dict) else {}
+    archive = result.get("archive") or export.get("path") or export.get("archive")
+    return Path(str(archive)) if archive else None
+
+
+def check_default_archive(label, project, result, stations, events, expected_name):
+    """The normal matrix export must keep its default name and canonical tree."""
+    problems = []
+    archive = _archive_path(result)
+    if archive is None or not archive.is_file():
+        return []  # check_matrix already reports a missing archive
+    target = ps.project_dir(project, root=STORE.workspace.root)
+    expected_archive = f"{target.name}.zip" if target is not None else ""
+    if expected_archive and archive.name != expected_archive:
+        problems.append(
+            f"matrix {label} default ZIP name {archive.name!r} != {expected_archive!r}"
+        )
+
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+            expected_members = set()
+            for station in stations:
+                for event in events:
+                    expected_members.add(
+                        f"{station.lower()}/{event}/{expected_name(station, event)}"
+                    )
+            charts = [
+                name
+                for name in names
+                if name.lower().endswith(".html") and name != "index.html"
+            ]
+            missing = expected_members - set(charts)
+            extra = set(charts) - expected_members
+            if missing:
+                problems.append(
+                    f"matrix {label} default ZIP is missing {len(missing)} canonical charts"
+                )
+            if extra:
+                problems.append(
+                    f"matrix {label} default ZIP has {len(extra)} charts outside "
+                    "the canonical tree"
+                )
+            for member in charts:
+                if len(member.split("/")) != 3:
+                    problems.append(
+                        f"matrix {label} default ZIP has a non-canonical path {member!r}"
+                    )
+                    break
+                if bundle.getinfo(member).file_size == 0:
+                    problems.append(
+                        f"matrix {label} default ZIP has an empty chart {member!r}"
+                    )
+                    break
+            for meta in (
+                "manifest.json",
+                "charts.json",
+                "index.csv",
+                "index.html",
+                "export_manifest.json",
+            ):
+                if meta not in names:
+                    problems.append(
+                        f"matrix {label} default ZIP is missing {meta}"
+                    )
+            try:
+                rows = list(
+                    csv.DictReader(
+                        io.StringIO(bundle.read("index.csv").decode("utf-8"))
+                    )
+                )
+            except (KeyError, ValueError, UnicodeDecodeError) as exc:
+                problems.append(
+                    f"matrix {label} default index.csv is unreadable: {exc}"
+                )
+                rows = []
+            if len(rows) != len(expected_members):
+                problems.append(
+                    f"matrix {label} default index.csv has {len(rows)} rows, "
+                    f"expected {len(expected_members)}"
+                )
+            if rows:
+                pairs = [(row.get("station"), row.get("date")) for row in rows]
+                if pairs != sorted(pairs):
+                    problems.append(
+                        f"matrix {label} default index.csv is not sorted by "
+                        "station, date"
+                    )
+                for row in rows:
+                    station = str(row.get("station") or "")
+                    event = str(row.get("date") or "")
+                    if station not in stations or event not in events:
+                        problems.append(
+                            f"matrix {label} default index.csv has unknown row "
+                            f"{station}/{event}"
+                        )
+                        continue
+                    if row.get("file") != expected_name(station, event):
+                        problems.append(
+                            f"matrix {label} default index.csv file "
+                            f"{row.get('file')!r} is not canonical"
+                        )
+            try:
+                manifest = json.loads(
+                    bundle.read("export_manifest.json").decode("utf-8")
+                )
+            except (KeyError, ValueError) as exc:
+                problems.append(
+                    f"matrix {label} export_manifest.json is unreadable: {exc}"
+                )
+            else:
+                if expected_archive and manifest.get("archive") != expected_archive:
+                    problems.append(
+                        f"matrix {label} export_manifest archive "
+                        f"{manifest.get('archive')!r} != {expected_archive!r}"
+                    )
+                if manifest.get("folders") != {"layout": "canonical"}:
+                    problems.append(
+                        f"matrix {label} default export unexpectedly has custom folders"
+                    )
+                if manifest.get("sort_by") != [
+                    "station",
+                    "start_date",
+                    "components",
+                    "source",
+                    "file",
+                ]:
+                    problems.append(
+                        f"matrix {label} default export sort_by is not the default"
+                    )
+                if manifest.get("counts", {}).get("charts") != len(expected_members):
+                    problems.append(
+                        f"matrix {label} default export chart count is wrong"
+                    )
+    except (OSError, zipfile.BadZipFile) as exc:
+        problems.append(f"matrix {label} default ZIP is unreadable: {exc}")
     return problems
 
 
@@ -294,6 +575,307 @@ def comparison_matrix_prompt(project, events, stations, solar_wind):
         + "\n"
         f'project_name = "{project}"\n'
     )
+
+
+def custom_export_prompt(project):
+    return (
+        "Выполни ровно ОДИН вызов export_project и ничего больше.\n"
+        'В плане должна быть ровно одна подзадача с tool_name="export_project".\n'
+        "Не создавай графики, не вызывай process_matrix_batch и не меняй проект.\n"
+        f"name = {json.dumps(project)}\n"
+        f"archive_name = {json.dumps(CUSTOM_ARCHIVE)}\n"
+        f"folders = {json.dumps(CUSTOM_FOLDERS, ensure_ascii=False)}\n"
+        f"sort_by = {json.dumps(CUSTOM_SORT)}\n"
+        f"source_order = {json.dumps(CUSTOM_SOURCE_ORDER)}\n"
+        "Папки 1/2/3 — это имена верхнего уровня в ZIP. Файлы внутри должны "
+        "сохранить канонические имена, проект на диске менять нельзя. "
+        "Верни путь архива."
+    )
+
+
+def check_custom_export(result, project, stations, events, before_paths):
+    """Prompt-named folders must be an export view, not a project mutation."""
+    problems = []
+    if not result.get("ok"):
+        problems.append("custom export stage not ok")
+
+    all_calls = list(result.get("tool_calls") or [])
+    unexpected_calls = [
+        call.get("tool") for call in all_calls if call.get("tool") != "export_project"
+    ]
+    if unexpected_calls:
+        problems.append(
+            f"custom export stage made unexpected calls: {unexpected_calls!r}"
+        )
+    calls = [
+        call for call in all_calls if call.get("tool") == "export_project"
+    ]
+    if len(calls) != 1:
+        problems.append(
+            f"custom export stage made {len(calls)} export_project calls, expected 1"
+        )
+    else:
+        call = calls[0]
+        if not call.get("ok"):
+            problems.append("custom export_project call failed")
+        args = call.get("arguments") or {}
+        target = ps.project_dir(project, root=STORE.workspace.root)
+        requested = str(args.get("name") or "")
+        resolved = (
+            ps.project_dir(requested, root=STORE.workspace.root)
+            if requested
+            else None
+        )
+        if (
+            target is None
+            or resolved is None
+            or resolved.name != target.name
+        ):
+            problems.append(
+                f"custom export used project {args.get('name')!r}, expected {project!r}"
+            )
+        archive_arg = str(args.get("archive_name") or "").lower()
+        if archive_arg not in (CUSTOM_ARCHIVE, f"{CUSTOM_ARCHIVE}.zip"):
+            problems.append(
+                f"custom export archive_name={archive_arg!r}, "
+                f"expected {CUSTOM_ARCHIVE!r}"
+            )
+        folders_arg = args.get("folders")
+        if not isinstance(folders_arg, dict) or set(folders_arg) != set(CUSTOM_FOLDERS):
+            problems.append(
+                f"custom export folders={folders_arg!r}, "
+                f"expected keys {sorted(CUSTOM_FOLDERS)}"
+            )
+        if ps._normalise_sort_by(args.get("sort_by")) != ps._normalise_sort_by(
+            CUSTOM_SORT
+        ):
+            problems.append(
+                f"custom export sort_by={args.get('sort_by')!r}, "
+                f"expected {CUSTOM_SORT!r}"
+            )
+        source_order = args.get("source_order") or []
+        if isinstance(source_order, str):
+            source_order = source_order.replace(",", " ").split()
+        got_order = [str(source).strip().upper() for source in source_order]
+        if got_order != CUSTOM_SOURCE_ORDER:
+            problems.append(
+                f"custom export source_order={got_order!r}, "
+                f"expected {CUSTOM_SOURCE_ORDER!r}"
+            )
+
+    archive = RUN_EXPORTS / f"{CUSTOM_ARCHIVE}.zip"
+    if not archive.is_file():
+        problems.append(f"custom archive is missing: {archive}")
+        return problems
+    if archive.stat().st_size == 0:
+        problems.append("custom archive is empty")
+        return problems
+
+    station_folder = {
+        station.upper(): folder
+        for folder, patterns in CUSTOM_FOLDERS.items()
+        for station in patterns
+    }
+    expected_members = set()
+    for station in stations:
+        for event in events:
+            expected_members.add(
+                f"{station_folder[station]}/{station.lower()}/{event}/"
+                f"{canonical_chart_name('C', station, event)}"
+            )
+
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+            top_level = {name.split("/", 1)[0] for name in names if "/" in name}
+            if top_level != set(CUSTOM_FOLDERS):
+                problems.append(
+                    f"custom archive top-level folders {sorted(top_level)!r} "
+                    f"!= {sorted(CUSTOM_FOLDERS)!r}"
+                )
+            for meta in (
+                "manifest.json",
+                "charts.json",
+                "index.csv",
+                "index.html",
+                "export_manifest.json",
+            ):
+                if meta not in names:
+                    problems.append(f"custom archive is missing {meta}")
+
+            charts = [
+                name
+                for name in names
+                if name.lower().endswith(".html") and name != "index.html"
+            ]
+            missing = expected_members - set(charts)
+            extra = set(charts) - expected_members
+            if missing:
+                problems.append(
+                    f"custom archive is missing {len(missing)} canonical charts"
+                )
+            if extra:
+                problems.append(
+                    f"custom archive has {len(extra)} charts outside the requested folders"
+                )
+            basenames = [Path(name).name for name in charts]
+            if len(set(basenames)) != len(basenames):
+                problems.append("custom archive contains duplicate chart basenames")
+            for member in charts:
+                if bundle.getinfo(member).file_size == 0:
+                    problems.append(f"custom archive has an empty chart {member!r}")
+                    break
+
+            try:
+                rows = list(
+                    csv.DictReader(
+                        io.StringIO(bundle.read("index.csv").decode("utf-8"))
+                    )
+                )
+            except (KeyError, ValueError, UnicodeDecodeError) as exc:
+                problems.append(f"custom archive index.csv is unreadable: {exc}")
+                rows = []
+            if len(rows) != len(expected_members):
+                problems.append(
+                    f"custom archive index.csv has {len(rows)} rows, "
+                    f"expected {len(expected_members)}"
+                )
+            if rows:
+                orders = [int(row.get("order") or 0) for row in rows]
+                if orders != list(range(1, len(rows) + 1)):
+                    problems.append("custom archive index.csv order is not sequential")
+                pairs = [(row.get("date"), row.get("station")) for row in rows]
+                wanted_pairs = sorted(
+                    (event, station) for station in stations for event in events
+                )
+                if pairs != wanted_pairs:
+                    problems.append(
+                        "custom archive index.csv is not sorted by date, station"
+                    )
+                for row in rows:
+                    station = str(row.get("station") or "")
+                    event = str(row.get("date") or "")
+                    if station not in station_folder or event not in events:
+                        problems.append(
+                            f"custom archive index.csv has unknown row {station}/{event}"
+                        )
+                        continue
+                    filename = canonical_chart_name("C", station, event)
+                    wanted = (
+                        f"{station_folder[station]}/{station.lower()}/{event}/{filename}"
+                    )
+                    if row.get("file") != filename:
+                        problems.append(
+                            f"custom archive index.csv file {row.get('file')!r} "
+                            f"!= {filename!r}"
+                        )
+                    if row.get("archive_path") != wanted:
+                        problems.append(
+                            f"custom archive index.csv path {row.get('archive_path')!r} "
+                            f"!= {wanted!r}"
+                        )
+                    if row.get("source") != "INTERMAGNET-OMNI":
+                        problems.append(
+                            "custom archive index.csv source is not INTERMAGNET-OMNI"
+                        )
+                    if row.get("components") != "H-Bz-V":
+                        problems.append(
+                            "custom archive index.csv components are not H-Bz-V"
+                        )
+                    if row.get("kind") != "space_weather":
+                        problems.append(
+                            "custom archive index.csv kind is not space_weather"
+                        )
+                    if row.get("product") != "space_weather":
+                        problems.append(
+                            "custom archive index.csv product is not space_weather"
+                        )
+
+            try:
+                index_html = bundle.read("index.html").decode("utf-8")
+            except (KeyError, UnicodeDecodeError) as exc:
+                problems.append(f"custom archive index.html is unreadable: {exc}")
+            else:
+                for member in expected_members:
+                    if Path(member).name not in index_html:
+                        problems.append(
+                            f"custom archive index.html does not list {Path(member).name}"
+                        )
+                        break
+                if "INTERMAGNET-OMNI" not in index_html:
+                    problems.append(
+                        "custom archive index.html does not show INTERMAGNET-OMNI"
+                    )
+
+            try:
+                manifest = json.loads(
+                    bundle.read("export_manifest.json").decode("utf-8")
+                )
+            except (KeyError, ValueError) as exc:
+                problems.append(
+                    f"custom archive export_manifest.json is unreadable: {exc}"
+                )
+            else:
+                if manifest.get("archive") != f"{CUSTOM_ARCHIVE}.zip":
+                    problems.append(
+                        f"custom export_manifest archive {manifest.get('archive')!r} "
+                        f"!= {CUSTOM_ARCHIVE + '.zip'!r}"
+                    )
+                if manifest.get("sort_by") != ["start_date", "station"]:
+                    problems.append(
+                        f"custom export_manifest sort_by {manifest.get('sort_by')!r} "
+                        "is not ['start_date', 'station']"
+                    )
+                if manifest.get("source_order") != CUSTOM_SOURCE_ORDER:
+                    problems.append(
+                        "custom export_manifest source_order is wrong"
+                    )
+                if set(manifest.get("folders") or {}) != set(CUSTOM_FOLDERS):
+                    problems.append(
+                        "custom export_manifest folders do not match the prompt"
+                    )
+                if manifest.get("counts", {}).get("charts") != len(expected_members):
+                    problems.append(
+                        "custom export_manifest chart count is wrong"
+                    )
+                if manifest.get("counts", {}).get("files") != len(names):
+                    problems.append(
+                        "custom export_manifest file count does not match the ZIP"
+                    )
+                actual_counts = {
+                    folder: sum(1 for name in names if name.startswith(f"{folder}/"))
+                    for folder in CUSTOM_FOLDERS
+                }
+                if manifest.get("folders") != actual_counts:
+                    problems.append(
+                        "custom export_manifest folder counts do not match the ZIP"
+                    )
+                if len(manifest.get("charts") or []) != len(expected_members):
+                    problems.append(
+                        "custom export_manifest charts list is incomplete"
+                    )
+    except (OSError, zipfile.BadZipFile) as exc:
+        problems.append(f"custom archive is unreadable: {exc}")
+
+    target = ps.project_dir(project, root=STORE.workspace.root)
+    if target is not None:
+        for folder in CUSTOM_FOLDERS:
+            if (target / folder).exists():
+                problems.append(
+                    f"custom export mutated the project: folder {folder!r} exists"
+                )
+        after_paths = project_html(project)
+        if after_paths != before_paths:
+            problems.append(
+                "custom export changed the canonical project chart set"
+            )
+        if len(ps.read_chart_index(project, root=STORE.workspace.root)) != len(
+            expected_members
+        ):
+            problems.append(
+                "custom export changed the canonical project chart metadata"
+            )
+    return problems
 
 
 def read_matrix(result):
@@ -389,7 +971,7 @@ def check_matrix(label, result, expected):
 # 1. Matrix A: 10 x 20 = 200 charts
 # ---------------------------------------------------------------------------
 rA = run_stage(
-    "1/7 Matrix A: 10 stations x 20 dates = 200 charts",
+    "1/9 Matrix A: 10 stations x 20 dates = 200 charts",
     matrix_prompt(PROJECT_A, DATES_A, STATIONS),
 )
 htmlA = project_html(PROJECT_A)
@@ -399,7 +981,7 @@ print("HTML A:", len(htmlA))
 # 2. Matrix B: 5 high-latitude stations x 10 dates = 50 charts
 # ---------------------------------------------------------------------------
 rB = run_stage(
-    "2/7 Matrix B: 5 high-latitude stations x 10 dates = 50 charts",
+    "2/9 Matrix B: 5 high-latitude stations x 10 dates = 50 charts",
     matrix_prompt(PROJECT_B, DATES_B, HIGHLAT),
 )
 htmlB = project_html(PROJECT_B)
@@ -409,7 +991,7 @@ print("HTML B:", len(htmlB))
 # 3. OMNI solar wind + Kyoto Dst/Kp
 # ---------------------------------------------------------------------------
 r_context = run_stage(
-    "3/7 OMNI + Kyoto",
+    "3/9 OMNI + Kyoto",
     "Выполни ровно два вызова, без графиков и без матрицы:\n"
     '1) fetch_solar_wind(start_date="2024-05-01", end_date="2024-05-30")\n'
     '2) fetch_geomagnetic_indices(start_date="2024-05-01", end_date="2024-05-30")\n'
@@ -422,7 +1004,7 @@ r_context = run_stage(
 skipped = []
 if os.environ.get("SUPERMAG_LOGON"):
     r_smag = run_stage(
-        "4/7 SuperMAG indices",
+        "4/9 SuperMAG indices",
         "Выполни ровно два вызова fetch_supermag_data для индексов SME/SML/SMU:\n"
         '1) fetch_supermag_data(start_date="2024-05-01", '
         'end_date="2024-05-15", data_type="indices")\n'
@@ -450,7 +1032,7 @@ else:
 # 5. NOAA SWPC: alerts / forecast / solar_events
 # ---------------------------------------------------------------------------
 r_noaa = run_stage(
-    "5/7 NOAA SWPC",
+    "5/9 NOAA SWPC",
     "Выполни ровно три вызова, без графиков:\n"
     '1) get_noaa_space_weather_context(query_type="alerts")\n'
     '2) get_noaa_space_weather_context(query_type="forecast")\n'
@@ -462,7 +1044,7 @@ r_noaa = run_stage(
 # 6. ISWA: working forecast + expected decommissioned map
 # ---------------------------------------------------------------------------
 r_iswa = run_stage(
-    "6/7 ISWA forecast",
+    "6/9 ISWA forecast",
     "Выполни ровно один вызов: get_iswa_forecast()",
 )
 iswa_map, _ = ac.HANDLERS["get_iswa_perturbation_map"](
@@ -475,7 +1057,7 @@ print(iswa_map.get("message"))
 # 7. Comparison matrix: 10 stations x 5 dates = 50 charts
 # ---------------------------------------------------------------------------
 rC = run_stage(
-    "7/7 Comparison matrix: 10 stations x 5 dates = 50 charts",
+    "7/9 Comparison matrix: 10 stations x 5 dates = 50 charts",
     comparison_matrix_prompt(
         PROJECT_C, STORM_DATES, STATIONS, "sw:omni:2024-05-01"
     ),
@@ -484,8 +1066,18 @@ htmlC = project_html(PROJECT_C)
 comp_plots = list(htmlC)
 print("HTML C:", len(htmlC))
 
+# ---------------------------------------------------------------------------
+# 8. Prompt-driven custom archive/folders
+# ---------------------------------------------------------------------------
+r_export = run_stage(
+    "8/9 Custom archive/folders export",
+    custom_export_prompt(PROJECT_C),
+)
+htmlC_after = project_html(PROJECT_C)
+print("HTML C after custom export:", len(htmlC_after))
+
 r_list = run_stage(
-    "7/7 List projects",
+    "9/9 List projects",
     "Выполни ровно один вызов list_projects().",
 )
 
@@ -493,14 +1085,45 @@ r_list = run_stage(
 # Final gate
 # ---------------------------------------------------------------------------
 failures = []
+MATRIX_META = {
+    "A": ("INTERMAGNET", ["H", "D", "I"], "components", "components"),
+    "B": ("INTERMAGNET", ["H", "D", "I"], "components", "components"),
+    "C": ("INTERMAGNET-OMNI", ["H", "Bz", "V"], "space_weather", "space_weather"),
+}
 for label, result, expected, stations, events, project in (
     ("A", rA, 200, STATIONS, DATES_A, PROJECT_A),
     ("B", rB, 50, HIGHLAT, DATES_B, PROJECT_B),
     ("C", rC, 50, STATIONS, STORM_DATES, PROJECT_C),
 ):
+    source, components, kind, product = MATRIX_META[label]
+    expected_name = lambda station, event, _label=label: canonical_chart_name(
+        _label, station, event
+    )
     failures.extend(check_matrix(label, result, expected))
     failures.extend(check_matrix_shape(label, result, stations, events))
-    failures.extend(check_chart_cells(label, project, stations, events))
+    failures.extend(
+        check_chart_cells(
+            label, project, stations, events, expected_name, source
+        )
+    )
+    failures.extend(
+        check_chart_metadata(
+            label,
+            project,
+            stations,
+            events,
+            expected_name,
+            source,
+            components,
+            kind,
+            product,
+        )
+    )
+    failures.extend(
+        check_default_archive(
+            label, project, result, stations, events, expected_name
+        )
+    )
     print_matrix_report(label, result)
 
 if len(htmlA) != 200:
@@ -514,6 +1137,17 @@ if len(set(comp_plots)) != len(comp_plots):
 all_paths = htmlA + htmlB + htmlC
 if len(set(all_paths)) != 300:
     failures.append("total distinct chart paths != 300")
+all_names = [path.name for path in all_paths]
+if len(set(all_names)) != 300:
+    failures.append("total distinct canonical chart basenames != 300")
+unknown_sources = [
+    name for name in all_names if cn.source_from_filename(name) == "UNKNOWN"
+]
+if unknown_sources:
+    failures.append(
+        f"{len(unknown_sources)} charts have no recognized source suffix: "
+        f"{unknown_sources[:3]}"
+    )
 run_root = RUN_PROJECTS.resolve()
 for path in all_paths:
     try:
@@ -605,6 +1239,11 @@ if iswa_map.get("error") != "service_decommissioned":
     failures.append(f"ISWA map: {iswa_map.get('error')} (expected service_decommissioned)")
 if not r_list.get("ok"):
     failures.append("list_projects stage not ok")
+if htmlC_after != htmlC:
+    failures.append("custom export stage changed the canonical C chart set")
+failures.extend(
+    check_custom_export(r_export, PROJECT_C, STATIONS, STORM_DATES, htmlC)
+)
 
 exports_root = RUN_EXPORTS.resolve()
 for label, result in (("A", rA), ("B", rB), ("C", rC)):
@@ -630,6 +1269,11 @@ for label, result in (("A", rA), ("B", rB), ("C", rC)):
     export = result.get("export") if isinstance(result.get("export"), dict) else {}
     archive = result.get("archive") or export.get("path") or export.get("archive")
     print(f"ZIP {label}:", archive or "missing")
+print(
+    "custom ZIP:",
+    RUN_EXPORTS / f"{CUSTOM_ARCHIVE}.zip",
+    "folders:", sorted(CUSTOM_FOLDERS),
+)
 print("skipped:", skipped or "none")
 print(
     "coverage note: BOX excluded (no May 2024 data); ABG replaces BOX; "
@@ -654,4 +1298,7 @@ source_note = (
     if r_smag is not None
     else "5 sources exercised; SuperMAG skipped"
 )
-print(f"STRESS TEST PASSED: 300 distinct charts, {source_note}, 3 matrix runs")
+print(
+    f"STRESS TEST PASSED: 300 distinct canonical charts, {source_note}, "
+    "3 matrix runs, 3 default ZIPs, 1 prompt-named custom ZIP"
+)
