@@ -60,6 +60,18 @@ def test_comparison_and_space_weather_names_keep_both_sources():
     )
 
 
+def test_space_weather_title_does_not_print_descriptor_as_data_date():
+    title = cn.space_weather_title(
+        "raw:irt:2024-05-18", "sw:omni:2024-05-01", "H", ["Bz", "V"]
+    )
+    assert "OMNI (sw:omni:2024-05-01)" in title
+    assert "OMNI 01.05.2024" not in title
+    same_day = cn.space_weather_title(
+        "raw:irt:2024-05-18", "sw:omni:2024-05-18", "H", ["Bz", "V"]
+    )
+    assert "OMNI 18.05.2024" in same_day
+
+
 def test_overlay_name_and_custom_suffix():
     assert (
         cn.overlay_filename(["BRW", "SHU", "FRD"], "2024-05-14", "H")

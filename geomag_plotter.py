@@ -38,6 +38,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from geomag_analyzer import (
     COMPONENT_UNITS,
@@ -336,7 +337,12 @@ def plot_components(
     max_points: int = GL_THRESHOLD,
     include_plotlyjs: Any = True,
 ) -> str | dict[str, Any]:
-    """Plot one or more components of a single time series on a shared axis.
+    """Plot one or more components of a single time series.
+
+    Components with the same unit share one axis.  When the requested
+    components use different units (for example ``H`` in nT and ``D``/``I`` in
+    degrees), each component gets its own stacked panel so a large H trace
+    cannot flatten the angular components.
 
     Parameters
     ----------
@@ -385,27 +391,46 @@ def plot_components(
     heavy = total > GL_THRESHOLD or len(names) * total > 4 * GL_THRESHOLD
     trace_cls = go.Scattergl if heavy else go.Scatter
 
-    fig = go.Figure()
+    units = [_column_unit(name) or "value" for name in names]
+    distinct_units = list(dict.fromkeys(units))
+    mixed_units = len(distinct_units) > 1
+
+    # H (nT), D (deg) and I (deg) on one axis makes D/I invisible next to a
+    # 10 000 nT H trace, and it labels the axis "value".  When units differ,
+    # give each component its own panel and a real unit label.  Same-unit
+    # series (X/Y/Z/F or a single component) keep the compact shared axis.
+    if mixed_units:
+        fig = make_subplots(
+            rows=len(names),
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.035,
+        )
+    else:
+        fig = go.Figure()
+
     sampled_any = False
-    for name in names:
+    for index, name in enumerate(names, start=1):
         values = pd.to_numeric(df[name], errors="coerce")
         xs, ys, sampled = _downsample(stamps, values, max_points)
         sampled_any = sampled_any or sampled
         unit = _column_unit(name)
-        fig.add_trace(
-            trace_cls(
-                x=xs,
-                y=ys,
-                name=f"{name} ({unit})" if unit else name,
-                mode="lines",
-                line={"width": 1, "color": _SERIES_COLOR.get(name)},
-                connectgaps=False,
-                hovertemplate=(
-                    f"<b>{name}</b><br>%{{x}}<br>{unit}: %{{y:.2f}}"
-                    "<extra></extra>"
-                ),
-            )
+        trace = trace_cls(
+            x=xs,
+            y=ys,
+            name=f"{name} ({unit})" if unit else name,
+            mode="lines",
+            line={"width": 1, "color": _SERIES_COLOR.get(name)},
+            connectgaps=False,
+            hovertemplate=(
+                f"<b>{name}</b><br>%{{x}}<br>{unit}: %{{y:.2f}}"
+                "<extra></extra>"
+            ),
         )
+        if mixed_units:
+            fig.add_trace(trace, row=index, col=1)
+        else:
+            fig.add_trace(trace)
 
     if sampled_any:
         log.warning(
@@ -414,12 +439,31 @@ def plot_components(
             max_points,
         )
 
-    unit = _unit_label(names)
+    if mixed_units:
+        for index, name in enumerate(names, start=1):
+            fig.update_yaxes(
+                title_text=f"{name} ({_column_unit(name) or 'value'})",
+                gridcolor="rgba(128,128,128,0.2)",
+                row=index,
+                col=1,
+            )
+        fig.update_xaxes(
+            title_text="Time (UTC)",
+            gridcolor="rgba(128,128,128,0.2)",
+            row=len(names),
+            col=1,
+        )
+        fig.update_layout(height=max(520, 215 * len(names) + 100))
+    else:
+        unit = _unit_label(names)
+        fig.update_layout(
+            xaxis={"title": "Time (UTC)", "rangeslider": {"visible": False},
+                   "gridcolor": "rgba(128,128,128,0.2)"},
+            yaxis={"title": unit, "gridcolor": "rgba(128,128,128,0.2)"},
+        )
+
     fig.update_layout(
         title={"text": title, "x": 0.01, "xanchor": "left"},
-        xaxis={"title": "Time (UTC)", "rangeslider": {"visible": False},
-               "gridcolor": "rgba(128,128,128,0.2)"},
-        yaxis={"title": unit, "gridcolor": "rgba(128,128,128,0.2)"},
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
         template="plotly_white",
@@ -756,7 +800,7 @@ def plot_space_weather_comparison(
     max_points: int = GL_THRESHOLD,
     include_plotlyjs: Any = True,
 ) -> str | dict[str, Any]:
-    """Draw a ground component and the solar wind on one dual-axis chart.
+    """Draw a ground component and the solar wind on aligned panels.
 
     The two feeds have nothing in common to overlay: the magnetometer carries
     ``X/Y/Z/F`` (nT) while the solar wind carries speed and the IMF in km/s and
@@ -764,9 +808,11 @@ def plot_space_weather_comparison(
     can only compare the *same* component of two days, so a "did the southward
     field drive the storm" chart had no tool that could draw it. This one is that
     tool: the caller passes a frame already aligned onto the observatory clock by
-    :func:`physics_engine.align_solar_wind`, the ground component goes on the
-    left axis, and every solar-wind component goes on the right axis so the two
-    amplitude scales never flatten each other.
+    :func:`physics_engine.align_solar_wind`, the ground component goes on its own
+    panel, and solar-wind components with one unit share a right-hand axis.  If
+    the requested wind components use different units (the normal ``Bz`` in nT
+    plus ``V`` in km/s case), each unit gets its own panel instead of one axis
+    where V's hundreds of km/s flatten Bz's few nT.
 
     Parameters
     ----------
@@ -827,28 +873,49 @@ def plot_space_weather_comparison(
     stamps = pd.to_datetime(df["timestamp"], errors="coerce")
     total = int(stamps.notna().sum())
 
-    fig = go.Figure()
+    units: list[str] = []
+    for name in sw_names:
+        unit = _column_unit(name) or "value"
+        if unit not in units:
+            units.append(unit)
+    # Bz (nT) and V (km/s) on one right axis is unreadable: V spans hundreds of
+    # km/s while Bz spans a few nT.  When the requested wind components have
+    # different units, stack one panel per unit instead of forcing a shared
+    # axis.  A single unit keeps the compact Earth-vs-wind dual-axis view.
+    mixed_wind_units = len(units) > 1
+
+    if mixed_wind_units:
+        fig = make_subplots(
+            rows=1 + len(units),
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.04,
+        )
+    else:
+        fig = go.Figure()
 
     ground_values = pd.to_numeric(df[ground_name], errors="coerce")
     ground_unit = _column_unit(ground_name) or "value"
     gx, gy, sampled = _downsample(stamps, ground_values, max_points)
     if sampled:
         log.warning("ground series longer than max_points=%s; stride-sampled.", max_points)
-    fig.add_trace(
-        go.Scatter(
-            x=gx,
-            y=gy,
-            name=f"{ground_name} ({ground_unit})",
-            mode="lines",
-            line={"width": 1.4, "color": _GROUND_TRACE_COLOR},
-            connectgaps=False,
-            yaxis="y",
-            hovertemplate=(
-                f"<b>{ground_name}</b><br>%{{x|%H:%M}}<br>"
-                f"{ground_unit}: %{{y:.2f}}<extra></extra>"
-            ),
-        )
+    ground_trace = go.Scatter(
+        x=gx,
+        y=gy,
+        name=f"{ground_name} ({ground_unit})",
+        mode="lines",
+        line={"width": 1.4, "color": _GROUND_TRACE_COLOR},
+        connectgaps=False,
+        hovertemplate=(
+            f"<b>{ground_name}</b><br>%{{x|%H:%M}}<br>"
+            f"{ground_unit}: %{{y:.2f}}<extra></extra>"
+        ),
     )
+    if mixed_wind_units:
+        fig.add_trace(ground_trace, row=1, col=1)
+    else:
+        ground_trace.yaxis = "y"
+        fig.add_trace(ground_trace)
 
     for index, name in enumerate(sw_names):
         values = pd.to_numeric(df[name], errors="coerce")
@@ -856,53 +923,85 @@ def plot_space_weather_comparison(
         if sampled:
             log.warning("%s longer than max_points=%s; stride-sampled.", name, max_points)
         unit = _column_unit(name) or "value"
-        fig.add_trace(
-            go.Scatter(
-                x=xs,
-                y=ys,
-                name=f"{name} ({unit})",
-                mode="lines",
-                line={
-                    "width": 1.2,
-                    "color": _SOLAR_WIND_COLORS[index % len(_SOLAR_WIND_COLORS)],
-                    "dash": "dot",
-                },
-                connectgaps=False,
-                yaxis="y2",
-                hovertemplate=(
-                    f"<b>{name}</b><br>%{{x|%H:%M}}<br>"
-                    f"{unit}: %{{y:.2f}}<extra></extra>"
-                ),
-            )
+        wind_trace = go.Scatter(
+            x=xs,
+            y=ys,
+            name=f"{name} ({unit})",
+            mode="lines",
+            line={
+                "width": 1.2,
+                "color": _SOLAR_WIND_COLORS[index % len(_SOLAR_WIND_COLORS)],
+                "dash": "dot",
+            },
+            connectgaps=False,
+            hovertemplate=(
+                f"<b>{name}</b><br>%{{x|%H:%M}}<br>"
+                f"{unit}: %{{y:.2f}}<extra></extra>"
+            ),
         )
+        if mixed_wind_units:
+            fig.add_trace(wind_trace, row=2 + units.index(unit), col=1)
+        else:
+            wind_trace.yaxis = "y2"
+            fig.add_trace(wind_trace)
 
-    units: list[str] = []
-    for name in sw_names:
-        unit = _column_unit(name)
-        if unit and unit not in units:
-            units.append(unit)
-    right_title = "Solar wind (" + ", ".join(units) + ")" if units else "Solar wind"
+    if mixed_wind_units:
+        fig.update_yaxes(
+            title_text=f"{ground_name} ({ground_unit})",
+            tickfont={"color": _GROUND_TRACE_COLOR},
+            title_font={"color": _GROUND_TRACE_COLOR},
+            gridcolor="rgba(128,128,128,0.2)",
+            row=1,
+            col=1,
+        )
+        for index, unit in enumerate(units, start=2):
+            names_for_unit = [
+                name for name in sw_names if (_column_unit(name) or "value") == unit
+            ]
+            fig.update_yaxes(
+                title_text=", ".join(names_for_unit) + f" ({unit})",
+                gridcolor="rgba(128,128,128,0.2)",
+                row=index,
+                col=1,
+            )
+        fig.update_xaxes(
+            title_text="Time (UTC)",
+            type="date",
+            tickformat="%H:%M",
+            rangeslider={"visible": True, "thickness": 0.06},
+            gridcolor="rgba(128,128,128,0.2)",
+            row=1 + len(units),
+            col=1,
+        )
+        fig.update_layout(height=max(600, 210 * (1 + len(units)) + 100))
+    else:
+        right_title = "Solar wind (" + ", ".join(units) + ")" if units else "Solar wind"
+        fig.update_layout(
+            xaxis={
+                "title": "Time (UTC)",
+                "type": "date",
+                "tickformat": "%H:%M",
+                "rangeslider": {"visible": True, "thickness": 0.06},
+                "gridcolor": "rgba(128,128,128,0.2)",
+            },
+            yaxis={
+                "title": {
+                    "text": f"{ground_name} ({ground_unit})",
+                    "font": {"color": _GROUND_TRACE_COLOR},
+                },
+                "tickfont": {"color": _GROUND_TRACE_COLOR},
+                "gridcolor": "rgba(128,128,128,0.2)",
+            },
+            yaxis2={
+                "title": {"text": right_title},
+                "overlaying": "y",
+                "side": "right",
+                "showgrid": False,
+            },
+        )
 
     fig.update_layout(
         title={"text": title, "x": 0.01, "xanchor": "left"},
-        xaxis={
-            "title": "Time (UTC)",
-            "type": "date",
-            "tickformat": "%H:%M",
-            "rangeslider": {"visible": True, "thickness": 0.06},
-            "gridcolor": "rgba(128,128,128,0.2)",
-        },
-        yaxis={
-            "title": {"text": f"{ground_name} ({ground_unit})", "font": {"color": _GROUND_TRACE_COLOR}},
-            "tickfont": {"color": _GROUND_TRACE_COLOR},
-            "gridcolor": "rgba(128,128,128,0.2)",
-        },
-        yaxis2={
-            "title": {"text": "Solar wind (" + ", ".join(units) + ")" if units else "Solar wind"},
-            "overlaying": "y",
-            "side": "right",
-            "showgrid": False,
-        },
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
         template="plotly_white",

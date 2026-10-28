@@ -33,6 +33,23 @@ $env:PYTHONIOENCODING = "utf-8"
 - `job_ok=true`, `coverage=50/50`; если API отдал не всё — `job_ok=false`,
   `missing_cells` и предупреждение, а не зелёный отчёт.
 
+## 1a. Пик 10–12 мая (supplement)
+
+300-набор заканчивается 10 мая (B) или начинается 14 мая (A/C), поэтому пик
+11 мая показывается отдельно:
+
+```text
+stress_runs/peak_storm_2024_supplement/index.html
+```
+
+Ожидается:
+
+- 20 HTML: 5 станций (BRW, CMO, SHU, FRD, BOU) × 3 дня H/D/I и 5 графиков
+  H vs OMNI Bz/V за 11 мая;
+- H/D/I — три отдельные панели; Bz/V — две отдельные панели;
+- Dst −406 nT, Kp 9, zip `PEAK_STORM_2024_SUPPLEMENT.zip`;
+- это supplement, а не изменение 300-набора и не замена `stress_g3solehz`.
+
 ## 2. Partial / empty и повторный запуск
 
 Промпт:

@@ -473,13 +473,25 @@ def space_weather_title(
         part for part in (ground.station, human_date(ground.start), ground_component)
         if part
     )
+    source = solar.source if solar.source != "UNKNOWN" else solar.dataset
+    # A descriptor such as ``sw:omni:2024-05-01`` names the dataset start, not
+    # the slice drawn on this chart.  Printing it as a data date ("OMNI
+    # 01.05.2024" on an 18 May chart) is misleading.  Keep the descriptor
+    # visible, but only use a human date when the two handles share it.
+    if solar.start and ground.start and solar.start == ground.start:
+        wind_label = " ".join(part for part in (source, human_date(solar.start)) if part)
+    elif solar.start:
+        handle = str(solar_wind_handle or "").strip()
+        wind_label = (
+            f"{source} ({handle})"
+            if ":" in handle
+            else " ".join(part for part in (source, human_date(solar.start)) if part)
+        )
+    else:
+        wind_label = source
     right = " ".join(
         part
-        for part in (
-            solar.source if solar.source != "UNKNOWN" else solar.dataset,
-            human_date(solar.start),
-            _human_components(solar_wind_components),
-        )
+        for part in (wind_label, _human_components(solar_wind_components))
         if part
     )
     return f"{left or 'ground'} vs {right or 'solar wind'}"

@@ -418,6 +418,53 @@ def test_plot_components_auto_derives_hdi(day10, tmp_path):
     assert "H (nT)" in text and "D (deg)" in text and "I (deg)" in text
 
 
+def test_plot_components_mixed_units_use_separate_panels(day10, tmp_path):
+    cap = {}
+    original = gp._write
+    gp._write = lambda fig, p, i: (cap.setdefault("fig", fig), original(fig, p, i))[1]
+    try:
+        gp.plot_components(
+            day10, components=["H", "D", "I"],
+            output_dir=tmp_path, include_plotlyjs="cdn",
+        )
+    finally:
+        gp._write = original
+    fig = cap["fig"]
+    assert len(fig.data) == 3
+    assert [trace.yaxis for trace in fig.data] == ["y", "y2", "y3"]
+    assert fig.layout.yaxis.title.text == "H (nT)"
+    assert fig.layout.yaxis2.title.text == "D (deg)"
+    assert fig.layout.yaxis3.title.text == "I (deg)"
+    # Panels must not overlap; every component gets its own vertical band.
+    assert fig.layout.yaxis.domain[1] > fig.layout.yaxis2.domain[1]
+    assert fig.layout.yaxis2.domain[1] > fig.layout.yaxis3.domain[1]
+
+
+def test_plot_space_weather_comparison_separates_bz_and_v(day10, tmp_path):
+    frame = day10.copy()
+    frame["Bz"] = np.sin(np.linspace(0, 8, len(frame))) * 5.0
+    frame["V"] = 420.0 + np.cos(np.linspace(0, 8, len(frame))) * 30.0
+    cap = {}
+    original = gp._write
+    gp._write = lambda fig, p, i: (cap.setdefault("fig", fig), original(fig, p, i))[1]
+    try:
+        gp.plot_space_weather_comparison(
+            frame, ground_component="H",
+            solar_wind_components=("Bz", "V"),
+            output_dir=tmp_path, include_plotlyjs="cdn",
+        )
+    finally:
+        gp._write = original
+    fig = cap["fig"]
+    assert len(fig.data) == 3
+    assert [trace.yaxis for trace in fig.data] == ["y", "y2", "y3"]
+    assert fig.layout.yaxis.title.text == "H (nT)"
+    assert fig.layout.yaxis2.title.text == "Bz (nT)"
+    assert fig.layout.yaxis3.title.text == "V (km/s)"
+    assert fig.layout.yaxis.domain[1] > fig.layout.yaxis2.domain[1]
+    assert fig.layout.yaxis2.domain[1] > fig.layout.yaxis3.domain[1]
+
+
 def test_plot_components_leaves_gaps_unbridged(day10, tmp_path):
     gappy = day10.copy()
     gappy.loc[700:720, "X"] = np.nan

@@ -139,7 +139,7 @@ Kaggle-сессии; в репозитории остаётся только э�
 
 ## 9. Вердикт
 
-**Матричный, экспортный и six-source gate — PASS.**
+**Матричный, экспортный и six-source gate — PASS для `ed46cf7`.**
 
 Следующие шаги:
 
@@ -147,3 +147,20 @@ Kaggle-сессии; в репозитории остаётся только э�
 2. End-to-end demo в Gradio: 50 графиков, partial/empty, custom ZIP,
    multi-turn store, security-отказы.
 3. P2: legacy stem, размеры Plotly-артефактов, per-session SuperMAG, CI.
+
+## 10. Post-acceptance изменения
+
+После прогона `stress_3ffd1r21` в рабочем дереве появились изменения, которые
+**не входили в этот gate**:
+
+- `geomag_plotter.py`: H/D/I и Bz/V с разными единицами теперь рисуются на
+  отдельных панелях; одиночные/одноимённые единицы сохраняют прежний вид.
+- `chart_naming.py`: заголовок C больше не печатает descriptor
+  `sw:omni:2024-05-01` как дату данных.
+- Добавлены регрессии в `test_geomag_tools.py` и `test_chart_naming.py`.
+- Добавлен `peak_storm_2024.py` и 20-графиковый supplement 10–12 мая
+  (`PEAK_STORM_2024.md`), вне 300-набора.
+
+Поэтому 300 HTML в `stress_3ffd1r21` остаются валидными для `ed46cf7`, но не
+для нового HEAD. Полный 300-gate на новом HEAD нужно прогнать отдельно перед
+release; старый `stress_g3solehz` и `stress_3ffd1r21` при этом не трогать.
