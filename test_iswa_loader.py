@@ -220,9 +220,14 @@ def test_map_default_returns_service_decommissioned_without_network(monkeypatch)
     assert res["error"] == "service_decommissioned"
     assert "decommissioned" in res["message"]
     assert "ground magnetic perturbation" in res["message"]
+    # scenario 1: the global picture goes through SuperMAG indices + plot_components
     assert "fetch_supermag_data(data_type='indices')" in res["fallback_hint"]
     assert "SME/SML/SMU" in res["fallback_hint"]
-    assert "get_iswa_forecast()" in res["fallback_hint"]
+    assert "plot_components" in res["fallback_hint"]
+    # scenario 2: a station comparison MUST start from fetch_observatory_data
+    assert "fetch_observatory_data" in res["fallback_hint"]
+    assert "plot_space_weather_comparison" in res["fallback_hint"]
+    assert "CANNOT be used as ground data" in res["fallback_hint"]
 
 
 def test_map_decommissioned_still_validates_its_arguments(monkeypatch):
@@ -767,21 +772,44 @@ def test_prompt_marks_the_map_decommissioned_and_points_at_supermag():
     assert "'indices'" in sp
 
 
+def test_prompt_forbids_indices_as_ground_data_for_space_weather_plot():
+    """Rule 4f: the loop the field showed must be closed in the prompt.
+
+    The model had been passing ``idx:supermag:...`` as ``ground_df_descriptor``
+    to ``plot_space_weather_comparison`` after the map error, and looping on
+    ``unknown_component`` (no 'H' column). Rule 4f states the station-handle
+    requirement and names ``plot_components`` for indices.
+    """
+    sp = ac.SYSTEM_PROMPT
+    assert "4f." in sp
+    assert "plot_space_weather_comparison" in sp
+    assert "ground_df_descriptor" in sp
+    assert "idx:supermag" in sp and "idx:kyoto" in sp
+    assert "raw:irt:2024-09-12" in sp
+    assert "plot_components" in sp
+
+
 def test_total_prompt_budget_including_the_iswa_schemas():
     budget = ac.prompt_budget(ac.SYSTEM_PROMPT, ac.TOOL_SCHEMAS, ac.N_CTX)
     assert budget["est_tokens"] <= ac.N_CTX // 2, budget
 
 
 def test_decommissioned_payload_survives_compaction_with_its_fallback_hint():
-    """``fallback_hint`` is the whole point: the cap must not eat it."""
+    """``fallback_hint`` is the whole point: the cap must not eat it.
+
+    The hint names two different fixes and is longer than the ordinary 400-char
+    result cap, so it rides the roomier ``FALLBACK_HINT_MAX_CHARS`` budget and
+    must arrive whole -- a half-sentence here is exactly what made the model
+    loop on the wrong tool.
+    """
     payload = iswa._decommissioned()
-    assert len(ac._dumps(payload)) <= ac.FRAME_SUMMARY_MAX_CHARS
+    assert len(ac._dumps(payload)) <= ac.FALLBACK_HINT_MAX_CHARS
     compacted = ac._compact_tool_message(payload)
-    assert len(compacted) <= ac.FRAME_SUMMARY_MAX_CHARS
-    body = json.loads(compacted)
+    body = json.loads(compacted)  # valid JSON, not a mid-string cut
     assert body["error"] == "service_decommissioned"
-    assert "fetch_supermag_data(data_type='indices')" in body["fallback_hint"]
     assert body["fallback_hint"] == payload["fallback_hint"]  # untruncated
+    assert "fetch_supermag_data(data_type='indices')" in body["fallback_hint"]
+    assert "CANNOT be used as ground data" in body["fallback_hint"]
 
 
 # --------------------------------------------------------------------------- #
