@@ -3,7 +3,7 @@
 **Файл ноутбука:** `kaggle_demo_50.ipynb`  
 **Цель:** живой Qwen 2.5 14B на Kaggle GPU → 50 графиков за 10 станций ×
 14–18 мая 2024, ZIP, partial/empty, multi-turn.  
-**Код:** GitHub `IgorCim/geomagnetic-agent`, commit `e7db373` или новее.
+**Код:** GitHub `IgorCim/geomagnetic-agent`, commit `16a5b0a` или новее.
 
 > Локально в этом окружении Kaggle-прогон выполнить нельзя: нет Kaggle CLI,
 > API-ключей и GPU. Ноутбук готов к загрузке в Kaggle.
@@ -52,10 +52,10 @@ projects/demo_storm_may2024/
   <station>/<date>/raw.csv, derived.csv, manifest.json
 
 exports/demo_storm_may2024.zip
-  canonical tree, 50 HTML, ~76 MB
+  canonical tree, 50 HTML, ~70–76 MB
 
 exports/storm_report_2024_demo.zip
-  папки 1/2/3, 50 HTML, ~76 MB
+  папки 1/2/3, 50 HTML, ~70–76 MB
 ```
 
 Проверки, которые должны пройти в ячейке 7:
@@ -77,6 +77,8 @@ Custom ZIP:
 ## 4. Что показывать
 
 1. **3 HTML** — H/D/I на отдельных панелях, подписи `nT`/`deg`.
+   Не открывайте `/kaggle/working/...` как URL: Kaggle отдаст `404`. Скачайте
+   HTML/`FileLink` или ZIP и откройте локально.
 2. **`charts.json`** — 50 записей, source/station/date/components.
 3. **Custom ZIP** — `1/2/3`, но канонические имена не переименованы.
 4. **ABG 13 May** — `no_data`, 7 попыток, без выдуманных данных.
@@ -122,7 +124,8 @@ fallback:
 ### Gradio
 
 Ячейка 11 блокирует ноутбук; остановите её после показа. Если `share=True`
-не работает, используйте вывод HTML напрямую из ячеек 8.
+не работает, используйте `FileLink`/ZIP из ячеек 7–8. `IFrame` с локальным
+путём `/kaggle/working/...` в Kaggle может дать `404` — это не ошибка файла.
 
 ## 6. После демо
 
