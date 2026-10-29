@@ -458,6 +458,37 @@ def test_offline_indices_call_stores_an_auxiliary_handle(monkeypatch):
     assert payload["frame_handle"].split(":", 1)[0] in ac._AUX_FRAME_FAMILIES
 
 
+def test_handler_passes_the_session_logon_without_touching_the_environment(monkeypatch):
+    monkeypatch.delenv(sm.LOGON_ENV, raising=False)
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    seen = {}
+
+    def fake_fetch(start, end=None, data_type="sites", station_code="GLOBAL",
+                   *, logon=None, **kwargs):
+        seen.update(
+            start=start, end=end, data_type=data_type,
+            station_code=station_code, logon=logon,
+        )
+        return pd.DataFrame({
+            "timestamp": pd.to_datetime(["2024-09-12T00:00:00Z"]),
+            "dX": [1.0], "dY": [2.0], "dZ": [3.0],
+        })
+
+    monkeypatch.setattr(ac.supermag, "fetch_supermag_data", fake_fetch)
+    store = ac.FrameStore()
+    store.supermag_logon = "alice-session"
+
+    payload, _ = ac._handle_fetch_supermag(
+        {"station_code": "IRT", "start_date": "2024-09-12",
+         "data_type": "sites"},
+        store,
+    )
+
+    assert payload["ok"] is True, payload
+    assert seen["logon"] == "alice-session"
+    assert sm.LOGON_ENV not in os.environ, "a session logon must not leak globally"
+
+
 def test_handler_requires_a_station_for_sites(monkeypatch):
     monkeypatch.setattr(ac, "OFFLINE", True)
     payload, _ = ac._handle_fetch_supermag(

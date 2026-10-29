@@ -352,6 +352,31 @@ def space_weather_filename(
     return _finalize(parts, [ground.source, solar.source])
 
 
+def _source_suffix_parts(stem: str) -> tuple[str, list[str]]:
+    """Split the trailing source run from *stem*.
+
+    The canonical spelling is one hyphenated token (``INTERMAGNET-OMNI``), but
+    older charts used two underscore-separated tokens
+    (``INTERMAGNET_OMNI``).  Both spellings describe the same provenance, so
+    the whole trailing run is consumed and returned as canonical source pieces.
+    """
+    parts = stem.split("_")
+    end = len(parts)
+    tokens: list[str] = []
+    while end > 1:
+        pieces = parts[end - 1].upper().split("-")
+        if not pieces or not all(piece in _ALLOWED_SOURCE_TOKENS for piece in pieces):
+            break
+        tokens.insert(0, parts[end - 1].upper())
+        end -= 1
+    canonical: list[str] = []
+    for token in tokens:
+        for piece in token.split("-"):
+            if piece and piece not in canonical:
+                canonical.append(piece)
+    return "_".join(parts[:end]), canonical
+
+
 def _strip_source_suffix(stem: str) -> str:
     """Drop one or more trailing source tokens.
 
@@ -359,14 +384,7 @@ def _strip_source_suffix(stem: str) -> str:
     ``..._INTERMAGNET_OMNI``.  Only the trailing run is removed, so a station
     or component named like a source cannot be mistaken for provenance.
     """
-    parts = stem.split("_")
-    end = len(parts)
-    while end > 1:
-        pieces = parts[end - 1].upper().split("-")
-        if not pieces or not all(piece in _ALLOWED_SOURCE_TOKENS for piece in pieces):
-            break
-        end -= 1
-    return "_".join(parts[:end])
+    return _source_suffix_parts(stem)[0]
 
 
 def ensure_source_suffix(filename: Any, sources: Iterable[Any]) -> str:
@@ -401,16 +419,16 @@ def safe_filename(filename: Any, sources: Iterable[Any] | None = None) -> str:
 
 
 def source_from_filename(filename: Any) -> str:
-    """Read the source tag from a canonical filename, or return ``UNKNOWN``."""
+    """Read the source tag from a canonical filename, or return ``UNKNOWN``.
+
+    Legacy two-token suffixes are normalised instead of losing their first
+    source: ``..._INTERMAGNET_OMNI.html`` reads as ``INTERMAGNET-OMNI``, and
+    :func:`safe_filename` rewrites it to the canonical one-token spelling.
+    """
     name = Path(str(filename or "").strip()).name
     stem = name[:-5] if name.lower().endswith(".html") else name
-    token = stem.rsplit("_", 1)[-1] if "_" in stem else ""
-    if not token:
-        return "UNKNOWN"
-    pieces = token.upper().split("-")
-    if pieces and all(piece in _ALLOWED_SOURCE_TOKENS for piece in pieces):
-        return token.upper()
-    return "UNKNOWN"
+    _, sources = _source_suffix_parts(stem)
+    return "-".join(sources) if sources else "UNKNOWN"
 
 
 def human_date(value: Any) -> str:

@@ -593,6 +593,22 @@ def figure_from_plot_file(path: str) -> Any | None:
 # --------------------------------------------------------------------------- #
 # the chat handler
 # --------------------------------------------------------------------------- #
+def _apply_session_logon(store: Any, logon: Any) -> Any:
+    """Keep the SuperMAG logon on the browser session, never in ``os.environ``.
+
+    ``gr.State`` gives each browser tab its own ``FrameStore``.  Writing the
+    logon there means a second user cannot inherit the first user's credential
+    through the process-wide environment.  An empty field clears the session
+    value; CLI callers still get the documented environment fallback through
+    ``supermag_loader.get_logon``.
+    """
+    if not isinstance(store, core.FrameStore):
+        store = core.FrameStore()
+    value = logon.strip() if isinstance(logon, str) and logon.strip() else None
+    store.supermag_logon = value
+    return store
+
+
 def make_chat_handler(brain: Any):
     """Bind ``brain`` into a Gradio handler. The brain is captured once."""
 
@@ -880,10 +896,10 @@ def build_demo(brain: Any) -> gr.Blocks:
             if not _message_text(text):
                 gr.Info("Введите вопрос.")
                 return gr.skip()
-            # Credential Isolation: устанавливаем переменную окружения ТОЛЬКО
-            # для этого запроса; в лог и историю логин не попадает.
-            if logon and logon.strip():
-                os.environ["SUPERMAG_LOGON"] = logon.strip()
+            # Keep the credential on this browser session's FrameStore.  It is
+            # passed explicitly to the SuperMAG handler and never written to the
+            # process environment, where another session could read it.
+            store = _apply_session_logon(store, logon)
             return chat_and_plot(text, history, state, store)
 
         outputs = [

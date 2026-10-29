@@ -14,6 +14,7 @@ Three field bugs are pinned here:
 """
 
 import json
+import os
 from pathlib import Path
 
 import gradio as gr
@@ -422,6 +423,27 @@ def test_three_html_paths_survive_gradio_postprocessing(tmp_path, monkeypatch):
     for r in shown:
         assert r["value"].count("<iframe") == 1
     assert len(files) == 3, "gr.Files must still hand over the real files"
+
+
+def test_gradio_logon_is_stored_on_the_session_state(monkeypatch):
+    """Two browser sessions must not share a SuperMAG credential."""
+    monkeypatch.setenv("SUPERMAG_LOGON", "server-wide")
+
+    first = ac.FrameStore()
+    second = ac.FrameStore()
+
+    assert ga._apply_session_logon(first, "alice") is first
+    ga._apply_session_logon(second, "bob")
+
+    assert first.supermag_logon == "alice"
+    assert second.supermag_logon == "bob"
+    assert os.environ["SUPERMAG_LOGON"] == "server-wide", (
+        "the web UI must not overwrite the process environment"
+    )
+
+    ga._apply_session_logon(first, "   ")
+    assert first.supermag_logon is None, "empty field clears the session credential"
+    assert second.supermag_logon == "bob"
 
 
 def test_no_gallery_component_is_created():

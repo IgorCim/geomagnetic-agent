@@ -8,6 +8,8 @@ small enough to run on a laptop and to show in a live session.
 
 It creates ``projects/demo_storm_may2024`` and two archives in ``exports/``:
 the default canonical ZIP and the custom ``storm_report_2024_demo.zip`` view.
+Pass ``--compact`` to make both archives share one Plotly bundle; the project
+tree and its self-contained HTML files are not changed.
 """
 
 from __future__ import annotations
@@ -50,6 +52,11 @@ def _dmy(day: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", default=PROJECT)
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Share one Plotly bundle in the exported ZIPs (project files stay self-contained).",
+    )
     args = parser.parse_args()
 
     store = ps.Workspace()
@@ -123,6 +130,7 @@ def main() -> int:
         args.project,
         archive_name=args.project,
         sort_by=["station", "start_date", "components", "source", "file"],
+        compact=args.compact,
     )
     custom_zip = ps.export_project(
         args.project,
@@ -130,6 +138,7 @@ def main() -> int:
         folders=CUSTOM_FOLDERS,
         sort_by=CUSTOM_SORT,
         source_order=CUSTOM_SOURCE_ORDER,
+        compact=args.compact,
     )
 
     tree = ps.project_tree(args.project)

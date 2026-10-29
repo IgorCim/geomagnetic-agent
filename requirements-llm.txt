@@ -1,0 +1,6 @@
+# Optional local LLM runtime. Install the wheel that matches the host:
+#   CPU:  pip install -r requirements-llm.txt
+#   CUDA: install the matching prebuilt wheel from
+#         https://github.com/abetlen/llama-cpp-python/releases
+# The agent can run offline/scripted without this package.
+llama-cpp-python>=0.3.35,<0.4

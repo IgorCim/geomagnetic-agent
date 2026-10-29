@@ -3525,6 +3525,10 @@ class FrameStore:
         # into run_agent would have to be threaded past every existing handler and
         # every test that calls one directly.
         self.workspace = workspace if workspace is not None else _WORKSPACE
+        # Per-browser-session SuperMAG credential for the Gradio UI.  The
+        # loader falls back to the process environment only when this is None,
+        # so one user's logon can never be reused by another session.
+        self.supermag_logon: str | None = None
 
     @staticmethod
     def _normalise(handle: str) -> str:
@@ -4451,7 +4455,11 @@ def _handle_fetch_supermag(args: dict[str, Any], store: FrameStore) -> tuple[Any
         )
 
     result = supermag.fetch_supermag_data(
-        start, end, data_type=kind, station_code=station or None
+        start,
+        end,
+        data_type=kind,
+        station_code=station or None,
+        logon=getattr(store, "supermag_logon", None),
     )
     if supermag.is_error(result):
         return result, f"fetch_supermag_data failed: {result.get('error')}"

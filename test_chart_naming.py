@@ -93,6 +93,17 @@ def test_overlay_name_and_custom_suffix():
     ) == "IRT_2024-12-10_F_INTERMAGNET-OMNI.html"
 
 
+def test_legacy_two_token_source_suffix_keeps_both_sources():
+    """A legacy stem must not silently lose INTERMAGNET and become OMNI-only."""
+    legacy = "IRT_2024-12-10_F_INTERMAGNET_OMNI.html"
+    canonical = "IRT_2024-12-10_F_INTERMAGNET-OMNI.html"
+
+    assert cn.source_from_filename(legacy) == "INTERMAGNET-OMNI"
+    assert cn.safe_filename(legacy) == canonical
+    assert cn.safe_filename(canonical) == canonical
+    assert cn.source_from_filename(canonical) == "INTERMAGNET-OMNI"
+
+
 def test_long_names_are_bounded_and_source_remains_last():
     name = cn.components_filename("raw:irt:2024-12-10", ["X" * 300])
     assert len(name) <= cn.MAX_STEM + 5

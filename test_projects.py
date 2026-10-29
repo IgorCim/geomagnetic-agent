@@ -199,6 +199,83 @@ def test_include_index_accepts_string_booleans(root, frame):
         assert "index.csv" in archive.namelist()
 
 
+def test_compact_export_shares_one_plotly_bundle_without_mutating_the_project(
+    root, frame
+):
+    """The compact ZIP is an export view; the filed chart stays self-contained."""
+    ps.create_project("P", root=root)
+    ps.save_artifact("P", "IRT", "2024-09-10", frame, root=root)
+    day = root / "p" / "irt" / "2024-09-10"
+    chart = day / "IRT_2024-09-10_F_INTERMAGNET.html"
+    embedded = (
+        "<html><head><script>window.PlotlyConfig = {MathJaxConfig: 'local'};"
+        "</script><script>/** plotly.js test bundle */"
+        + ("x" * 600_000)
+        + "</script></head><body><script>Plotly.newPlot('x', [], {});"
+        "</script></body></html>"
+    )
+    chart.write_text(embedded, encoding="utf-8")
+    before = chart.read_text(encoding="utf-8")
+    manifest_before = json.loads(
+        (root / "p" / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    exported = ps.export_project(
+        "P", root=root, exports=root / "out", compact=True
+    )
+
+    assert exported["ok"], exported
+    assert exported["compact"] is True
+    assert exported["plotly_asset"] == "_plotly/plotly.min.js"
+    with zipfile.ZipFile(exported["path"]) as archive:
+        names = set(archive.namelist())
+        assert "_plotly/plotly.min.js" in names
+        packed = archive.read(
+            "irt/2024-09-10/IRT_2024-09-10_F_INTERMAGNET.html"
+        ).decode("utf-8")
+        assert "../../_plotly/plotly.min.js" in packed
+        assert "x" * 600_000 not in packed
+        assert "Plotly.newPlot('x', [], {});" in packed
+        manifest = json.loads(archive.read("export_manifest.json"))
+        assert manifest["compact"] is True
+        assert "_plotly/plotly.min.js" in manifest["files"]
+
+    # The project copy and its timestamp are untouched by the export view.
+    assert chart.read_text(encoding="utf-8") == before
+    manifest_after = json.loads(
+        (root / "p" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest_after["created_at"] == manifest_before["created_at"]
+
+
+def test_compact_export_uses_the_same_relative_asset_from_custom_folders(
+    root, frame
+):
+    ps.create_project("P", root=root)
+    ps.save_artifact("P", "IRT", "2024-09-10", frame, root=root)
+    day = root / "p" / "irt" / "2024-09-10"
+    (day / "IRT_2024-09-10_F_INTERMAGNET.html").write_text(
+        "<html><script>/** plotly.js test bundle */"
+        + ("y" * 600_000)
+        + "</script><script>Plotly.newPlot('x', [], {});</script></html>",
+        encoding="utf-8",
+    )
+
+    exported = ps.export_project(
+        "P",
+        root=root,
+        exports=root / "out",
+        folders={"1": ["irt"]},
+        compact=True,
+    )
+    assert exported["ok"], exported
+    with zipfile.ZipFile(exported["path"]) as archive:
+        packed = archive.read(
+            "1/irt/2024-09-10/IRT_2024-09-10_F_INTERMAGNET.html"
+        ).decode("utf-8")
+    assert "../../../_plotly/plotly.min.js" in packed
+
+
 def test_export_preserves_created_at_and_rejected_export_does_not_touch_manifest(
     root, frame
 ):

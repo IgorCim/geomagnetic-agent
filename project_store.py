@@ -86,6 +86,11 @@ CHARTS_INDEX = "charts.json"
 _EXPORT_INDEX_CSV = "index.csv"
 _EXPORT_INDEX_HTML = "index.html"
 _EXPORT_MANIFEST = "export_manifest.json"
+#: One copy of the Plotly bundle in a compact archive, shared by every chart.
+_PLOTLY_ASSET = "_plotly/plotly.min.js"
+#: A real embedded Plotly bundle is several megabytes; this threshold avoids
+#: mistaking a chart's small ``Plotly.newPlot`` call for the library itself.
+_PLOTLY_MIN_SCRIPT = 500_000
 _ROOT_METADATA_NAMES = {
     _MANIFEST,
     CHARTS_INDEX,
@@ -1035,6 +1040,40 @@ def tree_markdown(name: str, root: str | Path | None = None) -> str:
     return "\n".join(lines)
 
 
+def _plotly_bundle() -> str:
+    """Return the installed Plotly bundle for a shared compact archive."""
+    try:
+        from plotly.offline.offline import get_plotlyjs
+    except Exception:  # pragma: no cover - older/alternate Plotly layouts
+        from plotly.offline import get_plotlyjs  # type: ignore[no-redef]
+    return get_plotlyjs()
+
+
+def _compact_plotly_html(document: str, href: str) -> str | None:
+    """Replace an embedded Plotly bundle with one relative ``script`` tag.
+
+    Plotly writes the bundle as a single huge inline script.  Only that block is
+    touched; the chart data and the ``Plotly.newPlot`` call stay in place, so the
+    file remains interactive when the archive is unpacked as a whole.
+    """
+    for match in re.finditer(
+        r"<script\b[^>]*>.*?</script>", document, re.IGNORECASE | re.DOTALL
+    ):
+        block = match.group(0)
+        if len(block) < _PLOTLY_MIN_SCRIPT:
+            continue
+        if "plotly" not in block[:4096].lower():
+            continue
+        tag = f'<script charset="utf-8" src="{html.escape(href, quote=True)}"></script>'
+        return document[: match.start()] + tag + document[match.end() :]
+    return None
+
+
+def _relative_plotly_href(arcname: str) -> str:
+    """Path from a chart member to ``_plotly/plotly.min.js`` inside the ZIP."""
+    return "../" * arcname.count("/") + _PLOTLY_ASSET
+
+
 def export_project(
     name: str,
     root: str | Path | None = None,
@@ -1044,10 +1083,17 @@ def export_project(
     sort_by: Any = None,
     source_order: Sequence[str] | None = None,
     include_index: bool = True,
+    compact: bool = False,
 ) -> dict[str, Any]:
     """Zip a project and return where the archive is.
 
-    By default the archive mirrors the canonical ``<station>/<date>/`` tree.
+    By default the archive mirrors the canonical ``<station>/<date>/`` tree and
+    every HTML file remains self-contained.  ``compact=True`` is an export-only
+    size optimisation: the archive carries one shared ``plotly.min.js`` under
+    ``_plotly/`` and rewrites chart copies to reference it by relative path.  It
+    never changes the project tree, ``charts.json`` or ``created_at``; the
+    individual project HTML files stay self-contained for the field.
+
     ``folders`` is an explicit presentation view requested by the user, for
     example ``{"1": ["irt/2024-05-14"], "2": ["api/2024-05-14"]}``.  It copies
     the selected files under the requested folder names; it never renames the
@@ -1065,6 +1111,17 @@ def export_project(
             available=list_projects(root),
         )
     include_index = _as_bool(include_index, True)
+    compact = _as_bool(compact, False)
+    plotly_bundle: str | None = None
+    if compact:
+        try:
+            plotly_bundle = _plotly_bundle()
+        except Exception as exc:  # noqa: BLE001 - optional export feature
+            return _error(
+                "plotly_unavailable",
+                "Compact export needs the installed Plotly package.",
+                detail=str(exc),
+            )
 
     manifest_path = target / _MANIFEST
     if _is_link_like(manifest_path):
@@ -1184,6 +1241,14 @@ def export_project(
             candidate = target / root_name
             if candidate.is_file():
                 planned.append(root_name)
+    # The compact archive only needs the shared bundle if it actually carries a
+    # chart.  Index pages are plain tables and never need Plotly.
+    include_plotly_asset = bool(
+        compact
+        and any(str(item).lower().endswith(".html") for item in planned)
+    )
+    if include_plotly_asset:
+        planned.append(_PLOTLY_ASSET)
     if include_index:
         planned.extend([_EXPORT_INDEX_CSV, _EXPORT_INDEX_HTML])
     planned.append(_EXPORT_MANIFEST)
@@ -1205,6 +1270,8 @@ def export_project(
             if mapping is not None
             else {"layout": "canonical"}
         ),
+        "compact": compact,
+        "plotly_asset": _PLOTLY_ASSET if include_plotly_asset else None,
         "files": planned,
         "charts": index_rows,
         "counts": {"files": len(planned), "charts": len(index_rows)},
@@ -1220,6 +1287,19 @@ def export_project(
     def write_member(archive: zipfile.ZipFile, path: Path, arcname: str) -> None:
         if arcname in written:
             return
+        if compact and path.suffix.lower() == ".html":
+            try:
+                document = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                document = ""
+            if document:
+                compacted = _compact_plotly_html(
+                    document, _relative_plotly_href(arcname)
+                )
+                if compacted is not None:
+                    archive.writestr(arcname, compacted)
+                    written.add(arcname)
+                    return
         archive.write(path, arcname)
         written.add(arcname)
 
@@ -1246,6 +1326,9 @@ def export_project(
                 candidate = target / root_name
                 if candidate.is_file():
                     write_member(archive, candidate, root_name)
+        if include_plotly_asset and _PLOTLY_ASSET not in written:
+            archive.writestr(_PLOTLY_ASSET, plotly_bundle or "")
+            written.add(_PLOTLY_ASSET)
         if include_index:
             if _EXPORT_INDEX_CSV not in written:
                 archive.writestr(_EXPORT_INDEX_CSV, _index_csv(index_rows))
@@ -1287,6 +1370,8 @@ def export_project(
             if include_index
             else None
         ),
+        "compact": compact,
+        "plotly_asset": _PLOTLY_ASSET if include_plotly_asset else None,
     }
 
 
