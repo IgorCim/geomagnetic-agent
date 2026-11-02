@@ -1878,6 +1878,56 @@ def test_unrecovered_tool_failure_reaches_the_final_text():
     assert "Pass two distinct slots." in text
 
 
+def test_fetch_and_failed_html_name_do_not_hide_unrecovered_statistics():
+    entries = [
+        {"tool": "fetch_geomagnetic_indices", "ok": True},
+        {"tool": "get_statistics", "ok": False, "error": "unknown_component", "message": "DST, KP missing"},
+    ]
+    text = ac._with_tool_failures("Не построен Kp_Dst.html", entries)
+    assert "unknown_component" in text
+    assert not ac.run_recovered(text, entries)
+
+
+def test_repeated_failed_stats_stop_before_twenty_five_model_rounds(monkeypatch):
+    monkeypatch.setitem(ac.HANDLERS, "get_statistics", lambda args, store: (
+        ac._error("unknown_component", "missing requested column"), "failed"))
+    script = [{"content": _text_call("get_statistics", '{"df_descriptor":"idx:kyoto:2024-09-10","components":["bad"]}')}] * 25
+    brain = ac.ScriptedBrain(script)
+    result = ac.run_agent("статистика", brain=brain, tools=_real_schemas("get_statistics"), verbose=False)
+    assert not result["ok"], result
+    assert result["stop_reason"] == "tool_failure_loop"
+    assert brain.calls <= 6
+    assert "unknown_component" in result["text"]
+
+
+def test_refetching_does_not_hide_a_repeated_statistics_loop(monkeypatch):
+    monkeypatch.setitem(ac.HANDLERS, "get_statistics", lambda args, store: (
+        ac._error("unknown_component", "missing column"), "failed"))
+    monkeypatch.setitem(ac.HANDLERS, "fetch_geomagnetic_indices", lambda args, store: ({"ok": True}, "fetched"))
+    text = _text_call("fetch_geomagnetic_indices", '{"start_date":"2024-09-10"}') + _text_call(
+        "get_statistics", '{"df_descriptor":"idx:kyoto:2024-09-10","components":["bad"]}')
+    brain = ac.ScriptedBrain([{"content": text}] * 25)
+    result = ac.run_agent("Kyoto", brain=brain, tools=_real_schemas("get_statistics", "fetch_geomagnetic_indices"), verbose=False)
+    assert result["stop_reason"] == "tool_failure_loop", result
+    assert brain.calls <= 6
+
+
+def test_kyoto_stats_and_plot_complete_in_one_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = ac.FrameStore()
+    store.put("idx:kyoto:2024-09-10", pd.DataFrame({
+        "timestamp": pd.date_range("2024-09-10", periods=3, freq="h"),
+        "Dst": [-10.0, -20.0, -30.0], "Kp": [1.0, 2.0, 3.0]}))
+    args = '{"df_descriptor":"idx:kyoto:2024-09-10","components":["dst","kp"]}'
+    brain = ac.ScriptedBrain([{"content": _text_call("get_statistics", args)},
+                             {"content": _text_call("plot_components", args)}, {"content": "Готово."}])
+    result = ac.run_agent("Статистика и график Kyoto", brain=brain, store=store,
+                          tools=_real_schemas("get_statistics", "plot_components"), verbose=False)
+    assert result["ok"] and all(c["ok"] for c in result["tool_calls"]), result
+    assert len(result["plots"]) == 1 and Path(result["plots"][0]).is_file()
+    assert len(store.names()) == 1
+
+
 def test_clean_run_gets_no_failure_footer():
     text = ac._with_tool_failures("Всё готово.", [{"ok": True, "tool": "get_statistics"}])
     assert text == "Всё готово."

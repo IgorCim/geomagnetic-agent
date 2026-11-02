@@ -188,7 +188,7 @@ BASE_PROMPT_COMPACT = (
     "plot_space_weather_comparison(ground_component='H', "
     "solar_wind_components=['Bz','V']); ground_df_descriptor — "
     "raw:irt:2024-09-12.\n"
-    "4c. Индексы: fetch_supermag_data('indices') или "
+    "4c. По запросу: fetch_supermag_data('indices') или "
     "fetch_geomagnetic_indices → plot_components.\n"
     "4f. idx:supermag/idx:kyoto как ground_df_descriptor НЕЛЬЗЯ.\n\n"
     "КОСМИЧЕСКАЯ ПОГОДА:\n"
@@ -619,8 +619,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "get_statistics",
             "description": (
-                "Descriptive statistics (min, max, mean, median, std, count) for one "
-                "or more components. Returns exact numbers you may quote directly."
+                "Statistics (min/max/mean/median/std/count) for numeric frame columns, "
+                "including Dst/Kp. Returns measured numbers."
             ),
             "parameters": {
                 "type": "object",
@@ -628,8 +628,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "df_descriptor": _FRAME_ARG,
                     "components": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["X", "Y", "Z", "F", "H", "D", "I"]},
-                        "description": "Components to summarise.",
+                        "items": {"type": "string"},
+                        "description": "Numeric columns, case-insensitive. H/D/I can be derived.",
                     },
                     "digits": {"type": "integer", "description": "Decimal places. Default 2."},
                 },
@@ -7736,8 +7736,18 @@ def run_agent(
     spent = 0
     stop_reason = "no_tool_calls"
     format_retries = 0
+    failed_attempts: dict[tuple[str, str, str], int] = {}
 
     for round_no in range(1, max_rounds + 1):
+        # Allow the existing correction warning and a recovery attempt, but
+        # never spend all 25 GPU rounds on the same failing operation.
+        if (any(count >= 6 for count in failed_attempts.values())
+                or (len(scratchpad.failed_calls) >= 6 and scratchpad.repeated_failure() is not None)):
+            return {
+                "ok": False, "error": "tool_failure_loop", "stop_reason": "tool_failure_loop",
+                "text": _with_tool_failures("Остановлено повторение одной ошибки инструмента. Доступные результаты сохранены; нужна проверка указанной причины.", log),
+                "plots": plots, "tool_calls": log, "rounds": round_no - 1,
+            }
         # Drop the oldest whole tool exchanges before the next call. The
         # Scratchpad keeps every live handle and completed step, so the model
         # loses stale payload text, not the state it needs to continue.
@@ -8076,6 +8086,10 @@ def run_agent(
             # Track completed actions and any failure so the next round sees the
             # progress and can self-correct instead of repeating a dead handle.
             if entry["ok"]:
+                signature = _args_signature(args)
+                for key in list(failed_attempts):
+                    if key[:2] == (name, signature):
+                        del failed_attempts[key]
                 # Progress resets the consecutive-failure streak. Without this,
                 # a failure before a successful call and another after it looked
                 # adjacent and tripped the loop breaker on unrelated calls.
@@ -8101,6 +8115,8 @@ def run_agent(
                 # Feed the loop breaker: an identical failing call repeated on
                 # the next rounds trips the [CRITICAL LOOP DETECTED] warning.
                 scratchpad.add_failure(name, _args_signature(args), entry["error"])
+                failure_key = (name, _args_signature(args), str(entry["error"]))
+                failed_attempts[failure_key] = failed_attempts.get(failure_key, 0) + 1
 
             log.append(entry)
             if verbose:
@@ -8673,8 +8689,10 @@ def run_recovered(text: str, log: list[dict[str, Any]]) -> bool:
     failures = _failure_entries(log)
     if not failures:
         return False
-    if not any(e.get("ok") for e in log):
-        return False  # nothing worked: the footer is the only signal there is
+    last_failure = max(i for i, e in enumerate(log) if e in failures)
+    if not any(e.get("ok") and e.get("tool") in (_RESULT_MEMORY_TOOLS | PLOT_TOOLS)
+               for e in log[last_failure + 1:]):
+        return False  # a fetch or a failed chart name is not a recovered result
     return bool(_ANSWERED_RE.search(text or ""))
 
 

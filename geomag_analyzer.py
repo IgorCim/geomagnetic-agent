@@ -85,6 +85,11 @@ COMPONENT_UNITS: dict[str, str] = {
     "S": "nT",
     "D": "deg",
     "I": "deg",
+    "DST": "nT",
+    "KP": "dimensionless",
+    "SME": "nT",
+    "SML": "nT",
+    "SMU": "nT",
 }
 
 _ANGULAR: frozenset[str] = frozenset({"D", "I"})
@@ -161,7 +166,7 @@ def _normalise_component(name: Any) -> str:
 
 
 def _resolve_components(
-    df: pd.DataFrame, components: Sequence[str]
+    df: pd.DataFrame, components: Sequence[str], *, preserve_case: bool = False
 ) -> tuple[dict[str, str], list[str]]:
     """Work out how each requested component can be obtained.
 
@@ -174,6 +179,17 @@ def _resolve_components(
     unavailable: list[str] = []
     for raw in components:
         name = _normalise_component(raw)
+        if preserve_case:
+            literal = str(raw).strip()
+            if literal in df.columns:
+                name = literal
+            else:
+                matches = [c for c in df.columns if isinstance(c, str) and c.casefold() == literal.casefold()]
+                if len(matches) == 1:
+                    name = matches[0]
+                elif len(matches) > 1:
+                    unavailable.append(literal)
+                    continue
         if name in df.columns:
             mapping[name] = "present"
         elif name in DERIVED and all(c in df.columns for c in REQUIRED_FOR_DERIVED):
@@ -324,13 +340,13 @@ def get_statistics(
     if problem is not None:
         return problem
 
-    requested = [_normalise_component(c) for c in components]
+    requested = [str(c).strip() for c in components]
     if not requested:
         return _error("invalid_input", "components must not be empty.")
     if not isinstance(digits, int) or digits < 0:
         return _error("invalid_input", f"digits must be a non-negative int, got {digits!r}.")
 
-    mapping, unavailable = _resolve_components(df, requested)
+    mapping, unavailable = _resolve_components(df, requested, preserve_case=True)
     if unavailable:
         return _error(
             "unknown_component",
@@ -346,7 +362,12 @@ def get_statistics(
             + ". Derive H/D/I with calculate_derived_components().",
         )
 
+    requested = list(mapping)
     working = _with_derived(df, mapping) if "derived" in mapping.values() else df
+    nonnumeric = [name for name in requested if pd.api.types.is_datetime64_any_dtype(working[name])
+                  or pd.api.types.is_timedelta64_dtype(working[name])]
+    if nonnumeric:
+        return _error("unknown_component", "Time columns are not numeric measurement components.", missing=nonnumeric)
 
     stats: dict[str, Any] = {}
     for name in requested:
@@ -358,7 +379,7 @@ def get_statistics(
             "count": valid,
             "missing": missing,
             "coverage_pct": _jsonable(100.0 * valid / len(working) if len(working) else 0.0, 2),
-            "unit": COMPONENT_UNITS.get(name),
+            "unit": component_units(name),
         }
         if valid == 0:
             entry.update({"min": None, "max": None, "range": None,

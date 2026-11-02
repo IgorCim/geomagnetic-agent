@@ -18,6 +18,43 @@ import geomag_analyzer as ga
 import geomag_plotter as gp
 
 
+@pytest.mark.parametrize("names", [("Dst", "Kp"), ("dst", "kp"), ("DST", "KP")])
+def test_kyoto_statistics_preserve_columns_and_units(names):
+    frame = pd.DataFrame({"timestamp": pd.date_range("2024-09-10", periods=3, freq="h"),
+                          "Dst": [-10.0, np.nan, -30.0], "Kp": [1.0, 2.0, 3.0]})
+    original = frame.copy(deep=True)
+    result = ga.get_statistics(frame, components=list(names))
+    assert not ga.is_error(result), result
+    assert result["Dst"]["median"] == -20.0
+    assert result["Dst"]["missing"] == 1
+    assert result["Dst"]["unit"] == "nT"
+    assert result["Kp"]["median"] == 2.0
+    assert result["Kp"]["unit"] == "dimensionless"
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_kyoto_plot_has_separate_panels_for_dst_and_kp(tmp_path, monkeypatch):
+    import plotly.graph_objects as go
+    figures = []
+    monkeypatch.setattr(go.Figure, "write_html", lambda self, *a, **k: figures.append(self))
+    frame = pd.DataFrame({"timestamp": pd.date_range("2024-09-10", periods=3, freq="h"),
+                          "Dst": [-10.0, -20.0, -30.0], "Kp": [1.0, 2.0, 3.0]})
+    gp.plot_components(frame, components=["dst", "kp"], output_dir=tmp_path)
+    assert len(figures) == 1
+    assert len({t.yaxis for t in figures[0].data}) == 2
+
+
+def test_statistics_does_not_convert_timestamps_to_measurements():
+    frame = pd.DataFrame({"timestamp": pd.date_range("2024-09-10", periods=3, freq="h")})
+    assert ga.is_error(ga.get_statistics(frame, ["timestamp"]))
+
+
+def test_statistics_does_not_guess_between_case_ambiguous_columns():
+    frame = pd.DataFrame({"Dst": [1.0, 2.0], "DST": [10.0, 20.0]})
+    assert ga.is_error(ga.get_statistics(frame, ["dst"]))
+    assert ga.get_statistics(frame, ["Dst"])["Dst"]["mean"] == 1.5
+
+
 # --------------------------------------------------------------------------- #
 # fixtures
 # --------------------------------------------------------------------------- #
