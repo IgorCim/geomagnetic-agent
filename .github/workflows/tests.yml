@@ -25,3 +25,5 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: python -m pytest -q -m "not network"
+      - name: Check Kaggle notebook and safe Git checkout
+        run: python -B tools/verify_notebook.py

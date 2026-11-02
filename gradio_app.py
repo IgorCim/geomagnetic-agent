@@ -25,10 +25,11 @@ Design notes
   before the server exists and the object is closed over by the chat handler.
   Loading it per message would push roughly 9 GB into VRAM on every turn and OOM.
 
-* **Plots go through a fixed row of ``gr.HTML`` iframes.** A ``gr.Gallery``
-  accepts raster images only, and a ``gr.Plot`` cannot be created per turn. The
-  saved Plotly document is inlined in an iframe's ``srcdoc`` instead, which keeps
-  zoom, pan and hover working without depending on Gradio's file route.
+* **Plots go through a fixed row of ``gr.Plot`` components.** A ``gr.Gallery``
+  accepts raster images only, and blocks cannot be created per turn. The saved
+  Plotly document is parsed into a figure and sent as Plotly JSON, not as a
+  multi-megabyte self-contained HTML document: the latter would ship the whole
+  plotly.js bundle once per chart (about 5 MB each) on every turn.
 
 * **A figure that cannot be recovered is never fatal.** The text answer still
   arrives and names the file; see :func:`figure_from_plot_file`.
@@ -36,13 +37,13 @@ Design notes
 
 from __future__ import annotations
 
-import html
 import inspect
 import json
 import os
 import re
 import sys
 import traceback
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -85,8 +86,7 @@ GRADIO_VERSION = getattr(gr, "__version__", "unknown")
 # --------------------------------------------------------------------------- #
 # tuning
 # --------------------------------------------------------------------------- #
-#: How many saved figures to remember. A three-day request makes three charts
-#: plus one comparison, so 3 silently dropped a chart the user had asked for.
+#: Maximum inline previews. The download list retains every chart in the chat.
 MAX_PLOTS_IN_PANEL = 12
 
 #: The chat handler returns a flat tuple: messages, one update per figure slot,
@@ -112,11 +112,22 @@ def split_result(out: tuple) -> tuple[list, list, str, list, list, str]:
 USE_HISTORY_CONTEXT = True
 HISTORY_TURNS = 4
 
-#: `GRADIO_SHARE=0` keeps the server local (handy for debugging);
+#: Public Gradio tunnels are opt-in. The UI has no authentication and the
+#: SuperMAG field is a credential, so `share=True` by default would publish both
+#: to anyone with the link. Set `GRADIO_SHARE=1` only for a deliberate demo.
 #: `GRADIO_DEBUG=0` quiets the banner; `GEOMAG_DEBUG_PARSER=0` hides parser logs.
-SHARE = os.environ.get("GRADIO_SHARE", "1").strip().lower() not in ("0", "false", "no")
+SHARE = os.environ.get("GRADIO_SHARE", "0").strip().lower() not in ("0", "false", "no")
 DEBUG = os.environ.get("GRADIO_DEBUG", "1").strip().lower() not in ("0", "false", "no")
 VERBOSE = os.environ.get("GRADIO_VERBOSE", "0").strip().lower() not in ("0", "false", "no", "")
+
+#: `prevent_thread_lock=True` is a notebook-only mode: it returns from
+#: ``launch()`` and lets the cell end while the kernel keeps the server alive.
+#: In a plain script it returns, Python has nothing left to do, and the server
+#: exits immediately. The CLI default therefore blocks; notebooks can opt in.
+PREVENT_THREAD_LOCK = os.environ.get(
+    "GRADIO_PREVENT_THREAD_LOCK", "0"
+).strip().lower() not in ("0", "false", "no", "")
+SERVER_NAME = os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0").strip() or "0.0.0.0"
 
 _EXAMPLES = [
     "Скачай данные по станции Иркутск (IRT) за 10 сентября 2024, посчитай H и построй график.",
@@ -220,8 +231,19 @@ def normalize_history(history: Any) -> list[dict[str, str]]:
     return messages
 
 
-def _context_from_history(history: list[dict[str, str]] | None) -> str:
-    """Build a short recap of previous turns for the stateless agent."""
+def _context_from_history(
+    history: list[dict[str, str]] | None,
+    store: Any = None,
+) -> str:
+    """Build a short recap of previous turns for the stateless agent.
+
+    The recap carries prose only; the ``FrameStore`` carries the actual
+    DataFrames. Both are needed for a useful follow-up: without the handle list
+    the model sees "plot it again" but has no legal name to pass, and without
+    the prose it does not know which day "it" means. The handles are references,
+    not values -- the agent is still required to re-read every number through a
+    tool.
+    """
     if not USE_HISTORY_CONTEXT or not history:
         return ""
     turns: list[str] = []
@@ -230,6 +252,17 @@ def _context_from_history(history: list[dict[str, str]] | None) -> str:
             turns.append(f"- учёный спросил: {message['content'][:300]}")
         elif message.get("role") == "assistant" and message.get("content"):
             turns.append(f"- ты ответил: {message['content'][:300]}")
+    handles: list[str] = []
+    try:
+        names = store.names() if store is not None else []
+        handles = [str(name) for name in names[-12:]]
+    except (AttributeError, TypeError):
+        handles = []
+    if handles:
+        turns.append(
+            "- доступные handle'ы этой сессии (ссылки, не значения): "
+            + ", ".join(handles)
+        )
     if not turns:
         return ""
     return (
@@ -265,10 +298,7 @@ def _as_text(result: Any) -> str:
     return _message_text(result) or "(пустой ответ)"
 
 
-_HTML_SUFFIXES = (".html", ".htm")
-
-
-def _plot_paths(result: Any) -> list[str]:
+def _plot_paths(result: Any, store: Any = None) -> list[str]:
     """Best-effort list of figure paths from an agent result.
 
     Also picks up filenames the agent *mentioned in its own text*: the agent is
@@ -287,6 +317,34 @@ def _plot_paths(result: Any) -> list[str]:
         found.extend(_message_text(item) for item in plots if _message_text(item))
     else:
         found = []
+
+    # Matrix jobs return a persisted matrix rather than one tool-log row per
+    # chart. Recover only successful cells in that matrix's own project; a
+    # failed retry must never display an old chart as today's successful work.
+    value = result.get("matrix_path")
+    if isinstance(value, str) and isinstance(store, core.FrameStore):
+        matrix_path = Path(value)
+        if core._matrix_path_is_allowed(matrix_path, store.workspace):
+            try:
+                matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+                cells = {
+                    (str(task.get("station_code") or "").lower(), str(day))
+                    for task in matrix.get("tasks") or []
+                    for day in task.get("events_ok") or []
+                }
+                target = matrix_path.resolve().parent
+                for row in project_store.read_chart_index(target.name, store.workspace.root):
+                    relative = str(row.get("relative_path") or "")
+                    parts = Path(relative).parts
+                    if len(parts) < 3 or (parts[0].lower(), parts[1]) not in cells:
+                        continue
+                    candidate = target / relative
+                    if (candidate.suffix.lower() == ".html" and candidate.is_file()
+                            and project_store._is_within(target, candidate)
+                            and not project_store._is_link_like(candidate)):
+                        found.append(str(candidate.resolve()))
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
 
     for name in _plot_names_in_text(result.get("text")):
         path = Path(name)
@@ -327,40 +385,38 @@ def _dedupe(saved: list[dict[str, str]]) -> list[dict[str, str]]:
     return out
 
 
-def _iframe(path: str) -> str:
-    """One saved Plotly document as a self-contained interactive iframe.
+@lru_cache(maxsize=64)
+def _cached_figure(path: str, mtime_ns: int, size: int) -> Any | None:
+    """Parse one saved chart once per file version.
 
-    ``srcdoc`` carries the document inline rather than pointing at a filesystem
-    path. A path would have to be turned into a URL the browser can actually
-    fetch, which couples the render to Gradio's file-serving route; inlining
-    sidesteps that and keeps the chart working when the page is reloaded.
-
-    The document is escaped for an attribute context, and the browser decodes it
-    again on the way into the frame, so the chart receives its own HTML verbatim
-    and keeps the interactivity the plotter configured, ``scrollZoom`` included.
+    A 5 MB self-contained Plotly document is slow to scan, and the panel used to
+    re-read every chart on every turn. The mtime/size pair is part of the cache
+    key, so a rewritten chart is picked up without a stale figure.
     """
-    target = Path(path)
+    del mtime_ns, size  # part of the cache key only
+    return figure_from_plot_file(path)
+
+
+def _figure_for_slot(path: str) -> Any | None:
+    """A parsed figure for a chart path, or ``None`` when it is not drawable."""
     try:
-        document = target.read_text(encoding="utf-8", errors="replace")
+        stat = Path(path).stat()
     except OSError:
-        return ""
-    if not document.strip():
-        return ""
-    return (
-        f'<iframe srcdoc="{html.escape(document, quote=True)}" '
-        f'style="width:100%;height:450px;border:1px solid #d0d0d0;'
-        f'border-radius:6px" loading="lazy"></iframe>'
-    )
+        return None
+    if not Path(path).is_file():
+        return None
+    return _cached_figure(str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size)
 
 
 def _slot_updates(saved: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """One ``gr.update`` per figure slot: a chart where there is one, hidden where not.
+    """One ``gr.update`` per figure slot: a figure where there is one, hidden where not.
 
-    A Gallery cannot be used here. It accepts raster images only, and a Plotly
+    A Gallery cannot be used here: it accepts raster images only, and a Plotly
     figure reaches its ``_save`` as a dict, which raises
     ``ValueError: Cannot process type as image: <class 'dict'>``. Fixed
-    components cannot be created per turn, so the panel is a fixed row of
-    ``gr.HTML`` slots that are shown and hidden instead.
+    ``gr.Plot`` components are created once, then updated with a figure. They
+    send Plotly JSON (tens of KB) rather than a self-contained HTML document
+    with a fresh plotly.js bundle (about 5 MB per chart).
     """
     updates: list[dict[str, Any]] = []
     for entry in _dedupe(saved):
@@ -374,18 +430,15 @@ def _slot_updates(saved: list[dict[str, str]]) -> list[dict[str, Any]]:
             )
             break
         path = entry.get("path", "")
-        if figure_from_plot_file(path) is None:
+        figure = _figure_for_slot(path)
+        if figure is None:
             # A non-empty file is not a drawable chart: a run killed mid-write
-            # leaves something that inlines fine and then renders blank. The
-            # same predicate drives _fallback_note, so "hidden" and "download it
-            # instead" always agree.
+            # leaves something that parses but renders blank. The same predicate
+            # drives _fallback_note, so "hidden" and "download it instead" agree.
             continue
-        document = _iframe(path)
-        if not document:
-            continue
-        updates.append(gr.update(value=document, visible=True))
+        updates.append(gr.update(value=figure, visible=True))
     while len(updates) < MAX_PLOTS_IN_PANEL:
-        updates.append(gr.update(value="", visible=False))
+        updates.append(gr.update(value=None, visible=False))
     return updates
 
 
@@ -395,7 +448,7 @@ def _fallback_note(saved: list[dict[str, str]]) -> str:
         path = entry.get("path", "")
         if not path or not Path(path).is_file():
             continue
-        if figure_from_plot_file(path) is None:
+        if _figure_for_slot(path) is None:
             print(f"[web] не удалось разобрать график: {path}")
             return "\n\n" + PLOT_FALLBACK.format(name=Path(path).name)
     return ""
@@ -603,10 +656,15 @@ def _apply_session_logon(store: Any, logon: Any) -> Any:
     ``supermag_loader.get_logon``.
     """
     if not isinstance(store, core.FrameStore):
-        store = core.FrameStore()
+        store = _new_session_store()
     value = logon.strip() if isinstance(logon, str) and logon.strip() else None
     store.supermag_logon = value
     return store
+
+
+def _new_session_store() -> core.FrameStore:
+    """Separate the active project pointer even when state must be recreated."""
+    return core.FrameStore(workspace=project_store.Workspace())
 
 
 def make_chat_handler(brain: Any):
@@ -639,7 +697,7 @@ def make_chat_handler(brain: Any):
         # a previous turn; a fresh store per message made "plot it again" fail
         # with unknown_frame even though the chart was on screen.
         if not isinstance(store, core.FrameStore):
-            store = core.FrameStore()
+            store = _new_session_store()
 
         if VERBOSE:
             print(f"[web] запрос: {question[:120]}")
@@ -658,7 +716,7 @@ def make_chat_handler(brain: Any):
             )
 
         try:
-            question_with_context = _context_from_history(messages) + question
+            question_with_context = _context_from_history(messages, store) + question
             if core.is_bulk_query(question):
                 # A matrix-scale request is the planner's job. Sending it to
                 # the single-question loop is what made a 260-cell request
@@ -681,26 +739,29 @@ def make_chat_handler(brain: Any):
             detail = f"{type(exc).__name__}: {exc}"
             return answer_with(f"Внутренняя ошибка агента: {detail}", f"**Ошибка:** {detail}")
 
-        if isinstance(result, dict) and is_error(result):
-            code = result.get("error", "unknown")
-            detail = result.get("message", "агент вернул ошибку")
-            return answer_with(f"Ошибка `{code}`: {detail}", f"**{code}**: {detail}")
-
         text = _as_text(result)
+        if isinstance(result, dict) and is_error(result) and result.get("error"):
+            code = result["error"]
+            detail = result.get("message") or text
+            if not result.get("text"):
+                text = f"Ошибка `{code}`: {detail}"
         if isinstance(result, dict) and result.get("stop_reason") == "tool_budget_exhausted":
             text += "\n\n_(лимит вызовов инструментов исчерпан, ответ неполный)_"
 
         # Record every figure from this turn, newest first. ``_plot_paths`` reads
         # the accumulated result, not the model's sentence, so a run cut short by
         # the tool budget still shows the charts it did manage to save.
-        for path in reversed(_plot_paths(result)):
+        for path in reversed(_plot_paths(result, store)):
             if any(entry.get("path") == path for entry in saved):
                 continue
             saved.insert(0, {"question": question[:80], "path": path})
-        saved = saved[:MAX_PLOTS_IN_PANEL]
+        saved = _dedupe(saved)
+        if len(saved) > MAX_PLOTS_IN_PANEL:
+            text += (f"\n\nВ панели показаны последние {MAX_PLOTS_IN_PANEL} графиков. "
+                     f"Все {len(saved)} файлов доступны в списке скачивания.")
 
         return answer_with(
-            text + _fallback_note(saved),
+            text + _fallback_note(saved[:MAX_PLOTS_IN_PANEL]),
             _format_tool_log(
                 result.get("tool_calls") if isinstance(result, dict) else None,
                 text,
@@ -747,6 +808,8 @@ def _project_summary(name: str) -> str:
         return f"**{name}** — пусто."
     stations = sorted({m.get("station", "?") for m in manifests if m.get("station")})
     dates = sorted({m.get("date", "?") for m in manifests if m.get("date")})
+    if not stations and not dates:
+        return f"**{name}** — проект создан, наборы данных пока не сохранены."
     commits = sorted({m.get("agent_commit") or "?" for m in manifests})
     rows = sum(int(m.get("rows") or 0) for m in manifests)
     return (
@@ -783,22 +846,6 @@ def _make_zip(name: str) -> Any:
     return result["path"]
 
 
-def app_download_zip(project_state, tab_state):
-    name = (project_state or {}).get('project')
-    if not name:
-        return project_state, gr.update(value=None, label='Нет проекта для скачивания')
-    try:
-        result = project_store.export_project(name)
-    except Exception as exc:
-        return project_state, gr.update(value=None, label='Ошибка экспорта: ' + str(exc))
-    if project_store.is_error(result):
-        return project_state, gr.update(value=None, label='Ошибка экспорта: ' + str(result.get('error')))
-    path = Path(result['path'])
-    if not path.exists():
-        return project_state, gr.update(value=None, label='ZIP не найден')
-    return project_state, gr.update(value=str(path), label='Готово ' + path.name + ' (' + str(result.get('size')) + ')', visible=True)
-
-
 def build_demo(brain: Any) -> gr.Blocks:
     """Assemble the interface around an already-loaded brain."""
     chat_and_plot = make_chat_handler(brain)
@@ -815,7 +862,7 @@ def build_demo(brain: Any) -> gr.Blocks:
                 with gr.Row():
                     textbox = gr.Textbox(
                         label="Ваш вопрос",
-                        placeholder="Например: построй график H по станции IRT за 10 сентября 2024",
+                        placeholder="Например: построй график H по станции IRT за 10 сентября 2024. Отправка: кнопка или Shift+Enter.",
                         lines=2,
                         scale=5,
                     )
@@ -834,15 +881,14 @@ def build_demo(brain: Any) -> gr.Blocks:
                     type="password",
                 )
                 gr.Markdown("### Графики")
-                # A Gallery cannot hold these charts. It accepts raster images
+                # A Gallery cannot hold these charts: it accepts raster images
                 # only, and a Plotly figure reaches Gallery._save as a dict:
                 #   ValueError: Cannot process type as image: <class 'dict'>
-                # Components also cannot be created per turn, so the panel is a
-                # fixed row of gr.HTML slots that each hold one srcdoc iframe.
-                # Inlining the document keeps the chart fully interactive:
-                # zoom, pan and hover all work inside the frame.
+                # Blocks cannot be created per turn, so the panel is a fixed row
+                # of gr.Plot components. The update carries Plotly JSON, not a
+                # 5 MB HTML document with its own copy of the plotly.js bundle.
                 plot_slots = [
-                    gr.HTML(label="", value="", visible=False)
+                    gr.Plot(label="", visible=False)
                     for _ in range(MAX_PLOTS_IN_PANEL)
                 ]
                 gr.Markdown("### Файлы графиков")
@@ -890,7 +936,7 @@ def build_demo(brain: Any) -> gr.Blocks:
         # One FrameStore per browser session. The chat handler mutates it, so a
         # follow-up can plot a handle fetched in an earlier turn without the
         # model having to re-download the data.
-        session_store = gr.State(core.FrameStore())
+        session_store = gr.State(_new_session_store)
 
         def submit(text, history, state, logon, store):
             if not _message_text(text):
@@ -958,16 +1004,11 @@ def main() -> None:
     demo.launch(
         share=SHARE,
         debug=DEBUG,
-        server_name="0.0.0.0",
-        prevent_thread_lock=True,
+        server_name=SERVER_NAME,
+        prevent_thread_lock=PREVENT_THREAD_LOCK,
         quiet=False,
     )
 
 
 if __name__ == "__main__":
     main()
-    btn_download.click(
-        fn=app_download_zip,
-        inputs=[project_state, tab_state],
-        outputs=[project_state, downloads_state],
-    )

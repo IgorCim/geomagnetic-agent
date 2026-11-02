@@ -1,0 +1,80 @@
+{
+  "scope": "Catalog search; related retired Solar Shield products are not proof of exact WMS layer identity",
+  "feeds_total": 3078,
+  "cygnets_total": 408,
+  "exact_layer": "ground_mag_perturbation",
+  "exact_layer_matches": 0,
+  "related_cygnets": [
+    {
+      "id": 592,
+      "title": "Retired: Solar Shield - geomagnetic field perturbations",
+      "type": "image",
+      "rawType": "image",
+      "status": "retired",
+      "description": "Solar Shield geomagnetic field perturbations: Real-time ground magnetic field (B-field) perturbations computed as a part of the experimental Solar Shield system. Solar Shield uses real-time L1 plasma and magnetic field measurements to drive SWMF geospace model for predicting 15-30 min lead-time ground magnetic field perturbations.",
+      "width": 640,
+      "height": 410,
+      "backgroundColor": "white",
+      "relatedCygnets": [],
+      "relatedDatafeeds": [],
+      "informationPath": "Retired_Solar_Shield_geomagnetic_field_perturbations.html",
+      "dataFeeds": [
+        {
+          "dataID": 939,
+          "title": "Retired: Solar Shield - geomagnetic field perturbations",
+          "category": "model",
+          "region": "ionosphere"
+        }
+      ],
+      "hapiFeeds": [],
+      "searchText": "solar shield geomagnetic field perturbations: real-time ground magnetic field (b-field) perturbations computed as a part of the experimental solar shield system. solar shield uses real-time l1 plasma and magnetic field measurements to drive swmf geospace model for predicting 15-30 min lead-time ground magnetic field perturbations. solar shield geomagnetic field perturbations: real-time ground magnetic field (b-field) perturbations computed as a part of the experimental solar shield system. solar shield uses real-time l1 plasma and magnetic field measurements to drive swmf geospace model for predicting 15-30 min lead-time ground magnetic field perturbations."
+    },
+    {
+      "id": 593,
+      "title": "Retired: Solar Shield - geoelectric field perturbations",
+      "type": "image",
+      "rawType": "image",
+      "status": "retired",
+      "description": "Solar Shield geoelectric field perturbations: Real-time ground geoelectric field perturbations computed as a part of the experimental Solar Shield system. Solar Shield uses real-time L1 plasma and magnetic field measurements to drive SWMF geospace model for predicting 15-30 min lead-time ground magnetic field perturbations. The magnetic field perturbations are used together with 1D USGS ground models to model the corresponding geoelectric field (E-field).",
+      "width": 640,
+      "height": 410,
+      "backgroundColor": "white",
+      "relatedCygnets": [],
+      "relatedDatafeeds": [],
+      "informationPath": "Retired_Solar_Shield_geoelectric_field_perturbations.html",
+      "dataFeeds": [
+        {
+          "dataID": 941,
+          "title": "Retired: Solar Shield - geoelectric field perturbations",
+          "category": "model",
+          "region": "ionosphere"
+        }
+      ],
+      "hapiFeeds": [],
+      "searchText": "solar shield geoelectric field perturbations: real-time ground geoelectric field perturbations computed as a part of the experimental solar shield system. solar shield uses real-time l1 plasma and magnetic field measurements to drive swmf geospace model for predicting 15-30 min lead-time ground magnetic field perturbations. the magnetic field perturbations are used together with 1d usgs ground models to model the corresponding geoelectric field (e-field). solar shield geoelectric field perturbations: real-time ground geoelectric field perturbations computed as a part of the experimental solar shield system. solar shield uses real-time l1 plasma and magnetic field measurements to drive swmf geospace model for predicting 15-30 min lead-time ground magnetic field perturbations. the magnetic field perturbations are used together with 1d usgs ground models to model the corresponding geoelectric field (e-field)."
+    },
+    {
+      "id": 603,
+      "title": "Retired: Solar Shield - USGS geoelectric field perturbations",
+      "type": "image",
+      "rawType": "image",
+      "status": "retired",
+      "description": "",
+      "width": 640,
+      "height": 410,
+      "backgroundColor": "white",
+      "relatedCygnets": [],
+      "relatedDatafeeds": [],
+      "dataFeeds": [
+        {
+          "dataID": 975,
+          "title": "Retired: Solar Shield - USGS geoelectric field perturbations",
+          "category": "model",
+          "region": "ionosphere"
+        }
+      ],
+      "hapiFeeds": [],
+      "searchText": ""
+    }
+  ]
+}

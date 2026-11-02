@@ -1,0 +1,416 @@
+# ============================================================================
+# HISTORICAL EVIDENCE - NOT A CURRENT LIVE RUN
+# Source notebook: 10112007 (1).ipynb
+# Kaggle URL: https://www.kaggle.com/code/<owner>/10112007/edit
+# Notebook SHA-256: 204775827ee43618c286c156b2ffd7df8ac2c7b0c9f1d2a4b2f04826a789c4d0
+# Cell: 9; execution_count=16
+# Executed (UTC): 2026-10-28T05:23:47.316775Z .. 2026-10-28T05:28:07.199839Z
+# RUN_DIR: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk
+# Redactions: SUPERMAG_LOGON value and logon= query values
+# WARNING: saved notebook output, not an independent raw stdout.
+# See docs/evidence/README.md for provenance and caveats.
+# ============================================================================
+
+--- OUTPUT 0 (stream/stdout) ---
+DIR: /kaggle/working/geomagnetic-agent
+Already up to date.
+REPO: /kaggle/working/geomagnetic-agent
+agent_core: /kaggle/working/geomagnetic-agent/agent_core.py
+RUN_DIR: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk
+RUN_PROJECTS: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/projects
+RUN_EXPORTS: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports
+
+Я готовлю научный разбор геомагнитной активности мая 2024 и прошу полный
+аудит агента на реальных данных, а не демонстрационный ответ.
+
+Нужно 300 разных HTML-графиков, ровно по 50 в шести логических блоках:
+1. 14–18 мая, 10 станций — 50 магнитограмм.
+2. 19–23 мая, 10 станций — 50 магнитограмм.
+3. 24–28 мая, 10 станций — 50 магнитограмм.
+4. 29 мая–2 июня, 10 станций — 50 магнитограмм.
+5. 1–10 мая, 5 высокоширотных станций — 50 магнитограмм.
+6. 14–18 мая, 10 станций — 50 сравнений «земля — солнечный ветер».
+
+Станции: IRT, API, BSL, ABG, BRW, SHU, FRD, CMO, BOU, TUC.
+Высокоширотные: BRW, SHU, FRD, CMO, BOU.
+BOX не использовать: у него нет данных за май 2024; вместо него ABG.
+ABG не отдаёт 13 мая, поэтому рабочий набор начинается 14 мая 2024.
+
+Блоки 1–4: одна матрица 10 станций × 20 дат, действия
+["fetch_observatory_data", "calculate_derived_components", "plot_components"],
+проект may2024_matrix_A_200. Блок 5: одна матрица 5 станций × 10 дат, проект
+may2024_matrix_B_50. В каждом матричном запуске — ровно один create_task_matrix
+и один process_matrix_batch(run_until_complete=True); без циклов и повторного
+создания матрицы; экспорт ZIP обязателен.
+
+Блок 6: ОДНА матрица 10 станций × 5 дат, действия
+["fetch_observatory_data", "plot_space_weather_comparison"], проект
+may2024_spaceweather_50. Передай shared_args:
+{"solar_wind_df_descriptor": "sw:omni:2024-05-01",
+ "ground_component": "H",
+ "solar_wind_components": ["Bz", "V"]}.
+Матрица сама подставит ground_df_descriptor = raw:<station>:<date> и уникальное
+имя файла для каждой ячейки. Не вызывай сравнения по одному в цикле.
+
+Обязательно использовать все 6 источников: INTERMAGNET (блоки 1–5), NASA
+CDAWeb/OMNI (блок 6), Kyoto WDC Dst/Kp, SuperMAG SME/SML/SMU, NOAA SWPC
+alerts/forecast/solar_events, NASA ISWA forecast. Для ISWA perturbation map
+ожидается штатный ответ service_decommissioned — это не скрытая ошибка.
+
+Не скрывай частичные и пустые станции: в отчёте должны быть полные, частичные
+и пустые, с причинами. В конце перечисли проекты, ZIP-архивы, число файлов и
+все ожидаемые ошибки внешних сервисов.
+
+
+========================================================================
+1/9 Matrix A: 10 stations x 20 dates = 200 charts
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{"tasks": [{"id": "step_001", "description": "Создай матрицу задач для проекта", "tool_name": "create_task_matrix", "tool_args": {"events": ["2024-05-14", "2024-05-15", "2024-05-16", "2024-05-17", "2024-05-18", "2024-05-19", "2024-05-20", "2024-05-21", "2024-05-22", "2024-05-23", "2024-05-24", "2024-05-25", "2024-05-26", "2024-05-27", "2024-05-28", "2024-05-29", "2024-05-30", "2024-05-31", "2024-06-01", "2024-06-02"], "stations": ["IRT", "API", "BSL", "ABG", "BRW", "SHU", "FRD", "CMO", "BOU", "TUC"], "actions": ["fetch_observatory_data", "calculate_derived_components", "plot_components"], "project_name": "may2024_matrix_A_200"}}]}}
+======================================================================
+📋 Извлечённый JSON:
+{"tasks": [{"id": "step_001", "description": "Создай матрицу задач для проекта", "tool_name": "create_task_matrix", "tool_args": {"events": ["2024-05-14", "2024-05-15", "2024-05-16", "2024-05-17", "2024-05-18", "2024-05-19", "2024-05-20", "2024-05-21", "2024-05-22", "2024-05-23", "2024-05-24", "2024-05-25", "2024-05-26", "2024-05-27", "2024-05-28", "2024-05-29", "2024-05-30", "2024-05-31", "2024-06-01", "2024-06-02"], "stations": ["IRT", "API", "BSL", "ABG", "BRW", "SHU", "FRD", "CMO", "BOU", "T
+======================================================================
+✅ Распарсено 1 подзадач
+📋 План: 1 подзадач
+   - step_001: Создай матрицу задач для проекта
+🏭 План — одна задача create_task_matrix: запускаю матричный цикл...
+🏭 Матрица: 20 событий x 10 станций = 10 задач (проект 'may2024_matrix_A_200').
+   ✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ. Станций всего: 10. Полностью успешных: 10. Частичных: 0. Полностью пустых: 0. Список пустых станций: []. Архив с данными и графиками успешно собран: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_matrix_a_200.zip. СЛЕДУЮЩИЙ ШАГ: Просто напиши пользователю краткий итоговый отчет на основе этих данных. Больше не нужно вызывать никакие инструменты.
+[1/9 Matrix A: 10 stations x 20 dates = 200 charts] ok=True elapsed=127.1s
+Матрица may2024_matrix_A_200: станций 10 — полностью успешных 10, частичных 0, пустых 0. Ячеек: 200/200. Архив: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_matrix_a_200.zip.
+HTML A: 200
+
+========================================================================
+2/9 Matrix B: 5 high-latitude stations x 10 dates = 50 charts
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+
+--- OUTPUT 1 (stream/stderr) ---
+Llama.generate: 662 prefix-match hit, remaining 177 prompt tokens to eval
+
+--- OUTPUT 2 (stream/stdout) ---
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{"tasks": [{"id": "step_001", "description": "Создай матрицу задач для проекта may2024_matrix_B_50", "tool_name": "create_task_matrix", "tool_args": {"events": ["2024-05-01", "2024-05-02", "2024-05-03", "2024-05-04", "2024-05-05", "2024-05-06", "2024-05-07", "2024-05-08", "2024-05-09", "2024-05-10"], "stations": ["BRW", "SHU", "FRD", "CMO", "BOU"], "actions": ["fetch_observatory_data", "calculate_derived_components", "plot_components"], "project_name": "may2024_matrix_B_50"}}]}}
+======================================================================
+📋 Извлечённый JSON:
+{"tasks": [{"id": "step_001", "description": "Создай матрицу задач для проекта may2024_matrix_B_50", "tool_name": "create_task_matrix", "tool_args": {"events": ["2024-05-01", "2024-05-02", "2024-05-03", "2024-05-04", "2024-05-05", "2024-05-06", "2024-05-07", "2024-05-08", "2024-05-09", "2024-05-10"], "stations": ["BRW", "SHU", "FRD", "CMO", "BOU"], "actions": ["fetch_observatory_data", "calculate_derived_components", "plot_components"], "project_name": "may2024_matrix_B_50"}}]}
+======================================================================
+✅ Распарсено 1 подзадач
+📋 План: 1 подзадач
+   - step_001: Создай матрицу задач для проекта may2024_matrix_B_50
+🏭 План — одна задача create_task_matrix: запускаю матричный цикл...
+🏭 Матрица: 10 событий x 5 станций = 5 задач (проект 'may2024_matrix_B_50').
+   ✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ. Станций всего: 5. Полностью успешных: 5. Частичных: 0. Полностью пустых: 0. Список пустых станций: []. Архив с данными и графиками успешно собран: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_matrix_b_50.zip. СЛЕДУЮЩИЙ ШАГ: Просто напиши пользователю краткий итоговый отчет на основе этих данных. Больше не нужно вызывать никакие инструменты.
+[2/9 Matrix B: 5 high-latitude stations x 10 dates = 50 charts] ok=True elapsed=36.7s
+Матрица may2024_matrix_B_50: станций 5 — полностью успешных 5, частичных 0, пустых 0. Ячеек: 50/50. Архив: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_matrix_b_50.zip.
+HTML B: 50
+
+========================================================================
+3/9 OMNI + Kyoto
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+
+--- OUTPUT 3 (stream/stderr) ---
+Llama.generate: 593 prefix-match hit, remaining 104 prompt tokens to eval
+
+--- OUTPUT 4 (stream/stdout) ---
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{"tasks": [{"id": "step_001", "description": "Скачать данные о солнечном ветре за май 2024 года", "tool_name": "fetch_solar_wind", "tool_args": {"start_date": "2024-05-01", "end_date": "2024-05-30"}}, {"id": "step_002", "description": "Скачать геомагнитные индексы за май 2024 года", "tool_name": "fetch_geomagnetic_indices", "tool_args": {"start_date": "2024-05-01", "end_date": "2024-05-30"}}]}
+======================================================================
+📋 Извлечённый JSON:
+{"tasks": [{"id": "step_001", "description": "Скачать данные о солнечном ветре за май 2024 года", "tool_name": "fetch_solar_wind", "tool_args": {"start_date": "2024-05-01", "end_date": "2024-05-30"}}, {"id": "step_002", "description": "Скачать геомагнитные индексы за май 2024 года", "tool_name": "fetch_geomagnetic_indices", "tool_args": {"start_date": "2024-05-01", "end_date": "2024-05-30"}}]}
+======================================================================
+✅ Распарсено 2 подзадач
+📋 План: 2 подзадач
+   - step_001: Скачать данные о солнечном ветре за май 2024 года
+   - step_002: Скачать геомагнитные индексы за май 2024 года
+
+🔧 Выполняю: step_001 — Скачать данные о солнечном ветре за май 2024 года
+[planner] step_001: fetch_solar_wind({"start_date": "2024-05-01", "end_date": "2024-05-30"}) -> ok
+[NOTE] OMNI солнечный ветер: 43200 строк (2024-05-01..2024-05-30) -> 'sw:omni:2024-05-01'.
+
+🔧 Выполняю: step_002 — Скачать геомагнитные индексы за май 2024 года
+[planner] step_002: fetch_geomagnetic_indices({"start_date": "2024-05-01", "end_date": "2024-05-30"}) -> ok
+[NOTE] Индексы Dst/Kp: 720 строк (2024-05-01..2024-05-30) -> 'idx:kyoto:2024-05-01'.
+[3/9 OMNI + Kyoto] ok=True elapsed=13.7s
+Выполнено 2 из 2 подзадач. Ошибок: 0.
+- OMNI солнечный ветер: 43200 строк (2024-05-01..2024-05-30) -> 'sw:omni:2024-05-01'.
+- Индексы Dst/Kp: 720 строк (2024-05-01..2024-05-30) -> 'idx:kyoto:2024-05-01'.
+
+========================================================================
+4/9 SuperMAG indices
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+
+--- OUTPUT 5 (stream/stderr) ---
+Llama.generate: 602 prefix-match hit, remaining 130 prompt tokens to eval
+
+--- OUTPUT 6 (stream/stdout) ---
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{"tasks": [{"id": "step_001", "description": "Скачай данные индексов SME/SML/SMU за период с 2024-05-01 по 2024-05-15", "tool_name": "fetch_supermag_data", "tool_args": {"start_date": "2024-05-01", "end_date": "2024-05-15", "data_type": "indices"}}, {"id": "step_002", "description": "Скачай данные индексов SME/SML/SMU за период с 2024-05-16 по 2024-05-30", "tool_name": "fetch_supermag_data", "tool_args": {"start_date": "2024-05-16", "end_date": "2024-05-30", "data_type": "indices"}}]}
+======================================================================
+📋 Извлечённый JSON:
+{"tasks": [{"id": "step_001", "description": "Скачай данные индексов SME/SML/SMU за период с 2024-05-01 по 2024-05-15", "tool_name": "fetch_supermag_data", "tool_args": {"start_date": "2024-05-01", "end_date": "2024-05-15", "data_type": "indices"}}, {"id": "step_002", "description": "Скачай данные индексов SME/SML/SMU за период с 2024-05-16 по 2024-05-30", "tool_name": "fetch_supermag_data", "tool_args": {"start_date": "2024-05-16", "end_date": "2024-05-30", "data_type": "indices"}}]}
+======================================================================
+✅ Распарсено 2 подзадач
+📋 План: 2 подзадач
+   - step_001: Скачай данные индексов SME/SML/SMU за период с 2024-05-01 по 2024-05-15
+   - step_002: Скачай данные индексов SME/SML/SMU за период с 2024-05-16 по 2024-05-30
+
+🔧 Выполняю: step_001 — Скачай данные индексов SME/SML/SMU за период с 2024-05-01 по 2024-05-15
+[planner] step_001: fetch_supermag_data({"start_date": "2024-05-01", "end_date": "2024-05-15", "data_type": "indices"}) -> ok
+[NOTE] SuperMAG indices: 21600 строк (2024-05-01..2024-05-15) -> 'idx:supermag:2024-05-01'.
+
+🔧 Выполняю: step_002 — Скачай данные индексов SME/SML/SMU за период с 2024-05-16 по 2024-05-30
+[planner] step_002: fetch_supermag_data({"start_date": "2024-05-16", "end_date": "2024-05-30", "data_type": "indices"}) -> ok
+[NOTE] SuperMAG indices: 21600 строк (2024-05-16..2024-05-30) -> 'idx:supermag:2024-05-16'.
+[4/9 SuperMAG indices] ok=True elapsed=16.6s
+Выполнено 2 из 2 подзадач. Ошибок: 0.
+- SuperMAG indices: 21600 строк (2024-05-01..2024-05-15) -> 'idx:supermag:2024-05-01'.
+- SuperMAG indices: 21600 строк (2024-05-16..2024-05-30) -> 'idx:supermag:2024-05-16'.
+
+========================================================================
+5/9 NOAA SWPC
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+
+--- OUTPUT 7 (stream/stderr) ---
+Llama.generate: 599 prefix-match hit, remaining 87 prompt tokens to eval
+
+--- OUTPUT 8 (stream/stdout) ---
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{"tasks": [{"id": "step_001", "description": "Получить NOAA пространственное погодное контекстное предупреждение", "tool_name": "get_noaa_space_weather_context", "tool_args": {"query_type": "alerts"}}, {"id": "step_002", "description": "Получить NOAA пространственное погодное контекстное прогнозирование", "tool_name": "get_noaa_space_weather_context", "tool_args": {"query_type": "forecast"}}, {"id": "step_003", "description": "Получить NOAA пространственное погодное контекстное событие солнечной активности", "tool_name": "get_noaa_space_weather_context", "tool_args": {"query_type": "solar_events", "start_date": "2024-05-01", "end_date": "2024-05-30"}}]}
+======================================================================
+📋 Извлечённый JSON:
+{"tasks": [{"id": "step_001", "description": "Получить NOAA пространственное погодное контекстное предупреждение", "tool_name": "get_noaa_space_weather_context", "tool_args": {"query_type": "alerts"}}, {"id": "step_002", "description": "Получить NOAA пространственное погодное контекстное прогнозирование", "tool_name": "get_noaa_space_weather_context", "tool_args": {"query_type": "forecast"}}, {"id": "step_003", "description": "Получить NOAA пространственное погодное контекстное событие солнечной
+======================================================================
+✅ Распарсено 3 подзадач
+📋 План: 3 подзадач
+   - step_001: Получить NOAA пространственное погодное контекстное предупреждение
+   - step_002: Получить NOAA пространственное погодное контекстное прогнозирование
+   - step_003: Получить NOAA пространственное погодное контекстное событие солнечной активности
+
+🔧 Выполняю: step_001 — Получить NOAA пространственное погодное контекстное предупреждение
+[planner] step_001: get_noaa_space_weather_context({"query_type": "alerts"}) -> ok
+[NOTE] NOAA alerts: 48 записей (Алертов NOAA: 48; максимум G3; последний ALERT: Geomagnetic K-index of 4 (2026-10-23T19:55:00+00:00).)
+
+🔧 Выполняю: step_002 — Получить NOAA пространственное погодное контекстное прогнозирование
+[planner] step_002: get_noaa_space_weather_context({"query_type": "forecast"}) -> ok
+[NOTE] NOAA forecast: 81 записей (Прогноз Kp (3 дня): максимум Kp 4.0 к 2026-10-31T00:00:00+00:00; строк 81.)
+
+🔧 Выполняю: step_003 — Получить NOAA пространственное погодное контекстное событие солнечной активности
+[planner] step_003: get_noaa_space_weather_context({"query_type": "solar_events", "start_date": "2024-05-01", "end_date": "2024-05-30"}) -> ok
+[NOTE] NOAA solar_events: 0 записей (Вспышек в выбранном окне NOAA не зарегистрировано.)
+[5/9 NOAA SWPC] ok=True elapsed=10.3s
+Выполнено 3 из 3 подзадач. Ошибок: 0.
+- NOAA alerts: 48 записей (Алертов NOAA: 48; максимум G3; последний ALERT: Geomagnetic K-index of 4 (2026-10-23T19:55:00+00:00).)
+- NOAA forecast: 81 записей (Прогноз Kp (3 дня): максимум Kp 4.0 к 2026-10-31T00:00:00+00:00; строк 81.)
+- NOAA solar_events: 0 записей (Вспышек в выбранном окне NOAA не зарегистрировано.)
+
+========================================================================
+6/9 ISWA forecast
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+
+--- OUTPUT 9 (stream/stderr) ---
+Llama.generate: 599 prefix-match hit, remaining 20 prompt tokens to eval
+
+--- OUTPUT 10 (stream/stdout) ---
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{"tasks": [{"id": "step_001", "description": "Получить прогноз ISWA", "tool_name": "get_iswa_forecast", "tool_args": {}}]}
+======================================================================
+📋 Извлечённый JSON:
+{"tasks": [{"id": "step_001", "description": "Получить прогноз ISWA", "tool_name": "get_iswa_forecast", "tool_args": {}}]}
+======================================================================
+✅ Распарсено 1 подзадач
+📋 План: 1 подзадач
+   - step_001: Получить прогноз ISWA
+
+🔧 Выполняю: step_001 — Получить прогноз ISWA
+[planner] step_001: get_iswa_forecast({}) -> ok
+[NOTE] ISWA Dst/Kp: 25 строк (Прогноз ISWA: строк 25, до 2026-10-30T05:00:00Z; Kp пик 2.33 (наблюдение) в 2026-10-28T00:00:00Z; Dst минимум -15.0 nT (наблюдения; вперёд не прогнозируется).)
+[6/9 ISWA forecast] ok=True elapsed=2.2s
+ISWA Dst/Kp: 25 строк (Прогноз ISWA: строк 25, до 2026-10-30T05:00:00Z; Kp пик 2.33 (наблюдение) в 2026-10-28T00:00:00Z; Dst минимум -15.0 nT (наблюдения; вперёд не прогнозируется).)
+
+ISWA map expected service_decommissioned: service_decommissioned
+NASA ISWA has decommissioned the public WMS ground magnetic perturbation map layer.
+
+========================================================================
+7/9 Comparison matrix: 10 stations x 5 dates = 50 charts
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+
+--- OUTPUT 11 (stream/stderr) ---
+Llama.generate: 593 prefix-match hit, remaining 247 prompt tokens to eval
+
+--- OUTPUT 12 (stream/stdout) ---
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{"tasks": [{"id": "step_001", "description": "Создать матрицу задач для проекта", "tool_name": "create_task_matrix", "tool_args": {"events": ["2024-05-14", "2024-05-15", "2024-05-16", "2024-05-17", "2024-05-18"], "stations": ["IRT", "API", "BSL", "ABG", "BRW", "SHU", "FRD", "CMO", "BOU", "TUC"], "actions": ["fetch_observatory_data", "plot_space_weather_comparison"], "shared_args": {"solar_wind_df_descriptor": "sw:omni:2024-05-01", "ground_component": "H", "solar_wind_components": ["Bz", "V"]}, "project_name": "may2024_spaceweather_50"}}]}}
+======================================================================
+📋 Извлечённый JSON:
+{"tasks": [{"id": "step_001", "description": "Создать матрицу задач для проекта", "tool_name": "create_task_matrix", "tool_args": {"events": ["2024-05-14", "2024-05-15", "2024-05-16", "2024-05-17", "2024-05-18"], "stations": ["IRT", "API", "BSL", "ABG", "BRW", "SHU", "FRD", "CMO", "BOU", "TUC"], "actions": ["fetch_observatory_data", "plot_space_weather_comparison"], "shared_args": {"solar_wind_df_descriptor": "sw:omni:2024-05-01", "ground_component": "H", "solar_wind_components": ["Bz", "V"]}, "
+======================================================================
+✅ Распарсено 1 подзадач
+📋 План: 1 подзадач
+   - step_001: Создать матрицу задач для проекта
+🏭 План — одна задача create_task_matrix: запускаю матричный цикл...
+🏭 Матрица: 5 событий x 10 станций = 10 задач (проект 'may2024_spaceweather_50').
+   ✅ МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА И СОХРАНЕНА В АРХИВ. Станций всего: 10. Полностью успешных: 10. Частичных: 0. Полностью пустых: 0. Список пустых станций: []. Архив с данными и графиками успешно собран: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_spaceweather_50.zip. СЛЕДУЮЩИЙ ШАГ: Просто напиши пользователю краткий итоговый отчет на основе этих данных. Больше не нужно вызывать никакие инструменты.
+[7/9 Comparison matrix: 10 stations x 5 dates = 50 charts] ok=True elapsed=31.4s
+Матрица may2024_spaceweather_50: станций 10 — полностью успешных 10, частичных 0, пустых 0. Ячеек: 50/50. Архив: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_spaceweather_50.zip.
+HTML C: 50
+
+========================================================================
+8/9 Custom archive/folders export
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+
+--- OUTPUT 13 (stream/stderr) ---
+Llama.generate: 593 prefix-match hit, remaining 234 prompt tokens to eval
+
+--- OUTPUT 14 (stream/stdout) ---
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{
+  "tasks": [
+    {
+      "id": "step_001",
+      "description": "Экспортируй проект may2024_spaceweather_50 в архив storm_report_2024 с указанными папками и источниками",
+      "tool_name": "export_project",
+      "tool_args": {
+        "name": "may2024_spaceweather_50",
+        "archive_name": "storm_report_2024",
+        "folders": {
+          "1": ["irt", "api", "bsl", "abg"],
+          "2": ["brw", "shu", "frd"],
+          "3": ["cmo", "bou", "tuc"]
+        },
+        "sort_by": ["date", "station"],
+        "source_order": ["OMNI", "INTERMAGNET", "KYOTO", "SUPERMAG", "NOAA", "ISWA"]
+      }
+    }
+  ]
+}
+======================================================================
+📋 Извлечённый JSON:
+{
+  "tasks": [
+    {
+      "id": "step_001",
+      "description": "Экспортируй проект may2024_spaceweather_50 в архив storm_report_2024 с указанными папками и источниками",
+      "tool_name": "export_project",
+      "tool_args": {
+        "name": "may2024_spaceweather_50",
+        "archive_name": "storm_report_2024",
+        "folders": {
+          "1": ["irt", "api", "bsl", "abg"],
+          "2": ["brw", "shu", "frd"],
+          "3": ["cmo", "bou", "tuc"]
+        },
+        "sort_by": ["date", "
+======================================================================
+✅ Распарсено 1 подзадач
+📋 План: 1 подзадач
+   - step_001: Экспортируй проект may2024_spaceweather_50 в архив storm_report_2024 с указанными папками и источниками
+
+🔧 Выполняю: step_001 — Экспортируй проект may2024_spaceweather_50 в архив storm_report_2024 с указанными папками и источниками
+[planner] step_001: export_project({"name": "may2024_spaceweather_50", "archive_name": "storm_report_2024", "folders": {"1":…) -> ok
+[NOTE] Exported project 'may2024_spaceweather_50' to /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/storm_report_2024.zip (66.1 MB).
+[8/9 Custom archive/folders export] ok=True elapsed=19.3s
+Exported project 'may2024_spaceweather_50' to /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/storm_report_2024.zip (66.1 MB).
+HTML C after custom export: 50
+
+========================================================================
+9/9 List projects
+========================================================================
+[PROMPT BUDGET] system=0ch schemas=2ch tools=0 est_tokens=1 / 16384
+
+--- OUTPUT 15 (stream/stderr) ---
+Llama.generate: 599 prefix-match hit, remaining 17 prompt tokens to eval
+
+--- OUTPUT 16 (stream/stdout) ---
+======================================================================
+🤖 LLM-ПЛАНИРОВЩИК: Сырой ответ модели
+======================================================================
+{"tasks": [{"id": "step_001", "description": "Выполни ровно один вызов list_projects()", "tool_name": "list_projects", "tool_args": {}}]}
+======================================================================
+📋 Извлечённый JSON:
+{"tasks": [{"id": "step_001", "description": "Выполни ровно один вызов list_projects()", "tool_name": "list_projects", "tool_args": {}}]}
+======================================================================
+✅ Распарсено 1 подзадач
+📋 План: 1 подзадач
+   - step_001: Выполни ровно один вызов list_projects()
+
+🔧 Выполняю: step_001 — Выполни ровно один вызов list_projects()
+[planner] step_001: list_projects({}) -> ok
+[NOTE] list_projects: 3 projects found.
+[9/9 List projects] ok=True elapsed=2.2s
+list_projects: 3 projects found.
+[A] per-station coverage:
+  IRT: 20/20 ok, 0 failed, status=done
+  API: 20/20 ok, 0 failed, status=done
+  BSL: 20/20 ok, 0 failed, status=done
+  ABG: 20/20 ok, 0 failed, status=done
+  BRW: 20/20 ok, 0 failed, status=done
+  SHU: 20/20 ok, 0 failed, status=done
+  FRD: 20/20 ok, 0 failed, status=done
+  CMO: 20/20 ok, 0 failed, status=done
+  BOU: 20/20 ok, 0 failed, status=done
+  TUC: 20/20 ok, 0 failed, status=done
+[B] per-station coverage:
+  BRW: 10/10 ok, 0 failed, status=done
+  SHU: 10/10 ok, 0 failed, status=done
+  FRD: 10/10 ok, 0 failed, status=done
+  CMO: 10/10 ok, 0 failed, status=done
+  BOU: 10/10 ok, 0 failed, status=done
+[C] per-station coverage:
+  IRT: 5/5 ok, 0 failed, status=done
+  API: 5/5 ok, 0 failed, status=done
+  BSL: 5/5 ok, 0 failed, status=done
+  ABG: 5/5 ok, 0 failed, status=done
+  BRW: 5/5 ok, 0 failed, status=done
+  SHU: 5/5 ok, 0 failed, status=done
+  FRD: 5/5 ok, 0 failed, status=done
+  CMO: 5/5 ok, 0 failed, status=done
+  BOU: 5/5 ok, 0 failed, status=done
+  TUC: 5/5 ok, 0 failed, status=done
+
+========================================================================
+STRESS TEST SUMMARY
+========================================================================
+run dir: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk
+projects: may2024_matrix_A_200, may2024_matrix_B_50, may2024_spaceweather_50
+matrix A: 200 charts; 200/200
+matrix B: 50 charts; 50/50
+comparisons: 50 charts; 50/50
+total: 300
+ZIP A: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_matrix_a_200.zip
+ZIP B: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_matrix_b_50.zip
+ZIP C: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/may2024_spaceweather_50.zip
+custom ZIP: /kaggle/working/geomagnetic-agent/stress_runs/stress_ke1piibk/exports/storm_report_2024.zip folders: ['1', '2', '3']
+skipped: none
+coverage note: BOX excluded (no May 2024 data); ABG replaces BOX; window starts 14 May because ABG has no 13 May day and ends 2 June to give all ten stations twenty complete days.
+expected service notes:
+  - SuperMAG: exercised with SUPERMAG_LOGON
+  - NOAA solar_events: 0 records for May 2024 (7-day current window only)
+  - NOAA alerts/forecast: current window only, not historical May 2024
+  - ISWA perturbation map: service_decommissioned by NASA
+failures: none
+STRESS TEST PASSED: 300 distinct canonical charts, 6 sources exercised, 3 matrix runs, 3 default ZIPs, 1 prompt-named custom ZIP

@@ -1,0 +1,97 @@
+{
+  "scope": "Static approximate budget; not the actual Qwen tokenizer and not a live inference test",
+  "base_prompt_sha256": "189118d2d27ca641692055d3ed19029b5e39e443dd6150488205cf4b5296c5fd",
+  "base_chars": 3194,
+  "base_est_tokens": 885,
+  "full_catalog": {
+    "system_chars": 3194,
+    "schemas_chars": 28848,
+    "tools": 29,
+    "est_tokens": 8187,
+    "n_ctx": 16384
+  },
+  "selected": [
+    {
+      "query": "Станция IRT 2024-09-10, вычисли H D I и построй H",
+      "metrics": [],
+      "mandatory": [],
+      "optional": [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "plot_components",
+        "get_statistics"
+      ],
+      "bulk": false,
+      "units": 1,
+      "fallback": false,
+      "tools": [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "get_statistics",
+        "plot_components"
+      ],
+      "est_tokens": 1858
+    },
+    {
+      "query": "Теперь построй D из тех же данных без повторной загрузки",
+      "metrics": [],
+      "mandatory": [],
+      "optional": [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "plot_components",
+        "get_statistics"
+      ],
+      "bulk": false,
+      "units": 1,
+      "fallback": false,
+      "tools": [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "get_statistics",
+        "plot_components"
+      ],
+      "est_tokens": 1858
+    },
+    {
+      "query": "SME SML SMU SuperMAG за 2024-05-10",
+      "metrics": [],
+      "mandatory": [],
+      "optional": [
+        "fetch_supermag_data"
+      ],
+      "bulk": false,
+      "units": 1,
+      "fallback": false,
+      "tools": [
+        "fetch_supermag_data"
+      ],
+      "est_tokens": 1167
+    },
+    {
+      "query": "Создай матрицу 10 станций на 5 дней и экспортируй ZIP",
+      "metrics": [],
+      "mandatory": [
+        "create_task_matrix",
+        "process_matrix_batch",
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "plot_components",
+        "plot_space_weather_comparison"
+      ],
+      "optional": [],
+      "bulk": true,
+      "units": 50,
+      "fallback": false,
+      "tools": [
+        "fetch_observatory_data",
+        "create_task_matrix",
+        "process_matrix_batch",
+        "calculate_derived_components",
+        "plot_components",
+        "plot_space_weather_comparison"
+      ],
+      "est_tokens": 2822
+    }
+  ]
+}

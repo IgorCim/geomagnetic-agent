@@ -1,0 +1,33 @@
+{
+  "time_utc": "20261102T064722Z",
+  "scope": "Public unauthenticated probes; HTTP success alone is not data validation",
+  "results": [
+    {
+      "name": "supermag_mag_api",
+      "url": "https://supermag.jhuapl.edu/mag/?tab=api",
+      "status": 200,
+      "final_url": "https://supermag.jhuapl.edu/mag/?tab=api",
+      "content_type": "text/html; charset=UTF-8",
+      "bytes": 120609,
+      "sha256": "9c7e8ba69ec42cb71820e2d3cc0d7ce4fdd3b2e0cc0ea132c3a4eb348042af9d"
+    },
+    {
+      "name": "supermag_indices_api",
+      "url": "https://supermag.jhuapl.edu/indices/?tab=api",
+      "status": 200,
+      "final_url": "https://supermag.jhuapl.edu/indices/?tab=api",
+      "content_type": "text/html; charset=UTF-8",
+      "bytes": 64251,
+      "sha256": "3be13568931b926897210c2a9433fab7cd2bd288a314370c6a6b39991a7853ad"
+    },
+    {
+      "name": "iswa_catalog_js",
+      "url": "https://iswa.ccmc.gsfc.nasa.gov/catalog/assets/index-C7Mm8j3P.js",
+      "status": 200,
+      "final_url": "https://iswa.ccmc.gsfc.nasa.gov/catalog/assets/index-C7Mm8j3P.js",
+      "content_type": "application/javascript",
+      "bytes": 780831,
+      "sha256": "a0630e37afdb01eb3c48e164d3dbfdfee4fb2c485b515c1be387fd91ac683a27"
+    }
+  ]
+}

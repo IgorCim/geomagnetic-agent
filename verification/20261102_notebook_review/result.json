@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "checks": [
+    "Nine code cells compile",
+    "SuperMAG: existing env, absent secret, configured secret; value never printed",
+    "Git checkout: local upstream, repeat runs, exact HEAD/hashes, old weights/results preserved, loaded kernel rejected",
+    "Stress PASS/FAIL: preserve exception, status/run dir, restore export root, release namespace"
+  ],
+  "scope": "Synthetic notebook plumbing only; no real Qwen, CUDA, remote data or full stress executed"
+}

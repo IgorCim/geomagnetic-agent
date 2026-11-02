@@ -1,0 +1,69 @@
+{
+  "time_utc": "20261102T063928Z",
+  "scope": "Public unauthenticated probes; HTTP success alone is not data validation",
+  "results": [
+    {
+      "name": "supermag_home",
+      "url": "https://supermag.jhuapl.edu/",
+      "status": 200,
+      "final_url": "https://supermag.jhuapl.edu/",
+      "content_type": "text/html; charset=UTF-8",
+      "bytes": 51955,
+      "sha256": "14e8beba5759dbaddaff709e339bc93c45d31552ea6fcc0303f56a0d0860b15b"
+    },
+    {
+      "name": "supermag_software",
+      "url": "https://supermag.jhuapl.edu/info/?page=software",
+      "status": 200,
+      "final_url": "https://supermag.jhuapl.edu/info/?page=software",
+      "content_type": "text/html; charset=UTF-8",
+      "bytes": 37772,
+      "sha256": "dfcec33006d253810e702485bf564d308f7390fea3b66f8a9377b31868d6b061"
+    },
+    {
+      "name": "supermag_legacy_indices",
+      "url": "https://supermag.jhuapl.edu/services/indices.php?python&nohead",
+      "status": 404,
+      "final_url": "https://supermag.jhuapl.edu/services/indices.php?python&nohead",
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 236,
+      "sha256": "9448f8a1159c9b14e3e1b9d8eab1a6ddf88d26e1f888a34cef430c756e4e6e1e"
+    },
+    {
+      "name": "supermag_hapi_indices",
+      "url": "https://supermag.jhuapl.edu/hapi/indices_all/catalog",
+      "status": 200,
+      "final_url": "https://supermag.jhuapl.edu/hapi/indices_all/catalog",
+      "content_type": null,
+      "bytes": 1108,
+      "sha256": "36ffa0d3342018e92ce242019d84ef3edf2053b0c5055459b7d2f5f479a7b636"
+    },
+    {
+      "name": "iswa_cygnets",
+      "url": "https://iswa.ccmc.gsfc.nasa.gov/catalog/cygnets",
+      "status": 200,
+      "final_url": "https://iswa.ccmc.gsfc.nasa.gov/catalog/cygnets",
+      "content_type": "text/html; charset=UTF-8",
+      "bytes": 1041,
+      "sha256": "fbcadb70d4c4fbb5e86b135357dfe7d89cf75c04a4859e6703768867bf027496"
+    },
+    {
+      "name": "iswa_feeds",
+      "url": "https://iswa.ccmc.gsfc.nasa.gov/catalog/data-feeds",
+      "status": 200,
+      "final_url": "https://iswa.ccmc.gsfc.nasa.gov/catalog/data-feeds",
+      "content_type": "text/html; charset=UTF-8",
+      "bytes": 1041,
+      "sha256": "fbcadb70d4c4fbb5e86b135357dfe7d89cf75c04a4859e6703768867bf027496"
+    },
+    {
+      "name": "iswa_legacy_wms",
+      "url": "https://iswa.gsfc.nasa.gov/wmts/wmts.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetCapabilities",
+      "status": 403,
+      "final_url": "https://iswa.gsfc.nasa.gov/wmts/wmts.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetCapabilities",
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 199,
+      "sha256": "5b13fb5957b84ef7bb9d0b6cd509c947ff6a37d67efdac2b896ddd3b908aad10"
+    }
+  ]
+}

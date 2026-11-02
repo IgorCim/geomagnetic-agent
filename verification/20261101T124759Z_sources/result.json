@@ -1,0 +1,88 @@
+{
+  "time_utc": "20261101T124759Z",
+  "scope": "Public endpoint reachability only; no authenticated SuperMAG, no full source coverage, no scientific validation",
+  "results": [
+    {
+      "name": "INTERMAGNET catalog",
+      "url": "https://imag-data.bgs.ac.uk/GIN_V1/GINServices?Request=GetCapabilities&Format=json",
+      "http_status": 200,
+      "content_type": "application/json",
+      "bytes": 29241,
+      "shape": "dict",
+      "keys_or_rows": [
+        "ObservatoryList",
+        "PublicationStateList",
+        "PublicationStateAliasList"
+      ]
+    },
+    {
+      "name": "OMNI metadata",
+      "url": "https://cdaweb.gsfc.nasa.gov/hapi/info?id=OMNI_HRO2_1MIN",
+      "http_status": 200,
+      "content_type": "application/json",
+      "bytes": 5532,
+      "shape": "dict",
+      "keys_or_rows": [
+        "HAPI",
+        "resourceURL",
+        "contact",
+        "parameters",
+        "startDate",
+        "stopDate",
+        "status"
+      ]
+    },
+    {
+      "name": "Kyoto catalog",
+      "url": "https://wdc.kugi.kyoto-u.ac.jp/hapi/catalog",
+      "http_status": 200,
+      "content_type": "application/json",
+      "bytes": 160941,
+      "shape": "dict",
+      "keys_or_rows": [
+        "HAPI",
+        "status",
+        "catalog"
+      ]
+    },
+    {
+      "name": "NOAA alerts",
+      "url": "https://services.swpc.noaa.gov/products/alerts.json",
+      "http_status": 200,
+      "content_type": "application/json",
+      "bytes": 64861,
+      "shape": "list",
+      "keys_or_rows": 96
+    },
+    {
+      "name": "NOAA forecast",
+      "url": "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json",
+      "http_status": 200,
+      "content_type": "application/json",
+      "bytes": 6907,
+      "shape": "list",
+      "keys_or_rows": 81
+    },
+    {
+      "name": "ISWA catalog",
+      "url": "https://iswa.ccmc.gsfc.nasa.gov/hapi/catalog",
+      "http_status": 200,
+      "content_type": "application/json",
+      "bytes": 28109,
+      "shape": "dict",
+      "keys_or_rows": [
+        "HAPI",
+        "status",
+        "catalog"
+      ]
+    },
+    {
+      "name": "SuperMAG public service",
+      "url": "https://supermag.jhuapl.edu/services/indices.php?python&nohead",
+      "http_status": 404,
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 236,
+      "text_prefix": "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\">\n<html><head>\n<title>404 Not Found</title>\n</head><body>\n<h1>Not Found</h1>\n<p>The request"
+    }
+  ]
+}

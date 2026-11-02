@@ -11,10 +11,10 @@ supplement `peak_storm_2024`.
 
 | Что | Где | Ограничение |
 |---|---|---|
-| 300-chart gate | `/kaggle/working/.../stress_3ffd1r21` | артефакты не скопированы локально |
+| 300-chart gate | `/kaggle/working/.../stress_3ffd1r21` | артефакты не скопированы локально; найден redacted notebook output, см. [docs/evidence/README.md](docs/evidence/README.md) |
 | 300-chart direct run | `stress_runs/stress_real_direct_djj4tnro` | `agent_commit=be5d69e...`, не `ed46cf7` |
 | OMNI / Kyoto | live fetch 2024-05-01..31, 2026-10-28 | значения могут обновиться |
-| SuperMAG | только счётчики из Kaggle-лога | локально `SUPERMAG_LOGON` не задан |
+| SuperMAG | только счётчики из Kaggle-лога | локально `SUPERMAG_LOGON` не задан; численные значения не проверены |
 | Графики | выборка A/B/C из direct run | значения сверены с `derived.csv`/`raw.csv` |
 
 Важно: **Kaggle-артефакты и локальный direct run — разные прогоны**. Сверка

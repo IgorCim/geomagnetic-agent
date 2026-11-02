@@ -18,3 +18,10 @@ cache/
 *.parquet
 *.csv
 *.html
+
+# --- Acceptance runtime evidence (selected reports are committed explicitly) ---
+projects/
+exports/
+verification/
+portfolio_evidence/
+SOURCE_MANIFEST.json

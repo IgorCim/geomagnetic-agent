@@ -1,0 +1,33 @@
+{
+  "time_utc": "20261102T070357Z",
+  "scope": "Public unauthenticated probes; HTTP success alone is not data validation",
+  "results": [
+    {
+      "name": "supermag_python_client",
+      "url": "https://supermag.jhuapl.edu/mag/lib/content/api/supermag-api.py",
+      "status": 404,
+      "final_url": "https://supermag.jhuapl.edu/mag/lib/content/api/supermag-api.py",
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 236,
+      "sha256": "9448f8a1159c9b14e3e1b9d8eab1a6ddf88d26e1f888a34cef430c756e4e6e1e"
+    },
+    {
+      "name": "iswa_all_feeds",
+      "url": "https://iswa.ccmc.gsfc.nasa.gov/api/info?mode=active%2Cevent%2Cretired",
+      "status": 200,
+      "final_url": "https://iswa.ccmc.gsfc.nasa.gov/api/info?mode=active%2Cevent%2Cretired",
+      "content_type": "application/json",
+      "bytes": 1773075,
+      "sha256": "b84505b5b9fe4db22b6e0e1a31a7e447bb8b0472508f9b4ce9c37a02a395486c"
+    },
+    {
+      "name": "iswa_cygnet_search",
+      "url": "https://iswa.ccmc.gsfc.nasa.gov/meta/library/cygnet-search.json",
+      "status": 200,
+      "final_url": "https://iswa.ccmc.gsfc.nasa.gov/meta/library/cygnet-search.json",
+      "content_type": "application/json",
+      "bytes": 1479167,
+      "sha256": "239f0cdd5b5b8e01a43e4a1940a4d909acecb9be567ad2d1d60aeebb14a92eb5"
+    }
+  ]
+}

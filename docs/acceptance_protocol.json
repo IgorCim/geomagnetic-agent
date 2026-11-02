@@ -1,0 +1,8 @@
+{
+  "version": "github-20261102-v1",
+  "source": "GitHub master, clean new checkout per run",
+  "notebook": "kaggle_portfolio_acceptance.ipynb",
+  "cells": 9,
+  "runtime_model": "Qwen/Qwen2.5-14B-Instruct-GGUF",
+  "note": "Identifies the setup protocol, not a guarantee that live acceptance has passed. Record full Git HEAD and source hashes at runtime."
+}

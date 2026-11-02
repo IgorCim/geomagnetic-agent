@@ -105,6 +105,11 @@ _STATION_RE = re.compile(r"^[A-Za-z0-9]{2,6}$")
 _session: requests.Session | None = None
 
 
+def _safe_diagnostic(value: Any) -> str:
+    """Service URLs carry the login; diagnostics must not expose it on video."""
+    return re.sub(r"([?&]logon=)[^&\s\"'<>]+", r"\1[redacted]", str(value), flags=re.IGNORECASE)
+
+
 # --------------------------------------------------------------------------- #
 # contract helpers
 # --------------------------------------------------------------------------- #
@@ -178,7 +183,7 @@ def _request(
                 backoff = 2 ** (attempt - 1)
                 log.warning(
                     "HTTP %s from %s, retry %s/%s in %ss",
-                    resp.status_code, url, attempt, retries, backoff,
+                    resp.status_code, _safe_diagnostic(url), attempt, retries, backoff,
                 )
                 time.sleep(backoff)
                 continue
@@ -189,10 +194,10 @@ def _request(
                 backoff = 2 ** (attempt - 1)
                 log.warning(
                     "Request to %s failed (%s), retry %s/%s in %ss",
-                    url, exc, attempt, retries, backoff,
+                    _safe_diagnostic(url), _safe_diagnostic(exc), attempt, retries, backoff,
                 )
                 time.sleep(backoff)
-    raise ConnectionError(f"All {retries} attempts to {url} failed: {last_exc}")
+    raise ConnectionError(f"All {retries} attempts to {_safe_diagnostic(url)} failed: {_safe_diagnostic(last_exc)}")
 
 
 # --------------------------------------------------------------------------- #
@@ -288,7 +293,7 @@ def _read_body(
     try:
         resp = _request(url, timeout=timeout, retries=retries)
     except (ConnectionError, requests.RequestException) as exc:
-        log.warning("SuperMAG unreachable at %s: %s", url, exc)
+        log.warning("SuperMAG unreachable at %s: %s", _safe_diagnostic(url), _safe_diagnostic(exc))
         return None, _error(
             "supermag_unavailable",
             "SuperMAG Web Service is unreachable.",
@@ -296,14 +301,14 @@ def _read_body(
                 "Проверьте доступ к supermag.jhuapl.edu и повторите; сервис "
                 "обычно работает даже во время бурь."
             ),
-            detail=str(exc),
+            detail=_safe_diagnostic(exc),
         )
     if resp.status_code != 200:
         return None, _error(
             "supermag_unavailable",
             f"SuperMAG answered HTTP {resp.status_code}.",
             hint="Повторите запрос позже; если ошибка повторяется — проверьте SUPERMAG_LOGON.",
-            detail=f"{url} -> HTTP {resp.status_code}",
+            detail=f"{_safe_diagnostic(url)} -> HTTP {resp.status_code}",
         )
 
     body = (resp.text or "").strip()

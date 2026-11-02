@@ -1,0 +1,42 @@
+{
+  "time_utc": "20261102T072524Z",
+  "scope": "authenticated probes; HTTP success alone is not data validation; login redacted",
+  "results": [
+    {
+      "name": "supermag_authenticated_indices",
+      "url": "https://supermag.jhuapl.edu/services/indices.php?start=2024-05-10T00%3A00%3A00&extent=60&logon=[redacted]&indices=sme,sml,smu&python&nohead",
+      "status": 404,
+      "final_url": "https://supermag.jhuapl.edu/services/indices.php?start=2024-05-10T00%3A00%3A00&extent=60&logon=[redacted]&indices=sme,sml,smu&python&nohead",
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 236,
+      "sha256": "9448f8a1159c9b14e3e1b9d8eab1a6ddf88d26e1f888a34cef430c756e4e6e1e"
+    },
+    {
+      "name": "supermag_authenticated_inventory",
+      "url": "https://supermag.jhuapl.edu/services/inventory.php?start=2024-05-10T00%3A00%3A00&extent=60&logon=[redacted]&python&nohead",
+      "status": 404,
+      "final_url": "https://supermag.jhuapl.edu/services/inventory.php?start=2024-05-10T00%3A00%3A00&extent=60&logon=[redacted]&python&nohead",
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 236,
+      "sha256": "9448f8a1159c9b14e3e1b9d8eab1a6ddf88d26e1f888a34cef430c756e4e6e1e"
+    },
+    {
+      "name": "supermag_authenticated_sites",
+      "url": "https://supermag.jhuapl.edu/services/data-api.php?start=2024-05-10T00%3A00%3A00&extent=60&logon=[redacted]&station=IRT&python&nohead",
+      "status": 404,
+      "final_url": "https://supermag.jhuapl.edu/services/data-api.php?start=2024-05-10T00%3A00%3A00&extent=60&logon=[redacted]&station=IRT&python&nohead",
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 236,
+      "sha256": "9448f8a1159c9b14e3e1b9d8eab1a6ddf88d26e1f888a34cef430c756e4e6e1e"
+    },
+    {
+      "name": "supermag_documented_data",
+      "url": "https://supermag.jhuapl.edu/services/data.php?start=2024-05-10T00%3A00%3A00&extent=60&logon=[redacted]&station=IRT&python&nohead",
+      "status": 404,
+      "final_url": "https://supermag.jhuapl.edu/services/data.php?start=2024-05-10T00%3A00%3A00&extent=60&logon=[redacted]&station=IRT&python&nohead",
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 236,
+      "sha256": "9448f8a1159c9b14e3e1b9d8eab1a6ddf88d26e1f888a34cef430c756e4e6e1e"
+    }
+  ]
+}

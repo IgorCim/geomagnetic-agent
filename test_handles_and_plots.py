@@ -10,7 +10,7 @@ Three field bugs are pinned here:
    ``gr.Plot``. Every figure has to reach the user now.
 3. ``ValueError: Cannot process type as image: <class 'dict'>`` -- handing a
    Plotly figure to ``gr.Gallery``. A Gallery only understands raster images, so
-   the interactive charts have to be rendered as iframes instead.
+   the interactive charts are rendered by fixed ``gr.Plot`` components instead.
 """
 
 import json
@@ -210,7 +210,7 @@ def _plot_script(names: list[str]) -> list[dict]:
     return script
 
 
-def test_three_days_fill_three_iframe_slots(tmp_path, monkeypatch):
+def test_three_days_fill_three_plot_slots(tmp_path, monkeypatch):
     names = ["day10.html", "day11.html", "day12.html"]
     for name in names:
         _write_plot(tmp_path / name)
@@ -229,7 +229,7 @@ def test_three_days_fill_three_iframe_slots(tmp_path, monkeypatch):
     assert len(saved) == 3
     assert len(files) == 3
     for slot in visible:
-        assert "<iframe" in slot["value"]
+        assert slot["value"].data
 
 
 def test_gradio_store_persists_between_turns(tmp_path, monkeypatch):
@@ -370,7 +370,7 @@ def test_single_plot_still_renders(tmp_path, monkeypatch):
     assert len(slots) == ga.MAX_PLOTS_IN_PANEL
     visible = [s for s in slots if s.get("visible")]
     assert len(visible) == 1
-    assert "<iframe" in visible[0]["value"]
+    assert visible[0]["value"].data, "the slot must carry a Plotly figure"
 
 
 def test_all_slots_are_hidden_when_nothing_is_saved():
@@ -389,13 +389,13 @@ def test_empty_message_does_not_break_the_handler():
 # --------------------------------------------------------------------------- #
 # task 3: gr.Gallery cannot hold a Plotly chart
 # --------------------------------------------------------------------------- #
-def test_three_html_paths_survive_gradio_postprocessing(tmp_path, monkeypatch):
+def test_three_plot_paths_survive_gradio_postprocessing(tmp_path, monkeypatch):
     """The reported crash, reproduced through Gradio's own code.
 
     ``ValueError: Cannot process type as image: <class 'dict'>`` came out of
     ``Gallery._save``. Feeding a Gallery was never going to work: it accepts
     raster images only, and a Plotly figure arrives as a dict. This asserts the
-    replacement actually passes through ``gr.HTML.postprocess`` for a real
+    replacement actually passes through ``gr.Plot.postprocess`` for a real
     three-day answer, so the ValueError cannot come back.
     """
     names = ["day10.html", "day11.html", "day12.html"]
@@ -411,18 +411,37 @@ def test_three_html_paths_survive_gradio_postprocessing(tmp_path, monkeypatch):
         handler("построй графики за 3 дня", [], [])
     )
 
-    component = gr.HTML()
+    component = gr.Plot()
     rendered = []
     for slot in slots:
+        if not slot.get("visible"):
+            continue
         # this is the call that used to raise ValueError via Gallery._save
-        out = component.postprocess(slot)
-        rendered.append(out)
+        rendered.append(component.postprocess(slot["value"]))
 
-    shown = [r for r in rendered if r.get("visible")]
-    assert len(shown) == 3, rendered
-    for r in shown:
-        assert r["value"].count("<iframe") == 1
+    assert len(rendered) == 3, rendered
+    for out in rendered:
+        assert out.type == "plotly"
+        assert out.plot
     assert len(files) == 3, "gr.Files must still hand over the real files"
+
+
+def test_history_recap_lists_the_live_session_handles():
+    """A follow-up needs both the prose and a legal handle from the store."""
+    store = ac.FrameStore()
+    store.put("raw:irt:2024-09-10", _day("2024-09-10"))
+    store.put("raw:irt:2024-09-11", _day("2024-09-11"))
+    text = ga._context_from_history(
+        [
+            {"role": "user", "content": "построй IRT за 10 сентября"},
+            {"role": "assistant", "content": "Готово, график H."},
+        ],
+        store,
+    )
+    assert "raw:irt:2024-09-10" in text
+    assert "raw:irt:2024-09-11" in text
+    assert "ссылки, не значения" in text
+    assert "Новый запрос:" in text
 
 
 def test_gradio_logon_is_stored_on_the_session_state(monkeypatch):
@@ -453,13 +472,34 @@ def test_no_gallery_component_is_created():
     assert "Gallery(" not in source.replace("A Gallery", "").replace("a Gallery", "")
 
 
-def test_the_demo_wires_one_html_slot_per_figure():
+def test_main_uses_a_blocking_cli_launch_and_returns_cleanly(monkeypatch):
+    """`prevent_thread_lock=True` makes a plain `python gradio_app.py` exit at once.
+
+    It is also the mode in which the old trailing `btn_download.click(...)` block
+    ran after `main()` returned and raised NameError. A mocked launch proves the
+    CLI path both blocks by default and has no code after it.
+    """
+    calls: dict[str, object] = {}
+
+    class Demo:
+        def launch(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(ga, "load_brain", lambda: object())
+    monkeypatch.setattr(ga, "build_demo", lambda brain: Demo())
+    monkeypatch.setattr(ga, "PREVENT_THREAD_LOCK", False)
+    ga.main()
+    assert calls["prevent_thread_lock"] is False
+    assert calls["server_name"] == ga.SERVER_NAME
+
+
+def test_the_demo_wires_one_plot_slot_per_figure():
     """Slots have to be declared up front: Blocks cannot add them per turn."""
     demo = ga.build_demo(object())
     components = demo.get_config_file()["components"]
     kinds = [c.get("type") for c in components]
     assert "gallery" not in kinds, "no Gallery may be instantiated"
-    assert kinds.count("html") >= ga.MAX_PLOTS_IN_PANEL
+    assert kinds.count("plot") >= ga.MAX_PLOTS_IN_PANEL
     assert kinds.count("file") == 1, "gr.Files must survive"
     assert kinds.count("chatbot") == 1
 
@@ -469,12 +509,12 @@ def test_the_declared_slots_are_hidden_at_start():
     labels = [
         c.get("props", {}).get("label")
         for c in demo.get_config_file()["components"]
-        if c.get("type") == "html"
+        if c.get("type") == "plot"
     ]
     assert "" in labels
     hidden = [
         c for c in demo.get_config_file()["components"]
-        if c.get("type") == "html" and c.get("props", {}).get("visible") is False
+        if c.get("type") == "plot" and c.get("props", {}).get("visible") is False
     ]
     assert len(hidden) == ga.MAX_PLOTS_IN_PANEL, hidden
 
@@ -495,46 +535,33 @@ def test_handler_and_wiring_agree_on_the_output_count():
     )
 
 
-def test_iframe_carries_the_document_inline(tmp_path, monkeypatch):
-    """srcdoc inlines the chart, so it needs no file route and keeps its modebar."""
-    path = _write_plot(tmp_path / "one.html")
-    document = Path(path).read_text(encoding="utf-8")
-    frame = ga._iframe(path)
-    assert frame.startswith("<iframe")
-    assert "srcdoc=" in frame
-
-    # the iframe itself must point nowhere: a filesystem path in src is not
-    # something a browser can fetch from an http origin. Only the attributes
-    # outside the escaped payload are inspected -- the Plotly document itself
-    # legitimately contains src= for its CDN script.
-    head, _, rest = frame.partition(' srcdoc="')
-    assert head == "<iframe", head
-    # html.escape(quote=True) leaves no literal quote inside the payload, so the
-    # first one closes the attribute
-    raw, _, tail = rest.partition('"')
-    assert "src" not in head and "src" not in tail, (head, tail)
-    assert "style=" in tail and "loading=" in tail, tail
-    assert tail.endswith("></iframe>")
-
-    # the payload must be escaped for an attribute context...
-    assert "&quot;" in raw or "&lt;" in raw or "&amp;" in raw
-    # ...and it must decode back to the original document, Plotly call and all
-    import html as html_mod
-
-    restored = html_mod.unescape(raw)
-    assert restored == document
-    assert "Plotly" in restored
-    # the chart stays interactive: our plotter config must survive the round trip
-    assert "scrollZoom" in restored, "zoom and pan would be lost"
-    assert "responsive" in restored
-    assert "Plotly.newPlot(" in restored
-
-
-def test_iframe_of_a_missing_or_empty_file_is_empty(tmp_path):
-    assert ga._iframe(str(tmp_path / "nope.html")) == ""
+def test_missing_or_empty_chart_does_not_fill_a_slot(tmp_path):
     empty = tmp_path / "empty.html"
     empty.write_text("   ", encoding="utf-8")
-    assert ga._iframe(str(empty)) == ""
+    slots = ga._slot_updates([
+        {"question": "q", "path": str(tmp_path / "nope.html")},
+        {"question": "q", "path": str(empty)},
+    ])
+    assert not [slot for slot in slots if slot.get("visible")]
+
+
+def test_slot_updates_are_cached_between_turns(tmp_path, monkeypatch):
+    """A 5 MB Plotly document must not be re-parsed on every chat turn."""
+    path = _write_plot(tmp_path / "one.html")
+    calls = {"n": 0}
+    real = ga.figure_from_plot_file
+
+    def counting(value):
+        calls["n"] += 1
+        return real(value)
+
+    # Clear the cache from any earlier test before installing the spy.
+    ga._cached_figure.cache_clear()
+    monkeypatch.setattr(ga, "figure_from_plot_file", counting)
+    first = ga._slot_updates([{"question": "q", "path": path}])
+    second = ga._slot_updates([{"question": "q", "path": path}])
+    assert calls["n"] == 1
+    assert first[0]["visible"] and second[0]["visible"]
 
 
 def test_a_full_panel_uses_every_slot(tmp_path, monkeypatch):
@@ -628,7 +655,7 @@ def test_all_three_charts_survive_a_refused_filler_call(tmp_path, monkeypatch):
     assert len(saved) == 3, saved
     shown = [s for s in slots if s.get("visible")]
     assert len(shown) == 3, "every saved figure must reach the screen"
-    assert all("<iframe" in s["value"] for s in shown)
+    assert all(getattr(s["value"], "data", None) for s in shown)
     assert len(files) == 3
 
 

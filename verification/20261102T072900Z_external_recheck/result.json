@@ -1,0 +1,24 @@
+{
+  "time_utc": "20261102T072900Z",
+  "scope": "runtime probes; HTTP success alone is not data validation; login redacted",
+  "results": [
+    {
+      "name": "llama_cuda_index",
+      "url": "https://abetlen.github.io/llama-cpp-python/whl/cu121/llama-cpp-python/",
+      "status": 200,
+      "final_url": "https://abetlen.github.io/llama-cpp-python/whl/cu121/llama-cpp-python/",
+      "content_type": "text/html; charset=utf-8",
+      "bytes": 68854,
+      "sha256": "e7d48c285d6c2a571589fab488722c476da9965193f603ecb4289fbc652f57a7"
+    },
+    {
+      "name": "llama_pinned_wheel",
+      "url": "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35-cu121/llama_cpp_python-0.3.35-py3-none-manylinux_2_35_x86_64.whl",
+      "status": 200,
+      "final_url": "https://release-assets.githubusercontent.com/github-production-release-asset/617868717/dc2395f1-b3eb-4f6a-b27c-5bdf416a1faa",
+      "content_type": "application/octet-stream",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

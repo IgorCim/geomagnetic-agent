@@ -1,0 +1,117 @@
+{
+  "status": "historical",
+  "source_notebook": "10112007 (1).ipynb",
+  "source_notebook_sha256": "204775827ee43618c286c156b2ffd7df8ac2c7b0c9f1d2a4b2f04826a789c4d0",
+  "kaggle_url": "https://www.kaggle.com/code/<owner>/10112007/edit",
+  "documented_run": "stress_3ffd1r21",
+  "cell": 10,
+  "execution_count": 7,
+  "executed_utc": {
+    "start": "2026-10-28T15:12:38.368910Z",
+    "end": "2026-10-28T15:16:57.763802Z"
+  },
+  "claims": {
+    "total_charts": 300,
+    "matrix_a": "200/200",
+    "matrix_b": "50/50",
+    "matrix_c": "50/50",
+    "supermag_windows": [
+      {
+        "range": "2024-05-01..2024-05-15",
+        "rows": 21600,
+        "handle": "idx:supermag:2024-05-01"
+      },
+      {
+        "range": "2024-05-16..2024-05-30",
+        "rows": 21600,
+        "handle": "idx:supermag:2024-05-16"
+      }
+    ],
+    "supermag_status": "ok=True",
+    "skipped": "none",
+    "failures": "none",
+    "security_probe": "ok",
+    "final_line": "STRESS TEST PASSED: 300 distinct canonical charts, 6 sources exercised, 3 matrix runs, 3 default ZIPs, 1 prompt-named custom ZIP"
+  },
+  "supporting_secondary_run": {
+    "run": "stress_ke1piibk",
+    "cell": 9,
+    "execution_count": 16,
+    "executed_utc": {
+      "start": "2026-10-28T05:23:47.316775Z",
+      "end": "2026-10-28T05:28:07.199839Z"
+    },
+    "differences_vs_documented_run": {
+      "stage_timings_secondary": [
+        127.1,
+        36.7,
+        13.7,
+        16.6,
+        10.3,
+        2.2,
+        31.4,
+        19.3,
+        2.2
+      ],
+      "stage_timings_documented": [
+        126.1,
+        36.4,
+        13.2,
+        16.6,
+        10.2,
+        2.1,
+        31.7,
+        19.4,
+        2.1
+      ],
+      "noaa_forecast_max_kp": {
+        "secondary": 4.0,
+        "documented": 5.0
+      },
+      "iswa_forecast_horizon_utc": {
+        "secondary": "2026-10-30T05:00:00Z",
+        "documented": "2026-10-30T15:00:00Z"
+      }
+    }
+  },
+  "caveats": [
+    "Saved notebook output, not an independent raw stdout.",
+    "Notebook contains two run outputs (stress_3ffd1r21 and stress_ke1piibk). They are very similar but not identical: stage timings differ by 0.1-0.7 s, NOAA forecast max Kp is 5.0 vs 4.0, and ISWA horizon is 15:00 vs 05:00. This looks like two real runs, but independence is not proven by the notebook alone.",
+    "The stress output does not print HEAD. stress_3ffd1r21 ran at 15:12 UTC, between ed46cf7 (09:31 UTC) and 16a5b0a (17:16 UTC); the cell 8 assert on 16a5b0a ran later. This is consistent with ed46cf7 but remains an inference, not machine proof.",
+    "The source notebook hardcodes a SuperMAG credential in cell 2; the original must not be published.",
+    "The log proves API success/row counts, not numerical correctness or data quality.",
+    "Current SuperMAG legacy endpoint returns HTTP 404; this is historical evidence only."
+  ],
+  "extracted_files": {
+    "stress_3ffd1r21_cell10_output_redacted.log": {
+      "bytes": 34274,
+      "sha256": "1358eaaaed361253784b787bd9fa198b7bf066c12bf46b7c281b20ea0b122ec9"
+    },
+    "stress_ke1piibk_cell9_output_redacted.log": {
+      "bytes": 34266,
+      "sha256": "49ceb8c1cc9a8490f103c9015c8c796a452a17f454daa078443c6d82989119d1"
+    }
+  },
+  "timeline_utc": [
+    {
+      "time": "2026-10-28T05:23:47Z",
+      "event": "stress_ke1piibk start (cell 9)"
+    },
+    {
+      "time": "2026-10-28T09:31:33Z",
+      "event": "commit ed46cf7"
+    },
+    {
+      "time": "2026-10-28T15:12:38Z",
+      "event": "stress_3ffd1r21 start (cell 10)"
+    },
+    {
+      "time": "2026-10-28T17:16:08Z",
+      "event": "commit 16a5b0a"
+    },
+    {
+      "time": "2026-10-28T17:37:58Z",
+      "event": "cell 8 assert on HEAD 16a5b0a"
+    }
+  ]
+}
