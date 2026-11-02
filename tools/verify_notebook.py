@@ -9,6 +9,7 @@ import re
 import sys
 import tempfile
 import subprocess
+import builtins
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -24,6 +25,49 @@ def main():
     for i, source in enumerate(cells):
         compile(source, f"cell-{i+1}", "exec")
     checks = ["Nine code cells compile"]
+
+    for installed_gpu in (False, True):
+        commands = []
+        def run(command, **kwargs):
+            commands.append(command)
+            if '-c' in command:
+                return SimpleNamespace(returncode=0, stdout=json.dumps({'version': '0.3.35', 'gpu': installed_gpu}))
+            return SimpleNamespace(returncode=0)
+        cuda = SimpleNamespace(is_available=lambda: True, get_device_name=lambda _: 'fixture GPU',
+                               get_device_properties=lambda _: SimpleNamespace(total_memory=16_000_000_000))
+        native = SimpleNamespace(llama_supports_gpu_offload=lambda: True)
+        importer = builtins.__import__
+        def import_fixture(name, *args, **kwargs):
+            if name == 'torch':
+                return SimpleNamespace(cuda=cuda)
+            if name == 'llama_cpp':
+                return SimpleNamespace(llama_cpp=native)
+            return importer(name, *args, **kwargs)
+        with patch.dict(sys.modules, {'subprocess': SimpleNamespace(run=run)}), patch('builtins.__import__', import_fixture), redirect_stdout(io.StringIO()):
+            exec(cells[1], {})
+        wheel_installs = [c for c in commands if any(str(x).endswith('.whl') for x in c)]
+        assert len(wheel_installs) == (0 if installed_gpu else 1)
+    checks.append('CUDA setup: reuse matching GPU wheel; install once when absent/CPU')
+
+    launched = []
+    closed = []
+    model = object()
+    class Demo:
+        def close(self):
+            closed.append(self)
+        def launch(self, **kwargs):
+            launched.append(kwargs)
+            return None, 'http://127.0.0.1:7860', 'https://fixture.invalid'
+    previous = Demo()
+    def build(brain):
+        assert brain is model
+        return Demo()
+    with patch.dict(sys.modules, {'gradio_app': SimpleNamespace(build_demo=build)}), redirect_stdout(io.StringIO()) as output:
+        exec(cells[7], {'brain': model, 'demo': previous})
+    assert closed == [previous]
+    assert launched[0]['share'] is True and launched[0]['inline'] is False
+    assert 'https://fixture.invalid' in output.getvalue()
+    checks.append('Gradio launch: close prior demo, reuse brain, public URL and no blocked inline iframe')
 
     # Existing environment value must survive a missing Kaggle Secret.
     for existing, secret in [("fixture-existing", None), (None, None), (None, "fixture-secret")]:
@@ -110,13 +154,15 @@ def main():
                 assert len(list(working.glob("geomagnetic_github_*"))) == count_before
             checks.append("Git checkout: local upstream, repeat runs, exact HEAD/hashes, old weights/results preserved, loaded kernel rejected")
             os.chdir(fixture)
-            for failure in (False, True):
-                evidence = fixture / ("failure" if failure else "success")
+            for mode in ("success", "failure", "missing_supermag"):
+                failure = mode != "success"
+                evidence = fixture / mode
                 evidence.mkdir()
                 fake = ("from pathlib import Path\nimport project_store as ps\n"
                         "RUN_DIR = Path(DIR) / 'fake_run'\n"
+                        + ("r_smag = {'ok': True}\n" if mode != "missing_supermag" else "r_smag = None\n") +
                         "ps.EXPORTS_ROOT = 'fixture temporary export root'\n")
-                if failure:
+                if mode == "failure":
                     fake += "raise AssertionError('fixture stress failure')\n"
                 (fixture / "stress_300.py").write_text(fake, encoding="utf-8")
                 ps = SimpleNamespace(EXPORTS_ROOT="fixture original root")
@@ -133,11 +179,15 @@ def main():
                 assert namespace["RUN_DIR"] == fixture / "fake_run"
                 status = json.loads((evidence / "stress_status.json").read_text())
                 assert status["status"] == ("FAIL" if failure else "PASS")
-                assert "fixture stress failure" in (evidence / "stress_300.log").read_text() if failure else True
+                log = (evidence / "stress_300.log").read_text(encoding="utf-8")
+                if mode == "failure":
+                    assert "fixture stress failure" in log
+                if mode == "missing_supermag":
+                    assert "Six-source gate" in log
         finally:
             os.chdir(original_cwd)
             sys.path[:] = original_sys_path
-    checks.append("Stress PASS/FAIL: preserve exception, status/run dir, restore export root, release namespace")
+    checks.append("Stress PASS/FAIL/missing SuperMAG: preserve exception and status, restore export root, release namespace; no six-source PASS on skip")
     output = verification / "20261102_notebook_review"
     output.mkdir(exist_ok=True)
     report = {"status": "PASS", "checks": checks, "scope": "Synthetic notebook plumbing only; no real Qwen, CUDA, remote data or full stress executed"}

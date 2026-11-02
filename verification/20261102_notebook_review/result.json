@@ -2,9 +2,11 @@
   "status": "PASS",
   "checks": [
     "Nine code cells compile",
+    "CUDA setup: reuse matching GPU wheel; install once when absent/CPU",
+    "Gradio launch: close prior demo, reuse brain, public URL and no blocked inline iframe",
     "SuperMAG: existing env, absent secret, configured secret; value never printed",
     "Git checkout: local upstream, repeat runs, exact HEAD/hashes, old weights/results preserved, loaded kernel rejected",
-    "Stress PASS/FAIL: preserve exception, status/run dir, restore export root, release namespace"
+    "Stress PASS/FAIL/missing SuperMAG: preserve exception and status, restore export root, release namespace; no six-source PASS on skip"
   ],
   "scope": "Synthetic notebook plumbing only; no real Qwen, CUDA, remote data or full stress executed"
 }

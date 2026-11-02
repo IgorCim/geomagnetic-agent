@@ -374,22 +374,23 @@ def plot_trace_names(path: str | Path) -> list[str]:
         html = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    marker = html.find(_PLOTLY_MARKER)
-    if marker == -1:
-        return []
-    bracket = html.find("[", marker)
-    if bracket == -1:
-        return []
-    payload = _scan_json_array(html, bracket)
-    if not payload:
-        return []
-    try:
-        traces = json.loads(payload)
-    except ValueError:
-        return []
-    if not isinstance(traces, list):
-        return []
-    return [str(t.get("name")) for t in traces if isinstance(t, dict)]
+    # Self-contained Plotly 5 HTML contains the library BEFORE the real call.
+    # Its first "Plotly.newPlot" is not necessarily a call with chart data.
+    # Accept a literal div id and decode the immediately following JSON array;
+    # never pick an unrelated '[' somewhere later in the bundled library.
+    call = re.compile(r'''Plotly\.newPlot\s*\(\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*,\s*''')
+    for match in call.finditer(html):
+        start = match.end()
+        if start >= len(html) or html[start] != "[":
+            continue
+        payload = _scan_json_array(html, start)
+        try:
+            traces = json.loads(payload)
+        except ValueError:
+            continue
+        if isinstance(traces, list) and any(isinstance(t, dict) for t in traces):
+            return [str(t.get("name")) for t in traces if isinstance(t, dict)]
+    return []
 
 
 # --------------------------------------------------------------------------- #

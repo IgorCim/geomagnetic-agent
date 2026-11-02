@@ -87,6 +87,8 @@ MODELS.mkdir(parents=True, exist_ok=True)
 os.environ['GEOMAG_MODELS_DIR'] = str(MODELS)
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ['GEOMAG_OFFLINE'] = '0'
+os.environ['GEOMAG_DEBUG_PARSER'] = '0'
+os.environ['GEOMAG_DEBUG_SCRATCHPAD'] = '0'
 os.chdir(DIR)
 sys.path.insert(0, str(DIR))
 print('SOURCE VERIFIED:', len(hashes), 'tracked files')
@@ -102,10 +104,22 @@ print('Дальше выполняй ячейку 2. После загрузки
 Wheel — официальный адрес из прежнего Kaggle/Colab сценария проекта. Если wheel не подходит обновлённому образу Kaggle, остановиться и зафиксировать ошибку; CPU fallback не выдавать за GPU-прогон.
 
 ```python
-import subprocess, sys
+import subprocess, sys, json
 subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', 'requirements-dev.txt'], check=True)
-subprocess.run([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps',
-    'https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35-cu121/llama_cpp_python-0.3.35-py3-none-manylinux_2_35_x86_64.whl'], check=True)
+probe = subprocess.run([sys.executable, '-c',
+    'import json, llama_cpp; from llama_cpp import llama_cpp as lc; '
+    'print(json.dumps({"version": llama_cpp.__version__, "gpu": bool(lc.llama_supports_gpu_offload())}))'],
+    capture_output=True, text=True)
+try:
+    existing = json.loads(probe.stdout.strip()) if probe.returncode == 0 else {}
+except ValueError:
+    existing = {}
+if existing.get('version') == '0.3.35' and existing.get('gpu'):
+    print('CUDA llama-cpp 0.3.35 уже установлен; повторная загрузка wheel не нужна')
+else:
+    assert 'llama_cpp' not in sys.modules, 'Перезапусти kernel перед заменой бинарного llama-cpp'
+    subprocess.run([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps',
+        'https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35-cu121/llama_cpp_python-0.3.35-py3-none-manylinux_2_35_x86_64.whl'], check=True)
 subprocess.run([sys.executable, '-m', 'pip', 'install', 'diskcache'], check=True)
 import torch
 from llama_cpp import llama_cpp as lc
@@ -157,10 +171,13 @@ if os.environ.get('SUPERMAG_LOGON'):
 ```python
 import agent_core as ac
 import importlib.metadata as metadata
-import hashlib, json, platform
+import hashlib, json, platform, logging, os
 from pathlib import Path
 ac.OFFLINE = False
-brain = ac.load_brain(n_gpu_layers=-1, n_ctx=16384, verbose=True)
+os.environ['GEOMAG_DEBUG_PARSER'] = '0'
+os.environ['GEOMAG_DEBUG_SCRATCHPAD'] = '0'
+brain = ac.load_brain(n_gpu_layers=-1, n_ctx=16384, verbose=False)
+logging.getLogger('llama-cpp-python').setLevel(logging.WARNING)
 assert not ac.is_error(brain), brain
 assert isinstance(brain, ac.LlamaBrain) and not isinstance(brain, ac.ScriptedBrain)
 assert ac.MODEL_REPO == 'Qwen/Qwen2.5-14B-Instruct-GGUF'
@@ -220,6 +237,7 @@ with (evidence / 'stress_300.log').open('w', encoding='utf-8') as log:
     with contextlib.redirect_stdout(EvidenceTee(sys.stdout, log)), contextlib.redirect_stderr(EvidenceTee(sys.stderr, log)):
         try:
             exec(compile(Path('stress_300.py').read_text(encoding='utf-8-sig'), 'stress_300.py', 'exec'), stress_ns)
+            assert stress_ns.get('r_smag') is not None, 'Six-source gate: SuperMAG пропущен; настрой SUPERMAG_LOGON и повтори. 300 графиков сами по себе не означают проверку шести источников.'
             stress_status['status'] = 'PASS'
         except BaseException as exc:
             stress_status.update(status='FAIL', exception=type(exc).__name__)
@@ -239,13 +257,18 @@ with (evidence / 'stress_300.log').open('w', encoding='utf-8') as log:
 
 ## 8. Gradio с настоящей Qwen
 
-Для внешней ссылки Kaggle нужно осознанно включить PUBLIC_DEMO. Ссылка не имеет встроенной авторизации. Не оставлять публичный сервер после показа; не вводить в чат логины или приватные сведения.
+По просьбе пользователя для проверки в Kaggle включена временная публичная ссылка PUBLIC_DEMO=True. Открывать напечатанный адрес в отдельной вкладке; localhost Kaggle недоступен с компьютера пользователя. Ссылка не имеет встроенной авторизации. Не оставлять публичный сервер после показа; не вводить в чат логины или приватные сведения.
 
 ```python
 import gradio_app as ga
-PUBLIC_DEMO = False  # Для видеозаписи по внешней ссылке: True, только на время показа.
+PUBLIC_DEMO = True  # Временная публичная ссылка для проверки; закрыть после показа.
+if 'demo' in globals():
+    demo.close()
 demo = ga.build_demo(brain)
-demo.launch(share=PUBLIC_DEMO, debug=False, prevent_thread_lock=True)
+_, local_url, public_url = demo.launch(share=PUBLIC_DEMO, debug=False, prevent_thread_lock=True, inline=False)
+print('Открой Gradio в отдельной вкладке:', public_url or local_url)
+if PUBLIC_DEMO:
+    assert public_url, 'Публичный туннель не создан; смотри ошибку launch выше'
 ```
 
 Выполнить [VIDEO_RUNBOOK.md](VIDEO_RUNBOOK.md) и 20-ходовую проверку [LONG_CHAT.md](LONG_CHAT.md). Внешние данные реальные; результаты не заменять локальной TestBrain-проверкой. Для нового независимого сценария используйте новую браузерную сессию, не полагайтесь только на очистку transcript.

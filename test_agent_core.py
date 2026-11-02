@@ -3969,6 +3969,27 @@ class _MatrixPlanBrain:
         }
 
 
+def test_planner_matrix_name_alias_preserves_project_and_export(monkeypatch, tmp_path):
+    class Brain(_MatrixPlanBrain):
+        def chat(self, messages, tools):
+            response = super().chat(messages, tools)
+            response["content"] = response["content"].replace('"project_name":', '"name":')
+            return response
+
+    store = _matrix_store(monkeypatch, tmp_path)
+    result = ac.run_agent_with_planner("Матрица в проект events", brain=Brain(), store=store, verbose=False)
+    assert result["ok"], result
+    assert Path(result["matrix_path"]).parent.name == "events", result
+    assert Path(result["export"]["path"]).name == "events.zip", result
+    assert len(list(Path(result["matrix_path"]).parent.rglob("*.html"))) == 4
+
+
+def test_matrix_name_alias_never_overrides_explicit_project_name():
+    args = ac.normalize_tool_args("create_task_matrix", {"name": "wrong", "project_name": "right"})
+    assert args["project_name"] == "right"
+    assert "name" not in args
+
+
 def test_run_agent_with_planner_single_matrix_plan_runs_the_whole_job(
     monkeypatch, tmp_path
 ):

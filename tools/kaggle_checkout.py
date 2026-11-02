@@ -72,6 +72,8 @@ MODELS.mkdir(parents=True, exist_ok=True)
 os.environ['GEOMAG_MODELS_DIR'] = str(MODELS)
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ['GEOMAG_OFFLINE'] = '0'
+os.environ['GEOMAG_DEBUG_PARSER'] = '0'
+os.environ['GEOMAG_DEBUG_SCRATCHPAD'] = '0'
 os.chdir(DIR)
 sys.path.insert(0, str(DIR))
 print('SOURCE VERIFIED:', len(hashes), 'tracked files')

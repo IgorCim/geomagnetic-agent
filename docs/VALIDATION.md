@@ -71,3 +71,7 @@ Production-код агента, загрузчиков и системный п�
 По уточнению пользователя восстановлена исходная схема GitHub → Kaggle. Новый notebook не ищет ZIP/manifest в `/kaggle/input`. SOURCE_MANIFEST.json генерируется после clone master в отдельный checkout; полный HEAD и хеши записываются до загрузки модели. Прежние архивы не переписывались.
 
 Обновлённый verify_notebook прошёл проверку на локальном upstream: два запуска создают разные каталоги; HEAD и SHA-256 совпадают; старые веса/результаты сохраняются; при уже загруженном brain/модуле clone не начинается. В том же прогоне сохранены проверки env/Secret и cleanup stress. Ячейки, Markdown и tools/kaggle_checkout.py синхронизированы. Это служебные проверки, не новый live GPU-прогон и не повтор 994 pytest.
+
+## После присланного живого запуска a1acf58
+
+Исправлены два воспроизведённых дефекта: извлечение traces из self-contained Plotly 5 HTML и потеря имени матрицы, переданного LLMPlanner как name. Новый полный isolated run: **998 passed, 1 skipped, 22 deselected, 88.13 s**; verification/20261102T100918Z. Дополнительно 56 сценарных тестов прошли именно с Plotly 5.24.1 и HTTP Gradio с ним прошёл шесть групп проверок (verification/20261102T101428Z_gradio). Это новый offline/fixture результат, не новый живой 300-chart PASS. [Разбор исходного FAIL и изменений](KAGGLE_LIVE_20261102.md).

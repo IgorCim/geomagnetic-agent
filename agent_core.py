@@ -1563,6 +1563,9 @@ def normalize_tool_args(tool_name: Any, args: Any) -> dict[str, Any]:
     if "project_name" in out and "name" in properties and "name" not in out:
         out["name"] = out.pop("project_name")
 
+    if name == "create_task_matrix" and "name" in out and not out.get("project_name"):
+        out["project_name"] = out.pop("name")
+
     # A plan that names only station/date can still name the raw slot the fetch
     # step will create. Do this before the unknown-key filter below, because
     # plot_components has no station_code/date properties of its own.
@@ -7751,10 +7754,9 @@ def run_agent(
         # context window (the schema diet exists precisely to keep it small).
         injection = scratchpad.to_prompt_injection()
         messages[0] = {"role": "system", "content": f"{prompt}\n\n{injection}"}
-        # Unconditional: the field log showed the model ignoring a self-correction
-        # we believed was injected, so the exact injected text is printed to tell
-        # "not injected" apart from "injected and ignored".
-        print(f"\n[DEBUG] SCRATCHPAD INJECTION:\n{injection}\n")
+        # Injection is unconditional; dumping the complete prompt is opt-in.
+        if os.environ.get("GEOMAG_DEBUG_SCRATCHPAD", "0").strip().lower() not in ("", "0", "false", "no"):
+            print(f"\n[DEBUG] SCRATCHPAD INJECTION:\n{injection}\n")
         if verbose:
             print(
                 f"[SCRATCHPAD] Step {round_no}/{max_rounds}. "

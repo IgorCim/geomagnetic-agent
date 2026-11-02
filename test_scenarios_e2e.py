@@ -81,6 +81,26 @@ def test_good_compare_run_passes(tmp_path):
     assert e2e.check(scenario, result) == []
 
 
+def test_trace_reader_skips_bundled_plotly_code_before_actual_call(tmp_path):
+    path = tmp_path / "inline.html"
+    path.write_text(
+        '<script>var help="Plotly.newPlot"; var unrelated=[1,2,3];</script>'
+        '<script>Plotly.newPlot("chart", [{"name":"2024-09-10","y":[1,2]},'
+        '{"name":"2024-09-11","y":[3,4]}], {});</script>', encoding="utf-8",
+    )
+    assert e2e.plot_trace_names(path) == ["2024-09-10", "2024-09-11"]
+
+
+def test_trace_reader_skips_invalid_call_and_preserves_escaped_names(tmp_path):
+    path = tmp_path / "calls.html"
+    path.write_text(
+        'Plotly.newPlot(node, not_json);'
+        'Plotly.newPlot("chart", [{"name":"day \\"A\\" [UTC]","y":[1]}], {});',
+        encoding="utf-8",
+    )
+    assert e2e.plot_trace_names(path) == ['day "A" [UTC]']
+
+
 def test_the_original_failure_is_caught(tmp_path):
     """Two fetches, then a comparison that silently reuses one handle."""
     plot = tmp_path / "cmp.html"
