@@ -733,6 +733,7 @@ def make_chat_handler(brain: Any):
                     brain=brain,
                     store=store,
                     verbose=VERBOSE,
+                    routing_query=question,
                 )
         except Exception as exc:  # one bad turn must not kill the server
             traceback.print_exc()

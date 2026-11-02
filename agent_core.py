@@ -1906,6 +1906,16 @@ def _selection_plan(
         mandatory.extend(_METRIC_SOURCE_TOOLS.get(metric, ()))
         mandatory.append(_METRIC_DECISIVE_TOOL.get(metric, "apply_physics_formula"))
 
+    # Ground/wind comparison is a distinct product, not plot_comparison's
+    # two-ground-frame overlay. Keep its decisive tool ahead of the cap.
+    space_comparison = bool(
+        re.search(r"сопостав|сравн|\bcompar|plot_space_weather_comparison", text)
+        and re.search(r"\b(?:omni|bz|solar\s+wind)\b|солнечн[а-я]*\s+вет", text)
+        and re.search(r"\bh\b|\bground\b|земл|назем|станц|\birt\b", text)
+    )
+    if space_comparison:
+        mandatory.extend(("fetch_observatory_data", "fetch_solar_wind", "plot_space_weather_comparison"))
+
     optional: list[str] = []
     for pattern, tools in _CAPABILITY_RULES:
         if re.search(pattern, text):
@@ -1942,6 +1952,7 @@ def _selection_plan(
         "bulk": bulk,
         "units": _bulk_units(text),
         "fallback": fallback,
+        "space_comparison": space_comparison,
     }
     return selected, info
 
@@ -7651,6 +7662,7 @@ def run_agent(
     system_prompt: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     store: FrameStore | None = None,
+    routing_query: str | None = None,
 ) -> dict[str, Any]:
     """Answer ``user_query`` by letting the model call the Stage 1/2 tools.
 
@@ -7660,6 +7672,9 @@ def run_agent(
 
     ``store`` lets the external brain share one :class:`FrameStore` across many
     subtasks; when None a fresh store is created for this call.
+
+    ``routing_query`` selects tools for the current turn while ``user_query``
+    may also contain the UI's previous-turn recap for model interpretation.
 
     Returns ``{"ok", "text", "plots", "tool_calls", "rounds", "stop_reason"}``.
     ``text`` and ``plots`` are the stable contract; the rest is diagnostics.
@@ -7699,8 +7714,9 @@ def run_agent(
         schemas = tools
         selection = None
     else:
-        schemas = select_tools_for_query(user_query)
-        selection = explain_tool_selection(user_query)
+        current_query = routing_query if routing_query is not None else user_query
+        schemas = select_tools_for_query(current_query)
+        selection = explain_tool_selection(current_query)
     offered_names = {
         str(schema.get("function", {}).get("name") or "")
         for schema in schemas
@@ -7727,6 +7743,8 @@ def run_agent(
         if metric in _SOLAR_WIND_METRICS
     ]
     goal_retries = 0
+    plot_goal_retries = 0
+    needs_space_plot = bool((selection or {}).get("space_comparison"))
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompt},
@@ -7783,6 +7801,25 @@ def run_agent(
         calls, leftover = parse_tool_calls(reply)
 
         if not calls:
+            # Filenames in prose are not artifacts. Require the actual
+            # decisive plotting call before accepting this comparison.
+            if needs_space_plot and not any(
+                e.get("ok") and e.get("tool") == "plot_space_weather_comparison" and e.get("plot")
+                for e in log
+            ):
+                if plot_goal_retries < 2 and round_no < max_rounds:
+                    plot_goal_retries += 1
+                    messages.append({"role": "user", "content": (
+                        "Сравнение ещё не построено. Вызови plot_space_weather_comparison "
+                        "с реальными handle наземных данных и солнечного ветра. "
+                        "Если таблицы нет, сначала загрузи её. Не объявляй файлы готовыми без результата инструмента."
+                    )})
+                    continue
+                return {
+                    "ok": False, "error": "plot_not_built", "stop_reason": "plot_not_built",
+                    "text": _with_tool_failures("График сравнения земли и солнечного ветра не построен: модель не выполнила успешный вызов plot_space_weather_comparison.", log),
+                    "plots": plots, "tool_calls": log, "rounds": round_no,
+                }
             # The model role-played the API server and returned
             # {'content': ..., 'tool_calls': None}. Accepting that as the final
             # answer would be exactly the "hallucinated success" we are trying

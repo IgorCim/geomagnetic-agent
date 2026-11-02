@@ -10,6 +10,20 @@ import project_store as ps
 from test_handles_and_plots import _write_plot
 
 
+def test_history_is_sent_to_model_but_routing_uses_only_current_question(monkeypatch):
+    seen = {}
+    def run(query, **kwargs):
+        seen.update(kwargs)
+        seen["query"] = query
+        return {"ok": True, "text": "fixture", "plots": []}
+    monkeypatch.setattr(ga, "run_agent", run)
+    history = [{"role": "user", "content": "Получи Kyoto и NOAA"},
+               {"role": "assistant", "content": "Старый ответ"}]
+    ga.make_chat_handler(object())("Сопоставь H IRT с Bz/V", history, [], ac.FrameStore())
+    assert seen["routing_query"] == "Сопоставь H IRT с Bz/V"
+    assert "Старый ответ" in seen["query"]
+
+
 def test_partial_failure_keeps_finished_charts_and_original_diagnostics(tmp_path, monkeypatch):
     path = _write_plot(tmp_path / "finished.html")
     monkeypatch.setattr(ga, "run_agent", lambda *a, **k: {

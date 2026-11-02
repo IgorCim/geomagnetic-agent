@@ -1912,6 +1912,54 @@ def test_refetching_does_not_hide_a_repeated_statistics_loop(monkeypatch):
     assert brain.calls <= 6
 
 
+@pytest.mark.parametrize("query", [
+    "Сопоставить H первой IRT с Bz/V, проверить время и подписи",
+    "Сравни H станции IRT с солнечным ветром Bz и V",
+    "Compare ground H with solar wind Bz and V",
+])
+def test_ground_wind_comparison_router_offers_decisive_tool(query):
+    names = {t["function"]["name"] for t in ac.select_tools_for_query(query)}
+    assert {"fetch_observatory_data", "fetch_solar_wind", "plot_space_weather_comparison"} <= names
+
+
+def test_ground_wind_comparison_cannot_finish_with_invented_filenames():
+    brain = ac.ScriptedBrain(["Графики готовы: invented.html"] * 3)
+    result = ac.run_agent("Сопоставить H первой IRT с Bz/V, проверить время и подписи",
+                          brain=brain, verbose=False)
+    assert not result["ok"]
+    assert result["error"] == "plot_not_built"
+    assert "invented.html" not in result["text"]
+    assert result["plots"] == []
+    assert brain.calls == 3
+
+
+def test_ground_wind_comparison_builds_actual_html_without_refetch(tmp_path, monkeypatch):
+    monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
+    store = _physics_store()
+    wind = _mock_solar_wind(store)
+    packet = _call("plot_space_weather_comparison", ground_df_descriptor="raw:irt:2024-09-10",
+                   solar_wind_df_descriptor=wind, ground_component="H", solar_wind_components=["Bz", "V"])
+    brain = ac.ScriptedBrain([packet, "Готово."])
+    result = ac.run_agent("Сопоставить H первой IRT с Bz/V, проверить время и подписи",
+                          brain=brain, store=store, verbose=False)
+    assert result["ok"], result
+    assert len(result["plots"]) == 1 and Path(result["plots"][0]).is_file()
+    assert [e["tool"] for e in result["tool_calls"]] == ["plot_space_weather_comparison"]
+
+
+@pytest.mark.parametrize("query", ["Сравни H IRT за два дня", "Загрузи OMNI за 2024-09-10"])
+def test_ordinary_ground_or_wind_request_does_not_require_space_plot(query):
+    assert not ac.explain_tool_selection(query)["space_comparison"]
+
+
+def test_history_does_not_displace_current_query_tools():
+    brain = ac.ScriptedBrain(["Нет результата."] * 3)
+    old = "Контекст: NOAA ISWA SuperMAG Kyoto статистика графики матрица\n"
+    result = ac.run_agent(old + "Новый запрос: сопоставь H IRT с Bz/V", brain=brain,
+                          routing_query="Сопоставь H IRT с Bz/V", verbose=False)
+    assert result["error"] == "plot_not_built"
+
+
 def test_kyoto_stats_and_plot_complete_in_one_session(tmp_path, monkeypatch):
     monkeypatch.setattr(plotter, "DEFAULT_OUTPUT_DIR", tmp_path)
     store = ac.FrameStore()
