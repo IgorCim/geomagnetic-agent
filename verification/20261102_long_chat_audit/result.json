@@ -1,0 +1,153 @@
+{
+  "time_utc": "2026-11-02T16:57:32.009301+00:00",
+  "revision": "5dcb3b9b08502e2a24739daf9d5858de48b6dd7e",
+  "acceptance": "NOT_ACCEPTED",
+  "scope": "Offline diagnosis only. No Qwen, GPU, network, real artifacts or browser reset reproduced.",
+  "production_sources_unchanged": true,
+  "source_sha256": {
+    "agent_core.py": "d2f0c6b280786188cdcc7ae7eb2792c65e4d1be856a2806d4631f1144df0d170",
+    "gradio_app.py": "00aa618c44817b082d8c328a32ae36f5fb2f4f10ccd9eeabfb3df3fa1a226202",
+    "geomag_analyzer.py": "c24e7f6d3a594a15d99c497d98d1a0b3fa87abebd56f464443577952eec523f1"
+  },
+  "routes": {
+    "kyoto_user": {
+      "query": "Получить Kp/Dst из Kyoto за первый день",
+      "metrics": [
+        "dst_proxy"
+      ],
+      "mandatory": [
+        "fetch_observatory_data",
+        "apply_physics_formula"
+      ],
+      "optional": [
+        "fetch_geomagnetic_indices"
+      ],
+      "bulk": false,
+      "units": 1,
+      "fallback": false,
+      "space_comparison": false,
+      "tools": [
+        "fetch_observatory_data",
+        "apply_physics_formula",
+        "fetch_geomagnetic_indices"
+      ],
+      "est_tokens": 1718
+    },
+    "kyoto_explicit": {
+      "query": "Получи Kyoto Dst/Kp за 2024-09-10, статистику и график",
+      "metrics": [
+        "dst_proxy"
+      ],
+      "mandatory": [
+        "fetch_observatory_data",
+        "apply_physics_formula"
+      ],
+      "optional": [
+        "fetch_geomagnetic_indices",
+        "get_statistics",
+        "calculate_derived_components",
+        "plot_components"
+      ],
+      "bulk": false,
+      "units": 1,
+      "fallback": false,
+      "space_comparison": false,
+      "tools": [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "get_statistics",
+        "plot_components",
+        "apply_physics_formula",
+        "fetch_geomagnetic_indices"
+      ],
+      "est_tokens": 2385
+    },
+    "bou_user": {
+      "query": "Загрузить BOU за 2024-09-10; явно сменить рабочую станцию. 6–12. Поочерёдно статистика X/Y/Z/F/H и графики для BOU с явной датой. Не просить запоминать прежние числа",
+      "metrics": [],
+      "mandatory": [],
+      "optional": [
+        "fetch_observatory_data",
+        "get_statistics",
+        "calculate_derived_components",
+        "plot_components"
+      ],
+      "bulk": false,
+      "units": 1,
+      "fallback": false,
+      "space_comparison": false,
+      "tools": [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "get_statistics",
+        "plot_components"
+      ],
+      "est_tokens": 1850
+    },
+    "omni_user": {
+      "query": "Получить OMNI за первый день",
+      "metrics": [],
+      "mandatory": [],
+      "optional": [
+        "fetch_solar_wind"
+      ],
+      "bulk": false,
+      "units": 1,
+      "fallback": false,
+      "space_comparison": false,
+      "tools": [
+        "fetch_solar_wind"
+      ],
+      "est_tokens": 1058
+    },
+    "return_user": {
+      "query": "Вернуться к корректному handle и построить график",
+      "metrics": [],
+      "mandatory": [],
+      "optional": [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "plot_components",
+        "get_statistics"
+      ],
+      "bulk": false,
+      "units": 1,
+      "fallback": false,
+      "space_comparison": false,
+      "tools": [
+        "fetch_observatory_data",
+        "calculate_derived_components",
+        "get_statistics",
+        "plot_components"
+      ],
+      "est_tokens": 1850
+    }
+  },
+  "baseline_kyoto_selector": {
+    "revision": "3bca4a1",
+    "selected_names": [
+      "fetch_observatory_data",
+      "apply_physics_formula",
+      "fetch_geomagnetic_indices"
+    ],
+    "metrics": [
+      "dst_proxy"
+    ],
+    "routing_dependency_definitions_unchanged": true,
+    "scope": "Historical selector body with current unchanged routing dependencies; no old runtime execution"
+  },
+  "history": {
+    "first_request_text_retained": false,
+    "first_table_retained": true,
+    "recap": "Контекст предыдущих реплик (для справки, данные из него не годятся — любые числа всё равно нужно получить инструментом):\n- учёный спросил: Другое сообщение 0\n- ты ответил: Другой ответ 0\n- учёный спросил: Другое сообщение 1\n- ты ответил: Другой ответ 1\n- учёный спросил: Другое сообщение 2\n- ты ответил: Другой ответ 2\n- учёный спросил: Другое сообщение 3\n- ты ответил: Другой ответ 3\n- доступные handle'ы этой сессии (ссылки, не значения): raw:irt:2024-01-01, raw:irt:2024-09-10\n\nНовый запрос:\n",
+    "raw_alias": "raw:irt:2024-01-01",
+    "note": "Table existence is not a durable record of the first requested day; alias means most recent write, not first request."
+  },
+  "unverified_summary": {
+    "accepted_ok": true,
+    "tool_calls": [],
+    "text": "Проверил журнал и диск. Все файлы существуют."
+  },
+  "failed_statistics_text": "Минимум Dst -20 nT, максимум 10 nT.\n\nНе удалось выполнить часть операций:\n- get_statistics: tool_not_available: statistics were not executed",
+  "http_fixture_bypasses_production_router": true
+}
