@@ -255,7 +255,8 @@ def _context_from_history(
     handles: list[str] = []
     try:
         names = store.names() if store is not None else []
-        handles = [str(name) for name in names[-12:]]
+        recent = getattr(getattr(store, "conversation", None), "recent", [])
+        handles = list(dict.fromkeys([str(name) for name in names[-12:]] + recent))[-12:]
     except (AttributeError, TypeError):
         handles = []
     if handles:
@@ -269,6 +270,7 @@ def _context_from_history(
         "Контекст предыдущих реплик (для справки, данные из него не годятся — "
         "любые числа всё равно нужно получить инструментом):\n"
         + "\n".join(turns)
+        + ("\n" + store.conversation.context() if hasattr(store, "conversation") else "")
         + "\n\nНовый запрос:\n"
     )
 
@@ -667,6 +669,11 @@ def _new_session_store() -> core.FrameStore:
     return core.FrameStore(workspace=project_store.Workspace())
 
 
+def _reset_chat():
+    """Clear browser conversation facts and frames; leave saved files on disk."""
+    return ([], *_slot_updates([]), "", [], [], "", _new_session_store())
+
+
 def make_chat_handler(brain: Any):
     """Bind ``brain`` into a Gradio handler. The brain is captured once."""
 
@@ -716,7 +723,12 @@ def make_chat_handler(brain: Any):
             )
 
         try:
-            question_with_context = _context_from_history(messages, store) + question
+            if re.search(r"сводк|\bsummary\b", question, re.I) and re.search(r"станц|дат|файл|handle|files|dates", question, re.I):
+                return answer_with(store.conversation.summary(store, saved))
+            plan = store.conversation.prepare(question, store)
+            if plan.clarification:
+                return answer_with(plan.clarification, "Проверка запроса до вызова модели: " + plan.clarification)
+            question_with_context = _context_from_history(messages, store) + plan.query
             if core.is_bulk_query(question):
                 # A matrix-scale request is the planner's job. Sending it to
                 # the single-question loop is what made a 260-cell request
@@ -733,8 +745,11 @@ def make_chat_handler(brain: Any):
                     brain=brain,
                     store=store,
                     verbose=VERBOSE,
-                    routing_query=question,
+                    routing_query=plan.query,
+                    contract=plan,
                 )
+            if isinstance(result, dict):
+                store.conversation.record(result.get("tool_calls") or [], store)
         except Exception as exc:  # one bad turn must not kill the server
             traceback.print_exc()
             detail = f"{type(exc).__name__}: {exc}"
@@ -868,6 +883,7 @@ def build_demo(brain: Any) -> gr.Blocks:
                         scale=5,
                     )
                     send = gr.Button("Спросить", variant="primary", scale=1)
+                    reset_chat = gr.Button("Новый диалог", scale=1)
                 gr.Examples(
                     _EXAMPLES,
                     inputs=textbox,
@@ -967,6 +983,7 @@ def build_demo(brain: Any) -> gr.Blocks:
             inputs=[textbox, chatbot, plots_state, sm_logon, session_store],
             outputs=outputs,
         )
+        reset_chat.click(_reset_chat, inputs=[], outputs=outputs + [session_store], api_name="reset_chat")
 
         # Projects: selecting one reloads its tree; the ZIP is built on demand so
         # that opening the accordion never walks the whole tree.

@@ -1743,6 +1743,8 @@ def _build_metric_query_patterns() -> dict[str, tuple[str, ...]]:
         metric: [r"\b" + re.escape(metric) + r"\b"] for metric in _PHYSICS_METRICS
     }
     for alias, metric in _PHYSICS_METRIC_ALIASES.items():
+        if alias == "dst":
+            continue  # An observed index name is not a request for dst_proxy.
         patterns.setdefault(metric, []).append(r"\b" + re.escape(alias) + r"\b")
     for metric, extra in _METRIC_QUERY_EXTRA.items():
         patterns.setdefault(metric, []).extend(extra)
@@ -1775,11 +1777,11 @@ _CAPABILITY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         r"\bkyoto\b|\bdst\b|\bkp\b|индекс",
-        ("fetch_geomagnetic_indices",),
+        ("fetch_geomagnetic_indices", "get_statistics", "plot_components"),
     ),
     (
         r"\bomni\b|солнечн[а-я]*\s+ветер|\bsolar\s+wind\b|\bimf\b",
-        ("fetch_solar_wind",),
+        ("fetch_solar_wind", "get_statistics", "plot_components"),
     ),
     (
         r"станц|обсерватор|магнитометр|наземн|"
@@ -3543,6 +3545,8 @@ class FrameStore:
         # loader falls back to the process environment only when this is None,
         # so one user's logon can never be reused by another session.
         self.supermag_logon: str | None = None
+        from chat_session import SessionMemory
+        self.conversation = SessionMemory()
 
     @staticmethod
     def _normalise(handle: str) -> str:
@@ -7663,6 +7667,7 @@ def run_agent(
     tools: list[dict[str, Any]] | None = None,
     store: FrameStore | None = None,
     routing_query: str | None = None,
+    contract: Any = None,
 ) -> dict[str, Any]:
     """Answer ``user_query`` by letting the model call the Stage 1/2 tools.
 
@@ -7744,6 +7749,7 @@ def run_agent(
     ]
     goal_retries = 0
     plot_goal_retries = 0
+    contract_retries = 0
     needs_space_plot = bool((selection or {}).get("space_comparison"))
 
     messages: list[dict[str, Any]] = [
@@ -7801,6 +7807,23 @@ def run_agent(
         calls, leftover = parse_tool_calls(reply)
 
         if not calls:
+            if contract is not None:
+                missing = contract.missing(log, store)
+                if missing:
+                    if contract_retries < 2 and round_no < max_rounds:
+                        contract_retries += 1
+                        messages.append({"role": "user", "content": (
+                            "Запрос ещё не выполнен: " + "; ".join(missing)
+                            + ". Выполни необходимые инструменты с указанными датой, станцией и handle. "
+                            "Не объявляй несуществующие результаты готовыми."
+                        )})
+                        continue
+                    return {
+                        "ok": False, "error": "request_incomplete", "stop_reason": "request_incomplete",
+                        "text": _with_tool_failures("Запрос выполнен не полностью. Не выполнено: "
+                            + "; ".join(missing) + ".\n" + contract.facts(log, store), log),
+                        "plots": plots, "tool_calls": log, "rounds": round_no,
+                    }
             # Filenames in prose are not artifacts. Require the actual
             # decisive plotting call before accepting this comparison.
             if needs_space_plot and not any(
@@ -7895,7 +7918,7 @@ def run_agent(
                     ),
                 }
 
-            text = leftover.strip() or content.strip()
+            text = contract.facts(log, store) if contract is not None and contract.routine else leftover.strip() or content.strip()
             if verbose:
                 print(f"[agent] round {round_no}: final answer ({len(text)} chars)")
             return {
@@ -8048,7 +8071,13 @@ def run_agent(
                 entry["error"] = payload["error"]
             else:
                 try:
-                    payload, note = HANDLERS[name](args, store)
+                    mismatch = contract.check_call(name, args, store) if contract is not None else None
+                    if mismatch:
+                        payload = _error("request_mismatch", mismatch,
+                                         hint="Follow the confirmed request context; do not substitute a date, station or table.")
+                        entry["executed"] = False
+                    else:
+                        payload, note = HANDLERS[name](args, store)
                 except Exception as exc:
                     traceback.print_exc()
                     payload = _error(
@@ -8059,7 +8088,15 @@ def run_agent(
                     note = f"{name} raised {type(exc).__name__}"
 
             entry["ok"] = not is_error(payload)
-            entry["executed"] = True
+            entry.setdefault("executed", True)
+            if entry["ok"]:
+                entry["resolved_handles"] = list(dict.fromkeys(
+                    store.aliases().get(str(args[k]).lower(), str(args[k]).lower())
+                    for k in ("df_descriptor", "df1", "df2", "ground_df_descriptor", "solar_wind_df_descriptor", "solar_wind_handle")
+                    if isinstance(args.get(k), str) and store.get(args[k]) is not None))
+                if name == "get_statistics" and isinstance(payload, dict):
+                    entry["statistics"] = {k: v for k, v in payload.items()
+                                           if isinstance(v, dict) and "median" in v and "count" in v}
             # Keep every live handle, not just the active one. A wind fetch is
             # auxiliary and never becomes active, yet a second coupling metric
             # needs its exact name; the registry is what carries it to the next
@@ -8210,10 +8247,15 @@ def run_agent(
 
             messages.append({"role": "tool", "content": _compact_tool_message(payload)})
 
+    if contract is not None and contract.missing(log, store):
+        return {"ok": False, "error": "request_incomplete", "stop_reason": "request_incomplete",
+                "text": _with_tool_failures("Лимит выполнения достигнут. Не выполнено: "
+                    + "; ".join(contract.missing(log, store)) + ".\n" + contract.facts(log, store), log),
+                "plots": plots, "tool_calls": log, "rounds": max_rounds}
     return {
         "ok": stop_reason != "no_tool_calls",
         "text": _with_tool_failures(
-            (leftover or content or "").strip()
+            (contract.facts(log, store) if contract is not None and contract.routine else (leftover or content or "").strip())
             or "Модель не сформулировала ответ в пределах отведённого числа шагов.",
             log,
         ),

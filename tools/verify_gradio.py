@@ -73,10 +73,8 @@ def main() -> int:
                     name, args = "get_statistics", {"df_descriptor": "raw:irt:2024-09-10", "components": ["X"]}
                 return {"content": "<tool_call>" + json.dumps({"name": name, "arguments": args}) + "</tool_call>"}
 
-        # This fixture controls only offered schemas; the production run_agent,
-        # handlers, state, serialization, queue and UI wiring remain in use.
-        original_selector = ac.select_tools_for_query
-        ac.select_tools_for_query = lambda query: ac.TOOL_SCHEMAS
+        # Keep the production selector: state/HTTP tests must not silently
+        # grant the fixture tools that real user messages would not receive.
         demo = ga.build_demo(TestBrain())
         try:
             demo.launch(server_name="127.0.0.1", server_port=options.port, share=False, prevent_thread_lock=True, quiet=True)
@@ -133,6 +131,10 @@ def main() -> int:
             blank = predict(first, "", history)
             assert blank is not None
             checks.append("Empty input does not crash the queued event")
+            first.predict(api_name="/reset_chat")
+            cleared = predict(first, "statistics")
+            assert "unknown_frame" in str(cleared), "Reset retained the previous session frame"
+            checks.append("Explicit New chat resets frames and conversation facts in the same HTTP session")
             report = {"time_utc": stamp, "gradio": ga.GRADIO_VERSION, "checks": checks, "status": "PASS", "scope": "Real local Gradio HTTP queue; deterministic brain and station loader; not real Qwen or remote service validation."}
             (evidence / "result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
             print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
@@ -142,7 +144,6 @@ def main() -> int:
                 while True:
                     time.sleep(1)
         finally:
-            ac.select_tools_for_query = original_selector
             demo.close()
     return 0
 

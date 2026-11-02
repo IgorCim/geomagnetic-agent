@@ -11,7 +11,7 @@ PROJECT_MODULES = {
     'agent_core', 'agent_planner', 'agent_state', 'project_store', 'gradio_app',
     'supermag_loader', 'iswa_loader', 'intermagnet_loader', 'space_weather_loader',
     'noaa_swpc_loader', 'geomag_analyzer', 'geomag_math', 'geomag_plotter',
-    'geomag_coords', 'physics_engine', 'chart_naming',
+    'geomag_coords', 'physics_engine', 'chart_naming', 'chat_session',
 }
 loaded = sorted(PROJECT_MODULES.intersection(sys.modules))
 assert not loaded and 'brain' not in globals(), (

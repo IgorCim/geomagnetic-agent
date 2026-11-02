@@ -24,7 +24,7 @@ def main() -> None:
     import gradio_app as ga
 
     before = {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest()
-              for p in ("agent_core.py", "gradio_app.py", "geomag_analyzer.py")}
+              for p in ("agent_core.py", "gradio_app.py", "geomag_analyzer.py", "chat_session.py")}
     queries = {
         "kyoto_user": "Получить Kp/Dst из Kyoto за первый день",
         "kyoto_explicit": "Получи Kyoto Dst/Kp за 2024-09-10, статистику и график",
@@ -59,15 +59,20 @@ def main() -> None:
                     "_ordered_unique", "_bulk_units", "_is_bulk_query", "_MATRIX_TOOLS",
                     "TOOLS_PER_TASK", "_COMPUTE_TOOLS", "_SOURCE_TOOLS", "_build_metric_query_patterns")
     unchanged = all(old_defs[name] == new_defs[name] for name in dependencies)
-    assert unchanged, "Re-evaluate baseline comparison: a routing dependency changed"
-    old_node = next(n for n in ast.parse(old_source).body
-                    if isinstance(n, ast.FunctionDef) and n.name == "_selection_plan")
     old_ns = dict(vars(ac))
-    exec(compile(ast.Module(body=[old_node], type_ignores=[]), "baseline_selector", "exec"), old_ns)
+    wanted = set(dependencies) | {"_selection_plan", "_METRIC_QUERY_PATTERNS"}
+    selected = []
+    for node in ast.parse(old_source).body:
+        names = ([node.name] if isinstance(node, ast.FunctionDef) else
+                 [node.target.id] if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) else
+                 [t.id for t in node.targets if isinstance(t, ast.Name)] if isinstance(node, ast.Assign) else [])
+        if wanted.intersection(names):
+            selected.append(node)
+    exec(compile(ast.Module(body=selected, type_ignores=[]), "baseline_selector", "exec"), old_ns)
     old_names, old_info = old_ns["_selection_plan"](queries["kyoto_user"])
     baseline = {"revision": "3bca4a1", "selected_names": old_names, "metrics": old_info["metrics"],
                 "routing_dependency_definitions_unchanged": unchanged,
-                "scope": "Historical selector body with current unchanged routing dependencies; no old runtime execution"}
+                "scope": "Historical selector and routing dependency definitions; current imported modules; no old runtime execution"}
 
     store = ac.FrameStore()
     def frame(day):
@@ -75,6 +80,9 @@ def main() -> None:
                              "X": [3., 3.], "Y": [4., 4.], "Z": [12., 12.]})
     store.put("raw:irt:2024-09-10", frame("2024-09-10"))
     store.put("raw:irt:2024-01-01", frame("2024-01-01"))
+    store.conversation.record([
+        {"ok": True, "tool": "fetch_observatory_data", "frame_handle": h}
+        for h in ("raw:irt:2024-09-10", "raw:irt:2024-01-01")], store)
     history = [{"role": "user", "content": "FIRST_REQUEST_ANCHOR IRT 2024-09-10"},
                {"role": "assistant", "content": "Первый результат."}]
     for i in range(4):
@@ -85,10 +93,10 @@ def main() -> None:
     # A deterministic adversarial brain shows what the runtime accepts. It
     # neither predicts Qwen's frequency of failure nor proves these claims true.
     with contextlib.redirect_stdout(io.StringIO()):
-        summary = ac.run_agent(
-            "Попросить краткую сводку с использованными станциями/датами/файлами. Сверить с журналом и диском",
-            brain=ac.ScriptedBrain([{"content": "Проверил журнал и диск. Все файлы существуют."}]),
-            verbose=False, store=store)
+        brain = ac.ScriptedBrain([{"content": "Проверил журнал и диск. Все файлы существуют."}])
+        summary = ga.make_chat_handler(brain)(
+            "Краткая сводка с использованными станциями/датами/файлами. Сверить с журналом и диском",
+            [], [], store)
         refusal = ac._with_tool_failures(
             "Минимум Dst -20 nT, максимум 10 nT.",
             [{"tool": "get_statistics", "ok": False, "error": "tool_not_available",
@@ -99,7 +107,7 @@ def main() -> None:
     report = {
         "time_utc": datetime.now(timezone.utc).isoformat(),
         "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-        "acceptance": "NOT_ACCEPTED",
+        "acceptance": "LIVE_PENDING",
         "scope": "Offline diagnosis only. No Qwen, GPU, network, real artifacts or browser reset reproduced.",
         "production_sources_unchanged": before == after,
         "source_sha256": before,
@@ -108,13 +116,13 @@ def main() -> None:
         "history": {"first_request_text_retained": "FIRST_REQUEST_ANCHOR" in recap,
                     "first_table_retained": store.get("raw:irt:2024-09-10") is not None,
                     "recap": recap, "raw_alias": store.aliases().get("raw"),
+                    "resolved_first_day": store.conversation.prepare("Получи OMNI за первый день", store).date,
                     "note": "Table existence is not a durable record of the first requested day; alias means most recent write, not first request."},
-        "unverified_summary": {"accepted_ok": summary.get("ok"),
-                               "tool_calls": summary.get("tool_calls"), "text": summary.get("text")},
-        "failed_statistics_text": refusal,
+        "summary_from_session_state": {"model_calls": brain.calls, "text": summary[0][-1]["content"]},
+        "legacy_formatter_without_request_contract": refusal,
         "http_fixture_bypasses_production_router": "ac.select_tools_for_query = lambda query: ac.TOOL_SCHEMAS" in (ROOT / "tools/verify_gradio.py").read_text(encoding="utf-8"),
     }
-    target = ROOT / "verification" / "20261102_long_chat_audit"
+    target = ROOT / "verification" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_chat_audit")
     target.mkdir(parents=True, exist_ok=True)
     (target / "result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
