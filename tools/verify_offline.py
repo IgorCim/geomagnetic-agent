@@ -24,6 +24,12 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     files = sorted(root.glob("*.py")) + sorted((root / "tests").glob("*.py"))
     files += [root / "pytest.ini"]
+    # The replay-runner tests read the same checked-in prompt documents as Kaggle.
+    files += [root / name for name in [
+        'tools/run_chat_acceptance.py', 'docs/LONG_CHAT.md',
+        'docs/qa/ready_tool_cases.json', 'docs/qa/TOOL_RUNBOOK.md',
+        'docs/qa/FORMULA_RUNBOOK.md', 'docs/qa/inventory.json',
+    ]]
     hashes = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
     versions = {}
     for name in ("gradio", "pytest", "numpy", "pandas", "plotly", "requests", "pyarrow", "llama-cpp-python"):
