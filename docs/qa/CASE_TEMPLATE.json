@@ -1,0 +1,29 @@
+{
+  "id": "REPLACE_WITH_UNIQUE_CASE_ID",
+  "status": "NOT_RUN",
+  "layer": "CODE_OR_SCIENCE_OR_MODEL_OR_PRODUCT",
+  "requirement": "A single observable requirement",
+  "head": null,
+  "source_hashes": {},
+  "dependencies": [],
+  "setup_outputs": {},
+  "literal_user_prompt": null,
+  "input_fixture": null,
+  "independent_oracle": {
+    "method": null,
+    "primary_source": null,
+    "expected": null,
+    "tolerance": null,
+    "tolerance_reason": null
+  },
+  "allowed_side_effects": [],
+  "forbidden_side_effects": [],
+  "timeout_seconds": null,
+  "actual_tool_calls": [],
+  "model_call_count": null,
+  "artifact_paths_and_hashes": [],
+  "task_verdict": null,
+  "safety_verdict": null,
+  "diagnostics": [],
+  "notes": "Template only. Resolve dependencies and inputs before running; never paste verifier instructions into the user prompt."
+}

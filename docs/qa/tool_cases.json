@@ -1,0 +1,508 @@
+[
+  {
+    "id": "TOOL-01",
+    "target_tool": "fetch_observatory_data",
+    "dependencies": [
+      "TOOL-02"
+    ],
+    "prompt_template": "Загрузи INTERMAGNET IRT за 2024-09-10. Укажи точный handle, источник, число строк и фактический тип публикации.",
+    "result_check": "источник и UTC; не выдумывать definitive",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "fetch_observatory_data",
+      "get_statistics",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-02",
+    "target_tool": "create_project",
+    "dependencies": [],
+    "prompt_template": "Создай проект {PROJECT}. Укажи фактическое имя каталога и путь внутри корня проектов.",
+    "result_check": "каталог и manifest существуют; допустимая нормализация отражена",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "create_project",
+      "export_project",
+      "fetch_many"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-03",
+    "target_tool": "fetch_many",
+    "dependencies": [
+      "TOOL-02"
+    ],
+    "prompt_template": "В проект {PROJECT} загрузи IRT и BOU за 2024-09-10 одним пакетным запросом, max_downloads=2. Перечисли фактические таблицы и ошибки.",
+    "result_check": "два station/day либо точный partial; отдельные handle",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "create_project",
+      "export_project",
+      "fetch_many"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-04",
+    "target_tool": "list_projects",
+    "dependencies": [
+      "TOOL-02"
+    ],
+    "prompt_template": "Перечисли существующие проекты через list_projects. Не создавай новые проекты.",
+    "result_check": "список совпадает с разрешёнными каталогами на диске",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": false,
+    "template_router_tools": [
+      "create_project",
+      "export_project",
+      "fetch_many"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-05",
+    "target_tool": "export_project",
+    "dependencies": [
+      "TOOL-03",
+      "TOOL-14"
+    ],
+    "prompt_template": "Экспортируй проект {PROJECT} в архив qa_report.zip. Внутри создай папку Stations для irt и bou, сортировка date,station. Укажи фактический путь архива.",
+    "result_check": "реальный ZIP, безопасные члены, manifest, индекс, хеши и все ожидаемые файлы",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "create_project",
+      "export_project",
+      "fetch_many"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-06",
+    "target_tool": "create_task_matrix",
+    "dependencies": [],
+    "prompt_template": "Создай одну матрицу IRT и BOU × 2024-09-10 и 2024-09-11, действия fetch_observatory_data, calculate_derived_components, plot_components, проект {MATRIX_PROJECT}. Верни путь матрицы.",
+    "result_check": "кодовый контракт создания отдельно; Gradio может запустить весь матричный workflow",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "create_task_matrix",
+      "fetch_observatory_data",
+      "plot_components",
+      "plot_space_weather_comparison",
+      "process_matrix_batch"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-07",
+    "target_tool": "process_matrix_batch",
+    "dependencies": [
+      "TOOL-06"
+    ],
+    "prompt_template": "Продолжи обработку существующей матрицы {MATRIX_PATH}, run_until_complete=True. Матрицу заново не создавай. Укажи покрытие и архив.",
+    "result_check": "четыре ячейки; resume/idempotency; контролируемый partial без stale artifacts",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "create_task_matrix",
+      "fetch_observatory_data",
+      "plot_components",
+      "plot_space_weather_comparison",
+      "process_matrix_batch"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-08",
+    "target_tool": "calculate_derived_components",
+    "dependencies": [
+      "TOOL-01"
+    ],
+    "prompt_template": "Для {RAW_IRT_D0} вычисли H/D/I, без повторной загрузки. Укажи новый handle и единицы компонентов.",
+    "result_check": "построчный независимый H/D/I, неизменность исходной таблицы",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "fetch_observatory_data",
+      "get_statistics",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-09",
+    "target_tool": "get_statistics",
+    "dependencies": [
+      "TOOL-03"
+    ],
+    "prompt_template": "Получи статистику Y для BOU за 2024-09-10, без повторной загрузки. Покажи медиану, count и пропуски.",
+    "result_check": "один get_statistics в прямом пути; компонента Y; числа и ddof сверены независимо",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "fetch_observatory_data",
+      "get_statistics"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-10",
+    "target_tool": "detect_anomalies",
+    "dependencies": [
+      "TOOL-08"
+    ],
+    "prompt_template": "Для {DERIVED_IRT_D0} найди статистические выбросы H с sigma_threshold=3. Укажи порог и число; не объявляй их автоматически бурями.",
+    "result_check": "правильная маска и краевые случаи постоянного/пустого ряда",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_baseline",
+      "detect_anomalies",
+      "fetch_observatory_data",
+      "get_statistics"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-11",
+    "target_tool": "calculate_derived_math",
+    "dependencies": [
+      "TOOL-08"
+    ],
+    "prompt_template": "Для {DERIVED_IRT_D0} вычисли размах H через calculate_derived_math, metric=delta, без новой загрузки. Укажи окно и единицы.",
+    "result_check": "каждый режим delta/anomaly/dH_dt отдельно; численные эталоны и шаг времени",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "apply_physics_formula",
+      "calculate_derived_math",
+      "fetch_observatory_data"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-12",
+    "target_tool": "calculate_baseline",
+    "dependencies": [
+      "TOOL-08"
+    ],
+    "prompt_template": "Для {DERIVED_IRT_D0} вычисли baseline H в UTC-окне 00–04, mode=night, night_hours=[0,4]. Назови выбранные строки и единицы.",
+    "result_check": "night/full; границы и окно через полночь; UTC не объявлен местной ночью",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_baseline",
+      "detect_anomalies",
+      "fetch_observatory_data"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-13",
+    "target_tool": "evaluate_custom_formula",
+    "dependencies": [
+      "TOOL-01"
+    ],
+    "prompt_template": "Для {RAW_IRT_D0} вычисли безопасную формулу hypot(X,Y). Укажи фактический новый handle. Исходные данные не меняй.",
+    "result_check": "независимая численная проверка; отдельная серия разрешённых и запрещённых AST",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_math",
+      "evaluate_custom_formula",
+      "fetch_observatory_data"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-14",
+    "target_tool": "plot_components",
+    "dependencies": [
+      "TOOL-08"
+    ],
+    "prompt_template": "Построй H из {DERIVED_IRT_D0} без новой загрузки. Имя файла выбери автоматически. Укажи реально созданный файл.",
+    "result_check": "traces=значения выбранной таблицы; UTC, единицы, пропуски, фактическое имя",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "fetch_observatory_data",
+      "get_statistics",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-15",
+    "target_tool": "plot_comparison",
+    "dependencies": [
+      "TOOL-08",
+      "SETUP-IRT-D1"
+    ],
+    "prompt_template": "Сравни H IRT за 2024-09-10 и 2024-09-11 на одном графике, используй {DERIVED_IRT_D0} и {DERIVED_IRT_D1} без новой загрузки. Нужны две подписанные кривые.",
+    "result_check": "два разных дня/источника данных в traces, не две подписи одной кривой",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "fetch_observatory_data",
+      "get_statistics",
+      "plot_comparison",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-16",
+    "target_tool": "get_station_geomagnetic_coords",
+    "dependencies": [],
+    "prompt_template": "Покажи геомагнитные координаты станции IRT через get_station_geomagnetic_coords и назови использованное приближение.",
+    "result_check": "сверка координат/модели; отсутствие утверждения IGRF/AACGM",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_local_time",
+      "calculate_mlt",
+      "fetch_observatory_data",
+      "get_station_geomagnetic_coords",
+      "group_stations_by_mlt"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-17",
+    "target_tool": "calculate_mlt",
+    "dependencies": [
+      "TOOL-16"
+    ],
+    "prompt_template": "Вычисли магнитное местное время MLT для IRT в 2024-09-10T12:00:00Z. Укажи модель и нормализацию суток.",
+    "result_check": "0/24, округление минут, референсный расчёт для той же модели",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_local_time",
+      "calculate_mlt",
+      "get_station_geomagnetic_coords",
+      "group_stations_by_mlt"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-18",
+    "target_tool": "group_stations_by_mlt",
+    "dependencies": [],
+    "prompt_template": "Сгруппируй IRT, BOU и ABG по MLT на 2024-09-10T12:00:00Z, bin_hours=3. Укажи все группы и модель.",
+    "result_check": "каждая доступная станция ровно один раз; границы bins и неизвестная станция",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_local_time",
+      "calculate_mlt",
+      "get_station_geomagnetic_coords",
+      "group_stations_by_mlt"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-19",
+    "target_tool": "calculate_local_time",
+    "dependencies": [
+      "TOOL-16"
+    ],
+    "prompt_template": "Вычисли местное солнечное время IRT в 2024-09-10T23:30:00Z по долготе. Не подменяй его гражданским часовым поясом.",
+    "result_check": "UTC+longitude/15, корректный переход даты",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_local_time",
+      "calculate_mlt",
+      "get_station_geomagnetic_coords",
+      "group_stations_by_mlt"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-20",
+    "target_tool": "apply_physics_formula",
+    "dependencies": [
+      "SCIENCE-GATE",
+      "METRIC-SPECIFIC-INPUTS"
+    ],
+    "prompt_template": "Вычисли apply_physics_formula metric={METRIC} для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+    "result_check": "отдельная карточка на каждую из 11 метрик, независимый oracle; Ey сейчас известный FAIL",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": false,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "fetch_observatory_data",
+      "get_statistics",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-21",
+    "target_tool": "calculate_eej_index",
+    "dependencies": [
+      "SETUP-EEJ-PAIR",
+      "SCIENCE-GATE"
+    ],
+    "prompt_template": "Для научно проверенной пары {EEJ_EQUATORIAL_STATION} и {EEJ_REFERENCE_STATION} получи EEJ за {EEJ_DAY}. Назови пару, время, baseline и ограничения метода.",
+    "result_check": "пара заранее обоснована; timestamps совмещены; IRT не используется как ложный экваториальный пример",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_baseline",
+      "calculate_eej_index",
+      "detect_anomalies",
+      "fetch_observatory_data"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-22",
+    "target_tool": "plot_overlay",
+    "dependencies": [
+      "TOOL-03"
+    ],
+    "prompt_template": "Наложи H IRT и BOU за 2024-09-10, time_system=UT, offsets IRT=0 и BOU=100. Используй имеющиеся таблицы; объясни, что смещение только для отображения.",
+    "result_check": "UT/LT/MLT отдельно; offset не меняет таблицы/статистику",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "fetch_observatory_data",
+      "plot_overlay"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-23",
+    "target_tool": "plot_space_weather_comparison",
+    "dependencies": [
+      "TOOL-08",
+      "TOOL-24"
+    ],
+    "prompt_template": "Сопоставь H из {DERIVED_IRT_D0} с Bz и V из {WIND_D0}, без новой загрузки. Построй сравнение земли и солнечного ветра и укажи время и единицы панелей.",
+    "result_check": "совпадение дат, правильные каналы, alignment/gaps и панели",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_derived_components",
+      "fetch_observatory_data",
+      "fetch_solar_wind",
+      "plot_comparison",
+      "plot_components",
+      "plot_space_weather_comparison"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-24",
+    "target_tool": "fetch_solar_wind",
+    "dependencies": [],
+    "prompt_template": "Загрузи солнечный ветер OMNI за 2024-09-10. Укажи dataset, handle, число строк, координаты IMF и единицы.",
+    "result_check": "метаданные/fill, GSM/GSE, источник, фактическое временное покрытие",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "calculate_local_time",
+      "calculate_mlt",
+      "fetch_solar_wind",
+      "get_station_geomagnetic_coords",
+      "get_statistics",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-25",
+    "target_tool": "fetch_geomagnetic_indices",
+    "dependencies": [],
+    "prompt_template": "Получи реальные индексы Kyoto Dst/Kp за 2024-09-10. Укажи источник, handle, время и исходное разрешение Kp. Не рассчитывай dst_proxy.",
+    "result_check": "официальный ряд не заменён proxy; расширение Kp не названо новыми измерениями",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "apply_physics_formula",
+      "fetch_geomagnetic_indices",
+      "fetch_observatory_data",
+      "get_statistics",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-26",
+    "target_tool": "get_noaa_space_weather_context",
+    "dependencies": [],
+    "prompt_template": "Получи текущие NOAA alerts. Отдели наблюдение, предупреждение и прогноз; укажи фактическое окно данных.",
+    "result_check": "три режима alerts/forecast/solar_events; архивное окно отдельно от текущих продуктов",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "get_noaa_space_weather_context"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-27",
+    "target_tool": "fetch_supermag_data",
+    "dependencies": [
+      "SETUP-SUPERMAG"
+    ],
+    "prompt_template": "Запроси SuperMAG indices SME/SML/SMU за 2024-09-10. При отказе покажи реальную причину, не заменяй их Kyoto и не раскрывай логин.",
+    "result_check": "sites/indices, допустимая длина окна; missing logon отдельно от HTTP; integration может быть BLOCKED_EXTERNAL",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "fetch_geomagnetic_indices",
+      "fetch_supermag_data",
+      "get_statistics",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-28",
+    "target_tool": "get_iswa_perturbation_map",
+    "dependencies": [],
+    "prompt_template": "Запроси карту ISWA magnetic perturbation на 2024-09-10T12:00:00Z. Если текущий клиент её не поддерживает, честно сообщи отказ без выдуманного изображения.",
+    "result_check": "ветка сейчас отключена; контракт ошибки может PASS, реальная карта остаётся BLOCKED/UNSUPPORTED",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "get_iswa_forecast",
+      "get_iswa_perturbation_map"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  },
+  {
+    "id": "TOOL-29",
+    "target_tool": "get_iswa_forecast",
+    "dependencies": [],
+    "prompt_template": "Получи текущий прогноз ISWA. Отдели прогноз Kp от наблюдений Dst, укажи источники и горизонт времени.",
+    "result_check": "проверить оба фактических HAPI-набора, kp_kind, частичный отказ и отсутствие ложного Dst-прогноза",
+    "status": "PLANNED_NOT_EXECUTED",
+    "standalone_router_offers_target_in_template_dry_run": true,
+    "template_router_tools": [
+      "fetch_geomagnetic_indices",
+      "get_iswa_forecast",
+      "get_iswa_perturbation_map",
+      "get_statistics",
+      "plot_components"
+    ],
+    "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
+  }
+]

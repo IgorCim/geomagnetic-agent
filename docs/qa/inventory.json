@@ -1,0 +1,4210 @@
+{
+  "generated_utc": "2026-11-03T10:26:13.189514+00:00",
+  "head": "eca4cb79f0cbb133d9abc934f0ac08f41aa7540a",
+  "scope": "Read-only test-design inventory. Does not execute tools, Qwen, external services, plots or qualification tests.",
+  "tool_count": 29,
+  "get_statistics_included": true,
+  "not_additional_tools": [
+    "run_bound_statistics",
+    "run_agent",
+    "run_agent_with_planner",
+    "Planner",
+    "LLMPlanner",
+    "parse_tool_calls"
+  ],
+  "tools": [
+    {
+      "id": "TOOL-01",
+      "name": "fetch_observatory_data",
+      "handler": "_handle_fetch",
+      "handler_file": "agent_core.py",
+      "handler_line": 3870,
+      "required": [
+        "station_code",
+        "start_date",
+        "end_date"
+      ],
+      "parameters": {
+        "station_code": {
+          "type": "string",
+          "description": "Three-letter IAGA station code, e.g. IRT. Known: IRT=Иркутск, MOS=Москва, NVS=Новосибирск, SPG=Санкт-Петербург, YAK=Якутск, KHB=Хабаровск, MGD=Магадан, VLA=Владивосток, PET=Паратунка (Камчатка), ARS=Арти, BOX=Борок, TIK=Тикси"
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date, YYYY-MM-DD."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date, YYYY-MM-DD (inclusive)."
+        },
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "definitive",
+            "quasi-def",
+            "adjusted",
+            "reported",
+            "best-avail",
+            "auto"
+          ],
+          "description": "Publication state. 'auto' walks a fallback chain. Default 'definitive'."
+        },
+        "samples_per_day": {
+          "type": "string",
+          "enum": [
+            "Minute",
+            "Second"
+          ],
+          "description": "Temporal resolution. Default 'Minute'."
+        }
+      }
+    },
+    {
+      "id": "TOOL-02",
+      "name": "create_project",
+      "handler": "_handle_create_project",
+      "handler_file": "agent_core.py",
+      "handler_line": 5062,
+      "required": [
+        "name"
+      ],
+      "parameters": {
+        "name": {
+          "type": "string",
+          "description": "Short human-readable project name, e.g. 'Boreal storm 2024'. Letters, digits, spaces, '-' and '_' only; the name is normalised into a folder name."
+        }
+      }
+    },
+    {
+      "id": "TOOL-03",
+      "name": "fetch_many",
+      "handler": "_handle_fetch_many",
+      "handler_file": "agent_core.py",
+      "handler_line": 5079,
+      "required": [
+        "stations",
+        "start_date",
+        "end_date"
+      ],
+      "parameters": {
+        "stations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Three-letter IAGA codes."
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date, YYYY-MM-DD."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date, YYYY-MM-DD (inclusive)."
+        },
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "definitive",
+            "quasi-def",
+            "adjusted",
+            "reported",
+            "best-avail",
+            "auto"
+          ],
+          "description": "Publication state. 'auto' walks a fallback chain. Default 'definitive'."
+        },
+        "samples_per_day": {
+          "type": "string",
+          "enum": [
+            "Minute",
+            "Second"
+          ],
+          "description": "Temporal resolution. Default 'Minute'."
+        },
+        "max_downloads": {
+          "type": "integer",
+          "description": "Ceiling on downloads for this call, shared by all stations. Defaults to 8. Windows beyond the ceiling are refused and listed under 'refused' rather than fetched."
+        },
+        "project": {
+          "type": "string",
+          "description": "Project to file the data under. Defaults to the open project."
+        }
+      }
+    },
+    {
+      "id": "TOOL-04",
+      "name": "list_projects",
+      "handler": "_handle_list_projects",
+      "handler_file": "agent_core.py",
+      "handler_line": 6267,
+      "required": [],
+      "parameters": {}
+    },
+    {
+      "id": "TOOL-05",
+      "name": "export_project",
+      "handler": "_handle_export_project",
+      "handler_file": "agent_core.py",
+      "handler_line": 5202,
+      "required": [],
+      "parameters": {
+        "name": {
+          "type": "string",
+          "description": "Project to export. Defaults to the open project."
+        },
+        "archive_name": {
+          "type": "string",
+          "description": "Optional ZIP name, only when the user explicitly asks; '.zip' is added if absent."
+        },
+        "folders": {
+          "type": "object",
+          "description": "Optional custom folder view, only when the user explicitly asks for named folders. Keys are folder names; values are lists of project-relative paths, directories or globs. Canonical chart filenames are preserved inside them.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "sort_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Index order, e.g. ['source','station','date'] or ['date','source']. Default station,date,components,source,file."
+        },
+        "source_order": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Custom source order for the index, e.g. ['OMNI','INTERMAGNET','KYOTO','SUPERMAG']."
+        },
+        "include_index": {
+          "type": "boolean",
+          "description": "Write index.csv and index.html. Default true."
+        }
+      }
+    },
+    {
+      "id": "TOOL-06",
+      "name": "create_task_matrix",
+      "handler": "_handle_create_task_matrix",
+      "handler_file": "agent_core.py",
+      "handler_line": 5529,
+      "required": [
+        "events",
+        "stations",
+        "actions",
+        "project_name"
+      ],
+      "parameters": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Event dates, YYYY-MM-DD."
+        },
+        "stations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Three-letter IAGA codes."
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What to do for each (event, station) cell, in order. Words 'fetch', 'calc_HDI', 'plot' map to the handlers; full handler names also work. Default: fetch, calc_HDI, plot."
+        },
+        "project_name": {
+          "type": "string",
+          "description": "Project that stores the results and the matrix."
+        },
+        "shared_args": {
+          "type": "object",
+          "description": "Arguments shared by every cell. For plot_space_weather_comparison supply solar_wind_df_descriptor (required), ground_component (default H) and solar_wind_components (default Bz,V). The matrix supplies ground_df_descriptor and a unique filename per cell.",
+          "additionalProperties": true
+        },
+        "export_args": {
+          "type": "object",
+          "description": "Optional export_project arguments used by the automatic batch export: archive_name, folders, sort_by, source_order, include_index. Only set when the user explicitly asks for a custom archive/folder view.",
+          "additionalProperties": true
+        }
+      }
+    },
+    {
+      "id": "TOOL-07",
+      "name": "process_matrix_batch",
+      "handler": "_handle_process_matrix_batch",
+      "handler_file": "agent_core.py",
+      "handler_line": 5771,
+      "required": [
+        "matrix_path"
+      ],
+      "parameters": {
+        "matrix_path": {
+          "type": "string",
+          "description": "The matrix_path returned by create_task_matrix."
+        },
+        "run_until_complete": {
+          "type": "boolean",
+          "description": "True = process every pending station to completion inside this one call (recommended). False = process only batch_size stations (debugging)."
+        },
+        "batch_size": {
+          "type": "integer",
+          "description": "Stations per call when run_until_complete=False. Default 5. Ignored when run_until_complete=True."
+        },
+        "export_args": {
+          "type": "object",
+          "description": "Optional export_project arguments for the automatic archive. Overrides export_args stored in the matrix.",
+          "additionalProperties": true
+        }
+      }
+    },
+    {
+      "id": "TOOL-08",
+      "name": "calculate_derived_components",
+      "handler": "_handle_derive",
+      "handler_file": "agent_core.py",
+      "handler_line": 4518,
+      "required": [
+        "df_descriptor"
+      ],
+      "parameters": {
+        "df_descriptor": {
+          "type": "string",
+          "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "H",
+              "D",
+              "I"
+            ]
+          },
+          "description": "Subset to compute. Default all three."
+        }
+      }
+    },
+    {
+      "id": "TOOL-09",
+      "name": "get_statistics",
+      "handler": "_handle_stats",
+      "handler_file": "agent_core.py",
+      "handler_line": 4575,
+      "required": [
+        "df_descriptor"
+      ],
+      "parameters": {
+        "df_descriptor": {
+          "type": "string",
+          "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Numeric columns, case-insensitive. H/D/I can be derived."
+        },
+        "digits": {
+          "type": "integer",
+          "description": "Decimal places. Default 2."
+        }
+      }
+    },
+    {
+      "id": "TOOL-10",
+      "name": "detect_anomalies",
+      "handler": "_handle_anomalies",
+      "handler_file": "agent_core.py",
+      "handler_line": 4596,
+      "required": [
+        "df_descriptor"
+      ],
+      "parameters": {
+        "df_descriptor": {
+          "type": "string",
+          "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+        },
+        "component": {
+          "type": "string",
+          "enum": [
+            "X",
+            "Y",
+            "Z",
+            "F",
+            "H",
+            "D",
+            "I"
+          ]
+        },
+        "sigma_threshold": {
+          "type": "number",
+          "description": "Threshold in sigmas. Default 3.0."
+        }
+      }
+    },
+    {
+      "id": "TOOL-11",
+      "name": "calculate_derived_math",
+      "handler": "_handle_derived_math",
+      "handler_file": "agent_core.py",
+      "handler_line": 4622,
+      "required": [
+        "df_descriptor",
+        "metric"
+      ],
+      "parameters": {
+        "df_descriptor": {
+          "type": "string",
+          "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+        },
+        "metric": {
+          "type": "string",
+          "enum": [
+            "delta",
+            "anomaly",
+            "dH_dt"
+          ],
+          "description": "'delta' = max - min over the window; 'dH_dt' = rate of change in nT/min; 'anomaly' = value minus baseline_value."
+        },
+        "component": {
+          "type": "string",
+          "enum": [
+            "X",
+            "Y",
+            "Z",
+            "F",
+            "H",
+            "D",
+            "I"
+          ],
+          "description": "Component to measure. H is the usual choice."
+        },
+        "window": {
+          "type": "integer",
+          "description": "Optional block size in samples for metric='delta'. Omit it to get one variation for the whole day; set it to get the largest excursion within any block."
+        },
+        "baseline_value": {
+          "type": "number",
+          "description": "Required for metric='anomaly'. The quiet reference to subtract, e.g. the 'baseline' from calculate_baseline."
+        }
+      }
+    },
+    {
+      "id": "TOOL-12",
+      "name": "calculate_baseline",
+      "handler": "_handle_baseline",
+      "handler_file": "agent_core.py",
+      "handler_line": 4757,
+      "required": [
+        "df_descriptor"
+      ],
+      "parameters": {
+        "df_descriptor": {
+          "type": "string",
+          "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+        },
+        "component": {
+          "type": "string",
+          "enum": [
+            "X",
+            "Y",
+            "Z",
+            "F",
+            "H",
+            "D",
+            "I"
+          ]
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "night",
+            "full"
+          ],
+          "description": "'night' = mean over the quiet night window (default). 'full' = mean over every sample, which includes the storm and so is a poor quiet reference."
+        },
+        "night_hours": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "Night window as [start_hour, end_hour] UTC, default [0, 4]."
+        }
+      }
+    },
+    {
+      "id": "TOOL-13",
+      "name": "evaluate_custom_formula",
+      "handler": "_handle_custom_formula",
+      "handler_file": "agent_core.py",
+      "handler_line": 4827,
+      "required": [
+        "df_descriptor",
+        "formula"
+      ],
+      "parameters": {
+        "df_descriptor": {
+          "type": "string",
+          "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+        },
+        "formula": {
+          "type": "string",
+          "description": "The expression, e.g. 'sqrt(X**2 + Y**2) + Z/10'. Column names must be upper case."
+        }
+      }
+    },
+    {
+      "id": "TOOL-14",
+      "name": "plot_components",
+      "handler": "_handle_plot_components",
+      "handler_file": "agent_core.py",
+      "handler_line": 4911,
+      "required": [
+        "df_descriptor",
+        "components"
+      ],
+      "parameters": {
+        "df_descriptor": {
+          "type": "string",
+          "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "X",
+              "Y",
+              "Z",
+              "F",
+              "H",
+              "D",
+              "I",
+              "dst_proxy",
+              "Dst",
+              "Kp"
+            ]
+          },
+          "description": "Components/columns to plot, e.g. ['Dst','Kp'] for the Kyoto indices frame or ['H','dst_proxy'] for a derived observatory frame."
+        },
+        "title": {
+          "type": "string",
+          "description": "Chart title."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Output file name, .html."
+        }
+      }
+    },
+    {
+      "id": "TOOL-15",
+      "name": "plot_comparison",
+      "handler": "_handle_plot_comparison",
+      "handler_file": "agent_core.py",
+      "handler_line": 4964,
+      "required": [
+        "df1",
+        "df2",
+        "component"
+      ],
+      "parameters": {
+        "df1": {
+          "type": "string",
+          "description": "First day: a frame_handle copied from a previous tool result, e.g. 'raw:irt:2024-09-10'."
+        },
+        "df2": {
+          "type": "string",
+          "description": "Second day: a frame_handle from a *different* slot than df1, e.g. 'raw:irt:2024-09-11'."
+        },
+        "component": {
+          "type": "string",
+          "enum": [
+            "X",
+            "Y",
+            "Z",
+            "F",
+            "H",
+            "D",
+            "I",
+            "dst_proxy",
+            "Dst",
+            "Kp"
+          ],
+          "description": "Component to compare across the two frames; any real column, including the Kyoto indices 'Dst'/'Kp'."
+        },
+        "title": {
+          "type": "string",
+          "description": "Chart title."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Output file name, .html."
+        }
+      }
+    },
+    {
+      "id": "TOOL-16",
+      "name": "get_station_geomagnetic_coords",
+      "handler": "_handle_get_station_geomagnetic_coords",
+      "handler_file": "agent_core.py",
+      "handler_line": 6292,
+      "required": [
+        "station_code"
+      ],
+      "parameters": {
+        "station_code": {
+          "type": "string",
+          "description": "IAGA station code"
+        }
+      }
+    },
+    {
+      "id": "TOOL-17",
+      "name": "calculate_mlt",
+      "handler": "_handle_calculate_mlt",
+      "handler_file": "agent_core.py",
+      "handler_line": 6326,
+      "required": [
+        "station_code",
+        "timestamp"
+      ],
+      "parameters": {
+        "station_code": {
+          "type": "string",
+          "description": "IAGA station code"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO 8601 UTC timestamp"
+        }
+      }
+    },
+    {
+      "id": "TOOL-18",
+      "name": "group_stations_by_mlt",
+      "handler": "_handle_group_stations_by_mlt",
+      "handler_file": "agent_core.py",
+      "handler_line": 6340,
+      "required": [
+        "stations",
+        "timestamp"
+      ],
+      "parameters": {
+        "stations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "IAGA station codes"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO 8601 UTC timestamp"
+        },
+        "bin_hours": {
+          "type": "integer",
+          "description": "Bin width in hours (default 1)"
+        }
+      }
+    },
+    {
+      "id": "TOOL-19",
+      "name": "calculate_local_time",
+      "handler": "_handle_calculate_local_time",
+      "handler_file": "agent_core.py",
+      "handler_line": 6364,
+      "required": [
+        "station_code",
+        "timestamp"
+      ],
+      "parameters": {
+        "station_code": {
+          "type": "string",
+          "description": "IAGA station code"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO 8601 UTC timestamp"
+        }
+      }
+    },
+    {
+      "id": "TOOL-20",
+      "name": "apply_physics_formula",
+      "handler": "_handle_apply_physics_formula",
+      "handler_file": "agent_core.py",
+      "handler_line": 6787,
+      "required": [
+        "df_descriptor",
+        "metric"
+      ],
+      "parameters": {
+        "df_descriptor": {
+          "type": "string",
+          "description": "Handle of the ground station or indices frame, from 'frame_handle'."
+        },
+        "metric": {
+          "type": "string",
+          "enum": [
+            "ey_coupling",
+            "burton_coupling",
+            "akasofu_epsilon",
+            "peak_dhdt",
+            "substorm_onset",
+            "eej_index",
+            "dst_proxy",
+            "ssc_flag",
+            "sq_baseline",
+            "deltas",
+            "gic"
+          ],
+          "description": "Name of the metric to calculate. Available: ey_coupling, burton_coupling, akasofu_epsilon, peak_dhdt, substorm_onset, eej_index, dst_proxy, ssc_flag, sq_baseline, deltas, gic."
+        },
+        "solar_wind_handle": {
+          "type": "string",
+          "description": "Handle of solar wind frame. Required for: ey_coupling, burton_coupling, akasofu_epsilon."
+        },
+        "reference_handle": {
+          "type": "string",
+          "description": "Handle of reference station frame. Required for: eej_index."
+        },
+        "window_seconds": {
+          "type": "integer",
+          "description": "Window size in samples for 'peak_dhdt' (default 10 = 10 minutes on a 1-minute grid)."
+        }
+      }
+    },
+    {
+      "id": "TOOL-21",
+      "name": "calculate_eej_index",
+      "handler": "_handle_calculate_eej_index",
+      "handler_file": "agent_core.py",
+      "handler_line": 7014,
+      "required": [
+        "equatorial_station",
+        "reference_station",
+        "start_date"
+      ],
+      "parameters": {
+        "equatorial_station": {
+          "type": "string",
+          "description": "Three-letter IAGA code on the dip equator, e.g. IRT."
+        },
+        "reference_station": {
+          "type": "string",
+          "description": "Three-letter IAGA code 6-8 degrees away in latitude, e.g. ABG."
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date, YYYY-MM-DD."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date, YYYY-MM-DD (inclusive). Defaults to start_date."
+        }
+      }
+    },
+    {
+      "id": "TOOL-22",
+      "name": "plot_overlay",
+      "handler": "_handle_plot_overlay",
+      "handler_file": "agent_core.py",
+      "handler_line": 7123,
+      "required": [
+        "stations",
+        "dates"
+      ],
+      "parameters": {
+        "stations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "REQUIRED. List of IAGA station codes to overlay, e.g. ['IRT'] or ['IRT','API','BSL']. A list of codes, never a df1/df2 frame handle."
+        },
+        "dates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Dates as YYYY-MM-DD; one date shared by all stations, e.g. ['2024-09-12']."
+        },
+        "component": {
+          "type": "string",
+          "enum": [
+            "X",
+            "Y",
+            "Z",
+            "F",
+            "H",
+            "D",
+            "I"
+          ],
+          "description": "Single component to overlay, e.g. 'H'. Default 'H'."
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Alias for 'component': a list, e.g. ['H']. First entry is drawn; must be a frame column (X/Y/Z/F/H/D/I)."
+        },
+        "offsets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          },
+          "description": "nT shift per station, e.g. {'IRT': 0, 'API': 150}."
+        },
+        "time_system": {
+          "type": "string",
+          "enum": [
+            "UT",
+            "LT",
+            "MLT"
+          ],
+          "description": "X-axis time system, default UT."
+        },
+        "title": {
+          "type": "string",
+          "description": "Chart title."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Output file name, .html."
+        }
+      }
+    },
+    {
+      "id": "TOOL-23",
+      "name": "plot_space_weather_comparison",
+      "handler": "_handle_plot_space_weather_comparison",
+      "handler_file": "agent_core.py",
+      "handler_line": 7391,
+      "required": [
+        "ground_df_descriptor",
+        "solar_wind_df_descriptor",
+        "ground_component",
+        "solar_wind_components"
+      ],
+      "parameters": {
+        "ground_df_descriptor": {
+          "type": "string",
+          "description": "Ground handle, e.g. 'raw:irt:2024-09-12' or a 'derived:...' frame with 'dst_proxy'."
+        },
+        "solar_wind_df_descriptor": {
+          "type": "string",
+          "description": "Handle from fetch_solar_wind, e.g. 'sw:omni:2024-09-12'."
+        },
+        "ground_component": {
+          "type": "string",
+          "description": "LEFT axis: 'H', 'dst_proxy' or 'dH_dt'. NOT 'Dst'."
+        },
+        "solar_wind_components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "RIGHT axis, e.g. ['Bz','V'] (also Bx, By, Np)."
+        },
+        "title": {
+          "type": "string",
+          "description": "Chart title."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Output file name, .html."
+        }
+      }
+    },
+    {
+      "id": "TOOL-24",
+      "name": "fetch_solar_wind",
+      "handler": "_handle_fetch_solar_wind",
+      "handler_file": "agent_core.py",
+      "handler_line": 3999,
+      "required": [
+        "start_date"
+      ],
+      "parameters": {
+        "start_date": {
+          "type": "string",
+          "description": "Start date, YYYY-MM-DD (UTC)."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."
+        }
+      }
+    },
+    {
+      "id": "TOOL-25",
+      "name": "fetch_geomagnetic_indices",
+      "handler": "_handle_fetch_geomagnetic_indices",
+      "handler_file": "agent_core.py",
+      "handler_line": 4031,
+      "required": [
+        "start_date"
+      ],
+      "parameters": {
+        "start_date": {
+          "type": "string",
+          "description": "Start date, YYYY-MM-DD (UTC)."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."
+        }
+      }
+    },
+    {
+      "id": "TOOL-26",
+      "name": "get_noaa_space_weather_context",
+      "handler": "_handle_noaa_context",
+      "handler_file": "agent_core.py",
+      "handler_line": 4110,
+      "required": [
+        "query_type"
+      ],
+      "parameters": {
+        "query_type": {
+          "type": "string",
+          "enum": [
+            "alerts",
+            "forecast",
+            "solar_events"
+          ],
+          "description": "'alerts' = active geomagnetic alerts/warnings (G1-G5); 'forecast' = 3-day Kp/G-scale forecast; 'solar_events' = X-ray flare catalogue for a date range."
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date, YYYY-MM-DD (UTC). Used by 'solar_events'."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."
+        }
+      }
+    },
+    {
+      "id": "TOOL-27",
+      "name": "fetch_supermag_data",
+      "handler": "_handle_fetch_supermag",
+      "handler_file": "agent_core.py",
+      "handler_line": 4414,
+      "required": [
+        "start_date"
+      ],
+      "parameters": {
+        "station_code": {
+          "type": "string",
+          "description": "НЕОБЯЗАТЕЛЕН. Нужен только при data_type='sites' (напр. 'IRT'); при 'indices' игнорируется."
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Начальная дата, YYYY-MM-DD (UTC)."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Конечная дата, YYYY-MM-DD (UTC), включительно. Максимум 32 дня."
+        },
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "sites",
+            "indices"
+          ],
+          "description": "'sites' = минутные данные станции dX/dY/dZ (базовая линия уже удалена); 'indices' = глобальные SME/SML/SMU, станция не нужна."
+        }
+      }
+    },
+    {
+      "id": "TOOL-28",
+      "name": "get_iswa_perturbation_map",
+      "handler": "_handle_iswa_perturbation_map",
+      "handler_file": "agent_core.py",
+      "handler_line": 4188,
+      "required": [
+        "timestamp"
+      ],
+      "parameters": {
+        "timestamp": {
+          "type": "string",
+          "description": "Момент, ISO 8601 UTC, напр. '2024-09-12T12:00:00Z'."
+        },
+        "bbox": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "[min_lon, min_lat, max_lon, max_lat]; по умолчанию весь мир."
+        },
+        "width": {
+          "type": "integer",
+          "description": "Ширина PNG, px (по умолчанию 1024)."
+        },
+        "height": {
+          "type": "integer",
+          "description": "Высота PNG, px (по умолчанию 512)."
+        }
+      }
+    },
+    {
+      "id": "TOOL-29",
+      "name": "get_iswa_forecast",
+      "handler": "_handle_iswa_forecast",
+      "handler_file": "agent_core.py",
+      "handler_line": 4331,
+      "required": [],
+      "parameters": {}
+    }
+  ],
+  "physics_registry": [
+    "sq_baseline",
+    "deltas",
+    "gic",
+    "dst_proxy",
+    "ey_coupling",
+    "detect_ssc",
+    "burton_coupling",
+    "akasofu_epsilon",
+    "peak_dhdt",
+    "substorm_onset",
+    "eej_index"
+  ],
+  "physics_aliases": {
+    "dh_dt": "gic",
+    "dh/dt": "gic",
+    "gic_proxy": "gic",
+    "sq": "sq_baseline",
+    "delta": "deltas",
+    "ssc": "detect_ssc",
+    "ssc_flag": "detect_ssc",
+    "dst": "dst_proxy",
+    "ey": "ey_coupling",
+    "burton": "burton_coupling",
+    "burton_dst": "burton_coupling",
+    "dst_prediction": "burton_coupling",
+    "akasofu": "akasofu_epsilon",
+    "epsilon": "akasofu_epsilon",
+    "peak_dh_dt": "peak_dhdt",
+    "peak_dhdt": "peak_dhdt",
+    "substorm": "substorm_onset",
+    "substorm_detection": "substorm_onset",
+    "eej": "eej_index",
+    "equatorial_electrojet": "eej_index"
+  },
+  "physics_router_variants": [
+    {
+      "metric": "sq_baseline",
+      "template": "Вычисли apply_physics_formula metric=sq_baseline для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_observatory_data"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "deltas",
+      "template": "Вычисли apply_physics_formula metric=deltas для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_observatory_data"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "gic",
+      "template": "Вычисли apply_physics_formula metric=gic для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_observatory_data"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "dst_proxy",
+      "template": "Вычисли apply_physics_formula metric=dst_proxy для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_observatory_data"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "ey_coupling",
+      "template": "Вычисли apply_physics_formula metric=ey_coupling для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_observatory_data",
+        "fetch_solar_wind"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "detect_ssc",
+      "template": "Вычисли apply_physics_formula metric=detect_ssc для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_observatory_data"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "burton_coupling",
+      "template": "Вычисли apply_physics_formula metric=burton_coupling для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_observatory_data",
+        "fetch_solar_wind"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "akasofu_epsilon",
+      "template": "Вычисли apply_physics_formula metric=akasofu_epsilon для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_observatory_data",
+        "fetch_solar_wind"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "peak_dhdt",
+      "template": "Вычисли apply_physics_formula metric=peak_dhdt для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "calculate_derived_math",
+        "fetch_observatory_data"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "substorm_onset",
+      "template": "Вычисли apply_physics_formula metric=substorm_onset для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "apply_physics_formula",
+        "fetch_supermag_data"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    },
+    {
+      "metric": "eej_index",
+      "template": "Вычисли apply_physics_formula metric=eej_index для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
+      "offered_tools": [
+        "calculate_eej_index",
+        "fetch_observatory_data"
+      ],
+      "status": "DRY_RUN_ONLY_REVIEW_REQUIRED"
+    }
+  ],
+  "dsl_functions": {
+    "abs": 1,
+    "acos": 1,
+    "asin": 1,
+    "atan": 1,
+    "atan2": 2,
+    "cos": 1,
+    "degrees": 1,
+    "exp": 1,
+    "hypot": 2,
+    "log": 1,
+    "log10": 1,
+    "maximum": 2,
+    "minimum": 2,
+    "power": 2,
+    "radians": 1,
+    "sign": 1,
+    "sin": 1,
+    "sqrt": 1,
+    "tan": 1
+  },
+  "modules": [
+    {
+      "file": "agent_core.py",
+      "definitions": [
+        {
+          "name": "is_error",
+          "line": 230,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 235,
+          "private": true
+        },
+        {
+          "name": "_console_print",
+          "line": 241,
+          "private": true
+        },
+        {
+          "name": "_jsonable",
+          "line": 260,
+          "private": true
+        },
+        {
+          "name": "_dumps",
+          "line": 283,
+          "private": true
+        },
+        {
+          "name": "_args_signature",
+          "line": 287,
+          "private": true
+        },
+        {
+          "name": "select_tools_for_task",
+          "line": 1404,
+          "private": false
+        },
+        {
+          "name": "_tool_properties",
+          "line": 1425,
+          "private": true
+        },
+        {
+          "name": "expected_frame_handle",
+          "line": 1436,
+          "private": false
+        },
+        {
+          "name": "_slug",
+          "line": 1462,
+          "private": true
+        },
+        {
+          "name": "_default_plot_filename",
+          "line": 1468,
+          "private": true
+        },
+        {
+          "name": "normalize_tool_name",
+          "line": 1515,
+          "private": false
+        },
+        {
+          "name": "normalize_tool_args",
+          "line": 1522,
+          "private": false
+        },
+        {
+          "name": "missing_required_args",
+          "line": 1609,
+          "private": false
+        },
+        {
+          "name": "_build_metric_query_patterns",
+          "line": 1737,
+          "private": true
+        },
+        {
+          "name": "_ordered_unique",
+          "line": 1842,
+          "private": true
+        },
+        {
+          "name": "_bulk_units",
+          "line": 1853,
+          "private": true
+        },
+        {
+          "name": "_is_bulk_query",
+          "line": 1860,
+          "private": true
+        },
+        {
+          "name": "is_bulk_query",
+          "line": 1879,
+          "private": false
+        },
+        {
+          "name": "_selection_plan",
+          "line": 1889,
+          "private": true
+        },
+        {
+          "name": "select_tools_for_query",
+          "line": 1963,
+          "private": false
+        },
+        {
+          "name": "explain_tool_selection",
+          "line": 1988,
+          "private": false
+        },
+        {
+          "name": "estimate_tokens",
+          "line": 1999,
+          "private": false
+        },
+        {
+          "name": "prompt_budget",
+          "line": 2010,
+          "private": false
+        },
+        {
+          "name": "_trim_history",
+          "line": 2440,
+          "private": true
+        },
+        {
+          "name": "_self_correction_hint",
+          "line": 2572,
+          "private": true
+        },
+        {
+          "name": "_compact_tool_message",
+          "line": 2614,
+          "private": true
+        },
+        {
+          "name": "build_dynamic_prompt",
+          "line": 2689,
+          "private": false
+        },
+        {
+          "name": "_shard_sort_key",
+          "line": 2718,
+          "private": true
+        },
+        {
+          "name": "_first_shard",
+          "line": 2723,
+          "private": true
+        },
+        {
+          "name": "_gguf_files",
+          "line": 2728,
+          "private": true
+        },
+        {
+          "name": "_entry_shard",
+          "line": 2732,
+          "private": true
+        },
+        {
+          "name": "_purge_incomplete",
+          "line": 2746,
+          "private": true
+        },
+        {
+          "name": "model_is_downloaded",
+          "line": 2759,
+          "private": false
+        },
+        {
+          "name": "download_model",
+          "line": 2764,
+          "private": false
+        },
+        {
+          "name": "shutil_copyfileobj",
+          "line": 2869,
+          "private": false
+        },
+        {
+          "name": "_resolve_gpu_layers",
+          "line": 2944,
+          "private": true
+        },
+        {
+          "name": "load_brain",
+          "line": 2963,
+          "private": false
+        },
+        {
+          "name": "_clean",
+          "line": 3041,
+          "private": true
+        },
+        {
+          "name": "_coerce_arguments",
+          "line": 3047,
+          "private": true
+        },
+        {
+          "name": "_reply_text",
+          "line": 3065,
+          "private": true
+        },
+        {
+          "name": "_iter_json_spans",
+          "line": 3080,
+          "private": true
+        },
+        {
+          "name": "_straighten_quotes",
+          "line": 3119,
+          "private": true
+        },
+        {
+          "name": "_single_quotes_to_double",
+          "line": 3130,
+          "private": true
+        },
+        {
+          "name": "_drop_trailing_commas",
+          "line": 3159,
+          "private": true
+        },
+        {
+          "name": "_unwrap_doubled_braces",
+          "line": 3189,
+          "private": true
+        },
+        {
+          "name": "_load_bases",
+          "line": 3222,
+          "private": true
+        },
+        {
+          "name": "_try_loads",
+          "line": 3228,
+          "private": true
+        },
+        {
+          "name": "_json_payloads",
+          "line": 3253,
+          "private": true
+        },
+        {
+          "name": "_normalize_call",
+          "line": 3287,
+          "private": true
+        },
+        {
+          "name": "_calls_from_json",
+          "line": 3321,
+          "private": true
+        },
+        {
+          "name": "_api_envelope",
+          "line": 3341,
+          "private": true
+        },
+        {
+          "name": "_why_unparsed",
+          "line": 3403,
+          "private": true
+        },
+        {
+          "name": "parse_tool_calls",
+          "line": 3415,
+          "private": false
+        },
+        {
+          "name": "_summarise_frame",
+          "line": 3649,
+          "private": true
+        },
+        {
+          "name": "_offline_frame",
+          "line": 3684,
+          "private": true
+        },
+        {
+          "name": "_normalise_frame_alias",
+          "line": 3695,
+          "private": true
+        },
+        {
+          "name": "_accepts_legacy_df",
+          "line": 3741,
+          "private": true
+        },
+        {
+          "name": "_slot_for_frame",
+          "line": 3757,
+          "private": true
+        },
+        {
+          "name": "_first_present",
+          "line": 3767,
+          "private": true
+        },
+        {
+          "name": "_is_derived_handle",
+          "line": 3797,
+          "private": true
+        },
+        {
+          "name": "_auto_derive",
+          "line": 3802,
+          "private": true
+        },
+        {
+          "name": "_resolve_plottable",
+          "line": 3848,
+          "private": true
+        },
+        {
+          "name": "_handle_fetch",
+          "line": 3870,
+          "private": true
+        },
+        {
+          "name": "_offline_solar_wind",
+          "line": 3908,
+          "private": true
+        },
+        {
+          "name": "_offline_indices",
+          "line": 3937,
+          "private": true
+        },
+        {
+          "name": "_offline_noaa",
+          "line": 3957,
+          "private": true
+        },
+        {
+          "name": "_handle_fetch_solar_wind",
+          "line": 3999,
+          "private": true
+        },
+        {
+          "name": "_handle_fetch_geomagnetic_indices",
+          "line": 4031,
+          "private": true
+        },
+        {
+          "name": "_summarize_noaa",
+          "line": 4070,
+          "private": true
+        },
+        {
+          "name": "_handle_noaa_context",
+          "line": 4110,
+          "private": true
+        },
+        {
+          "name": "_offline_iswa_map",
+          "line": 4156,
+          "private": true
+        },
+        {
+          "name": "_handle_iswa_perturbation_map",
+          "line": 4188,
+          "private": true
+        },
+        {
+          "name": "_offline_iswa_forecast",
+          "line": 4235,
+          "private": true
+        },
+        {
+          "name": "_summarize_iswa_forecast",
+          "line": 4303,
+          "private": true
+        },
+        {
+          "name": "_handle_iswa_forecast",
+          "line": 4331,
+          "private": true
+        },
+        {
+          "name": "_offline_supermag",
+          "line": 4367,
+          "private": true
+        },
+        {
+          "name": "_handle_fetch_supermag",
+          "line": 4414,
+          "private": true
+        },
+        {
+          "name": "_frame_handle",
+          "line": 4496,
+          "private": true
+        },
+        {
+          "name": "_handle_derive",
+          "line": 4519,
+          "private": true
+        },
+        {
+          "name": "_compact_statistics_note",
+          "line": 4540,
+          "private": true
+        },
+        {
+          "name": "_handle_stats",
+          "line": 4576,
+          "private": true
+        },
+        {
+          "name": "_handle_anomalies",
+          "line": 4597,
+          "private": true
+        },
+        {
+          "name": "_handle_derived_math",
+          "line": 4623,
+          "private": true
+        },
+        {
+          "name": "_handle_baseline",
+          "line": 4758,
+          "private": true
+        },
+        {
+          "name": "_handle_custom_formula",
+          "line": 4828,
+          "private": true
+        },
+        {
+          "name": "_file_into_project",
+          "line": 4889,
+          "private": true
+        },
+        {
+          "name": "_handle_plot_components",
+          "line": 4912,
+          "private": true
+        },
+        {
+          "name": "_handle_plot_comparison",
+          "line": 4964,
+          "private": true
+        },
+        {
+          "name": "_date_range",
+          "line": 5028,
+          "private": true
+        },
+        {
+          "name": "_handle_create_project",
+          "line": 5062,
+          "private": true
+        },
+        {
+          "name": "_handle_fetch_many",
+          "line": 5079,
+          "private": true
+        },
+        {
+          "name": "_handle_export_project",
+          "line": 5202,
+          "private": true
+        },
+        {
+          "name": "_matrix_dir",
+          "line": 5243,
+          "private": true
+        },
+        {
+          "name": "_matrix_path",
+          "line": 5248,
+          "private": true
+        },
+        {
+          "name": "_matrix_path_is_allowed",
+          "line": 5262,
+          "private": true
+        },
+        {
+          "name": "_normalise_matrix_events",
+          "line": 5281,
+          "private": true
+        },
+        {
+          "name": "_normalise_matrix_stations",
+          "line": 5297,
+          "private": true
+        },
+        {
+          "name": "_normalise_matrix_actions",
+          "line": 5307,
+          "private": true
+        },
+        {
+          "name": "_matrix_task_args",
+          "line": 5325,
+          "private": true
+        },
+        {
+          "name": "_ensure_matrix_fetch",
+          "line": 5379,
+          "private": true
+        },
+        {
+          "name": "_ensure_matrix_derived",
+          "line": 5403,
+          "private": true
+        },
+        {
+          "name": "_execute_matrix_task",
+          "line": 5432,
+          "private": true
+        },
+        {
+          "name": "_handle_create_task_matrix",
+          "line": 5529,
+          "private": true
+        },
+        {
+          "name": "_matrix_station_class",
+          "line": 5744,
+          "private": true
+        },
+        {
+          "name": "_handle_process_matrix_batch",
+          "line": 5771,
+          "private": true
+        },
+        {
+          "name": "_factor_plan_for_matrix",
+          "line": 6070,
+          "private": true
+        },
+        {
+          "name": "_run_matrix_job",
+          "line": 6159,
+          "private": true
+        },
+        {
+          "name": "_handle_list_projects",
+          "line": 6267,
+          "private": true
+        },
+        {
+          "name": "_handle_get_station_geomagnetic_coords",
+          "line": 6292,
+          "private": true
+        },
+        {
+          "name": "_handle_calculate_mlt",
+          "line": 6326,
+          "private": true
+        },
+        {
+          "name": "_handle_group_stations_by_mlt",
+          "line": 6340,
+          "private": true
+        },
+        {
+          "name": "_handle_calculate_local_time",
+          "line": 6364,
+          "private": true
+        },
+        {
+          "name": "_station_registry_coords",
+          "line": 6410,
+          "private": true
+        },
+        {
+          "name": "_strict_argument_check",
+          "line": 6481,
+          "private": true
+        },
+        {
+          "name": "_frame_kind",
+          "line": 6570,
+          "private": true
+        },
+        {
+          "name": "_data_type_error",
+          "line": 6582,
+          "private": true
+        },
+        {
+          "name": "_validate_data_type",
+          "line": 6604,
+          "private": true
+        },
+        {
+          "name": "_resolve_solar_wind_frame",
+          "line": 6693,
+          "private": true
+        },
+        {
+          "name": "_resolve_reference_frame",
+          "line": 6760,
+          "private": true
+        },
+        {
+          "name": "_handle_apply_physics_formula",
+          "line": 6788,
+          "private": true
+        },
+        {
+          "name": "_physics_note",
+          "line": 6906,
+          "private": true
+        },
+        {
+          "name": "_handle_calculate_eej_index",
+          "line": 7014,
+          "private": true
+        },
+        {
+          "name": "_overlay_component",
+          "line": 7093,
+          "private": true
+        },
+        {
+          "name": "_handle_plot_overlay",
+          "line": 7123,
+          "private": true
+        },
+        {
+          "name": "_resolve_column_name",
+          "line": 7340,
+          "private": true
+        },
+        {
+          "name": "_merge_solar_wind_columns",
+          "line": 7351,
+          "private": true
+        },
+        {
+          "name": "_handle_plot_space_weather_comparison",
+          "line": 7391,
+          "private": true
+        },
+        {
+          "name": "_sort_stations_north_first",
+          "line": 7551,
+          "private": true
+        },
+        {
+          "name": "_overlay_time_shift",
+          "line": 7568,
+          "private": true
+        },
+        {
+          "name": "code_revision",
+          "line": 7630,
+          "private": false
+        },
+        {
+          "name": "run_agent",
+          "line": 7661,
+          "private": false
+        },
+        {
+          "name": "_planned_task_result",
+          "line": 8270,
+          "private": true
+        },
+        {
+          "name": "run_bound_statistics",
+          "line": 8384,
+          "private": false
+        },
+        {
+          "name": "_format_task_plan",
+          "line": 8411,
+          "private": true
+        },
+        {
+          "name": "_strip_child_plot_tally",
+          "line": 8423,
+          "private": true
+        },
+        {
+          "name": "run_agent_with_planner",
+          "line": 8433,
+          "private": false
+        },
+        {
+          "name": "_unique",
+          "line": 8647,
+          "private": true
+        },
+        {
+          "name": "_attempted_plot_name",
+          "line": 8658,
+          "private": true
+        },
+        {
+          "name": "_with_plot_tally",
+          "line": 8677,
+          "private": true
+        },
+        {
+          "name": "_failure_entries",
+          "line": 8729,
+          "private": true
+        },
+        {
+          "name": "find_nt_values",
+          "line": 8757,
+          "private": false
+        },
+        {
+          "name": "run_recovered",
+          "line": 8785,
+          "private": false
+        },
+        {
+          "name": "_with_tool_failures",
+          "line": 8812,
+          "private": true
+        },
+        {
+          "name": "_short",
+          "line": 8865,
+          "private": true
+        },
+        {
+          "name": "_demo_script",
+          "line": 8876,
+          "private": true
+        },
+        {
+          "name": "_unwrap",
+          "line": 8906,
+          "private": true
+        },
+        {
+          "name": "_main",
+          "line": 8917,
+          "private": true
+        },
+        {
+          "name": "__init__",
+          "line": 2122,
+          "private": true
+        },
+        {
+          "name": "reset",
+          "line": 2141,
+          "private": false
+        },
+        {
+          "name": "update_handle",
+          "line": 2152,
+          "private": false
+        },
+        {
+          "name": "register_handle",
+          "line": 2159,
+          "private": false
+        },
+        {
+          "name": "note_elided",
+          "line": 2207,
+          "private": false
+        },
+        {
+          "name": "add_result",
+          "line": 2212,
+          "private": false
+        },
+        {
+          "name": "_describe_handle",
+          "line": 2236,
+          "private": true
+        },
+        {
+          "name": "_displayed_handles",
+          "line": 2266,
+          "private": true
+        },
+        {
+          "name": "add_completed_step",
+          "line": 2280,
+          "private": false
+        },
+        {
+          "name": "add_error",
+          "line": 2289,
+          "private": false
+        },
+        {
+          "name": "add_failure",
+          "line": 2298,
+          "private": false
+        },
+        {
+          "name": "clear_failures",
+          "line": 2314,
+          "private": false
+        },
+        {
+          "name": "repeated_failure",
+          "line": 2318,
+          "private": false
+        },
+        {
+          "name": "to_prompt_injection",
+          "line": 2346,
+          "private": false
+        },
+        {
+          "name": "_next_step",
+          "line": 2402,
+          "private": true
+        },
+        {
+          "name": "say",
+          "line": 2795,
+          "private": false
+        },
+        {
+          "name": "__init__",
+          "line": 2883,
+          "private": true
+        },
+        {
+          "name": "chat",
+          "line": 2895,
+          "private": false
+        },
+        {
+          "name": "__init__",
+          "line": 2933,
+          "private": true
+        },
+        {
+          "name": "chat",
+          "line": 2937,
+          "private": false
+        },
+        {
+          "name": "_try_load",
+          "line": 2989,
+          "private": true
+        },
+        {
+          "name": "_add",
+          "line": 3262,
+          "private": true
+        },
+        {
+          "name": "__init__",
+          "line": 3536,
+          "private": true
+        },
+        {
+          "name": "_normalise",
+          "line": 3553,
+          "private": true
+        },
+        {
+          "name": "put",
+          "line": 3556,
+          "private": false
+        },
+        {
+          "name": "derive_name",
+          "line": 3567,
+          "private": false
+        },
+        {
+          "name": "get",
+          "line": 3577,
+          "private": false
+        },
+        {
+          "name": "names",
+          "line": 3593,
+          "private": false
+        },
+        {
+          "name": "aliases",
+          "line": 3597,
+          "private": false
+        },
+        {
+          "name": "resolve",
+          "line": 3607,
+          "private": false
+        },
+        {
+          "name": "decorate",
+          "line": 3744,
+          "private": false
+        },
+        {
+          "name": "_fetch",
+          "line": 7044,
+          "private": true
+        },
+        {
+          "name": "wrapper",
+          "line": 3746,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "agent_planner.py",
+      "definitions": [
+        {
+          "name": "plan",
+          "line": 43,
+          "private": false
+        },
+        {
+          "name": "_detect_task_type",
+          "line": 121,
+          "private": true
+        },
+        {
+          "name": "_extract_stations",
+          "line": 127,
+          "private": true
+        },
+        {
+          "name": "_extract_component",
+          "line": 144,
+          "private": true
+        },
+        {
+          "name": "_extract_dates",
+          "line": 153,
+          "private": true
+        },
+        {
+          "name": "_extract_date",
+          "line": 179,
+          "private": true
+        },
+        {
+          "name": "__init__",
+          "line": 224,
+          "private": true
+        },
+        {
+          "name": "plan",
+          "line": 227,
+          "private": false
+        },
+        {
+          "name": "_ask",
+          "line": 269,
+          "private": true
+        },
+        {
+          "name": "_extract_json",
+          "line": 305,
+          "private": true
+        },
+        {
+          "name": "_parse_json",
+          "line": 345,
+          "private": true
+        },
+        {
+          "name": "_coerce_task",
+          "line": 360,
+          "private": true
+        }
+      ]
+    },
+    {
+      "file": "agent_state.py",
+      "definitions": [
+        {
+          "name": "_compact_task_result",
+          "line": 135,
+          "private": true
+        },
+        {
+          "name": "add_task",
+          "line": 43,
+          "private": false
+        },
+        {
+          "name": "get_current_task",
+          "line": 46,
+          "private": false
+        },
+        {
+          "name": "mark_done",
+          "line": 51,
+          "private": false
+        },
+        {
+          "name": "mark_failed",
+          "line": 66,
+          "private": false
+        },
+        {
+          "name": "get_progress_summary",
+          "line": 82,
+          "private": false
+        },
+        {
+          "name": "get_context_for_prompt",
+          "line": 88,
+          "private": false
+        },
+        {
+          "name": "to_dict",
+          "line": 119,
+          "private": false
+        },
+        {
+          "name": "from_dict",
+          "line": 123,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "chart_naming.py",
+      "definitions": [
+        {
+          "name": "_safe_token",
+          "line": 89,
+          "private": true
+        },
+        {
+          "name": "_date_token",
+          "line": 97,
+          "private": true
+        },
+        {
+          "name": "_date_span",
+          "line": 108,
+          "private": true
+        },
+        {
+          "name": "_components_token",
+          "line": 116,
+          "private": true
+        },
+        {
+          "name": "_sources_token",
+          "line": 130,
+          "private": true
+        },
+        {
+          "name": "_limit_stem",
+          "line": 151,
+          "private": true
+        },
+        {
+          "name": "_finalize",
+          "line": 164,
+          "private": true
+        },
+        {
+          "name": "parse_handle",
+          "line": 173,
+          "private": false
+        },
+        {
+          "name": "describe_handles",
+          "line": 218,
+          "private": false
+        },
+        {
+          "name": "sources_for_handles",
+          "line": 240,
+          "private": false
+        },
+        {
+          "name": "components_filename",
+          "line": 244,
+          "private": false
+        },
+        {
+          "name": "comparison_filename",
+          "line": 273,
+          "private": false
+        },
+        {
+          "name": "overlay_filename",
+          "line": 293,
+          "private": false
+        },
+        {
+          "name": "space_weather_filename",
+          "line": 320,
+          "private": false
+        },
+        {
+          "name": "_source_suffix_parts",
+          "line": 355,
+          "private": true
+        },
+        {
+          "name": "_strip_source_suffix",
+          "line": 380,
+          "private": true
+        },
+        {
+          "name": "ensure_source_suffix",
+          "line": 390,
+          "private": false
+        },
+        {
+          "name": "safe_filename",
+          "line": 407,
+          "private": false
+        },
+        {
+          "name": "source_from_filename",
+          "line": 421,
+          "private": false
+        },
+        {
+          "name": "human_date",
+          "line": 434,
+          "private": false
+        },
+        {
+          "name": "_human_components",
+          "line": 443,
+          "private": true
+        },
+        {
+          "name": "components_title",
+          "line": 449,
+          "private": false
+        },
+        {
+          "name": "comparison_title",
+          "line": 464,
+          "private": false
+        },
+        {
+          "name": "overlay_title",
+          "line": 477,
+          "private": false
+        },
+        {
+          "name": "space_weather_title",
+          "line": 482,
+          "private": false
+        },
+        {
+          "name": "chart_metadata",
+          "line": 518,
+          "private": false
+        },
+        {
+          "name": "located",
+          "line": 84,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "chat_session.py",
+      "definitions": [
+        {
+          "name": "station_in",
+          "line": 21,
+          "private": false
+        },
+        {
+          "name": "bound_statistics_args",
+          "line": 45,
+          "private": false
+        },
+        {
+          "name": "check_call",
+          "line": 71,
+          "private": false
+        },
+        {
+          "name": "missing",
+          "line": 112,
+          "private": false
+        },
+        {
+          "name": "facts",
+          "line": 132,
+          "private": false
+        },
+        {
+          "name": "record",
+          "line": 169,
+          "private": false
+        },
+        {
+          "name": "touch",
+          "line": 190,
+          "private": false
+        },
+        {
+          "name": "summary_requested",
+          "line": 195,
+          "private": false
+        },
+        {
+          "name": "prepare",
+          "line": 203,
+          "private": false
+        },
+        {
+          "name": "context",
+          "line": 287,
+          "private": false
+        },
+        {
+          "name": "summary",
+          "line": 293,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "demo_make_50.py",
+      "definitions": [
+        {
+          "name": "_day",
+          "line": 43,
+          "private": true
+        },
+        {
+          "name": "_dmy",
+          "line": 48,
+          "private": true
+        },
+        {
+          "name": "main",
+          "line": 52,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "geomag_analyzer.py",
+      "definitions": [
+        {
+          "name": "is_error",
+          "line": 101,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 106,
+          "private": true
+        },
+        {
+          "name": "_jsonable",
+          "line": 129,
+          "private": true
+        },
+        {
+          "name": "component_units",
+          "line": 147,
+          "private": false
+        },
+        {
+          "name": "_validate_frame",
+          "line": 152,
+          "private": true
+        },
+        {
+          "name": "_normalise_component",
+          "line": 163,
+          "private": true
+        },
+        {
+          "name": "_resolve_components",
+          "line": 168,
+          "private": true
+        },
+        {
+          "name": "_with_derived",
+          "line": 202,
+          "private": true
+        },
+        {
+          "name": "calculate_derived_components",
+          "line": 215,
+          "private": false
+        },
+        {
+          "name": "get_statistics",
+          "line": 304,
+          "private": false
+        },
+        {
+          "name": "detect_anomalies",
+          "line": 411,
+          "private": false
+        },
+        {
+          "name": "compute_derivatives",
+          "line": 526,
+          "private": false
+        },
+        {
+          "name": "_load_demo",
+          "line": 586,
+          "private": true
+        },
+        {
+          "name": "_main",
+          "line": 620,
+          "private": true
+        }
+      ]
+    },
+    {
+      "file": "geomag_coords.py",
+      "definitions": [
+        {
+          "name": "is_error",
+          "line": 90,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 95,
+          "private": true
+        },
+        {
+          "name": "_as_float",
+          "line": 117,
+          "private": true
+        },
+        {
+          "name": "_check_latitude",
+          "line": 127,
+          "private": true
+        },
+        {
+          "name": "_check_longitude",
+          "line": 132,
+          "private": true
+        },
+        {
+          "name": "haversine_distance",
+          "line": 143,
+          "private": false
+        },
+        {
+          "name": "_pole_frame",
+          "line": 187,
+          "private": true
+        },
+        {
+          "name": "_validate_pole",
+          "line": 211,
+          "private": true
+        },
+        {
+          "name": "geographic_to_geomagnetic",
+          "line": 225,
+          "private": false
+        },
+        {
+          "name": "geomagnetic_to_geographic",
+          "line": 310,
+          "private": false
+        },
+        {
+          "name": "_station_value",
+          "line": 380,
+          "private": true
+        },
+        {
+          "name": "station_coordinates",
+          "line": 394,
+          "private": false
+        },
+        {
+          "name": "sort_stations_by_lat_m",
+          "line": 438,
+          "private": false
+        },
+        {
+          "name": "calculate_offsets_for_overlay",
+          "line": 507,
+          "private": false
+        },
+        {
+          "name": "apply_offsets",
+          "line": 554,
+          "private": false
+        },
+        {
+          "name": "magnetic_local_time",
+          "line": 585,
+          "private": false
+        },
+        {
+          "name": "group_by_mlt",
+          "line": 674,
+          "private": false
+        },
+        {
+          "name": "_k",
+          "line": 692,
+          "private": true
+        }
+      ]
+    },
+    {
+      "file": "geomag_math.py",
+      "definitions": [
+        {
+          "name": "is_error",
+          "line": 161,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 166,
+          "private": true
+        },
+        {
+          "name": "_jsonable",
+          "line": 191,
+          "private": true
+        },
+        {
+          "name": "component_units",
+          "line": 208,
+          "private": false
+        },
+        {
+          "name": "_normalise_component",
+          "line": 213,
+          "private": true
+        },
+        {
+          "name": "_numeric_column",
+          "line": 218,
+          "private": true
+        },
+        {
+          "name": "_require_cartesian",
+          "line": 223,
+          "private": true
+        },
+        {
+          "name": "_validate_frame",
+          "line": 236,
+          "private": true
+        },
+        {
+          "name": "horizontal_field",
+          "line": 250,
+          "private": false
+        },
+        {
+          "name": "total_field",
+          "line": 265,
+          "private": false
+        },
+        {
+          "name": "declination",
+          "line": 282,
+          "private": false
+        },
+        {
+          "name": "inclination",
+          "line": 302,
+          "private": false
+        },
+        {
+          "name": "add_derived_components",
+          "line": 330,
+          "private": false
+        },
+        {
+          "name": "component_series",
+          "line": 388,
+          "private": false
+        },
+        {
+          "name": "calculate_delta",
+          "line": 420,
+          "private": false
+        },
+        {
+          "name": "calculate_anomaly",
+          "line": 480,
+          "private": false
+        },
+        {
+          "name": "calculate_dH_dt",
+          "line": 516,
+          "private": false
+        },
+        {
+          "name": "calculate_dst_proxy",
+          "line": 555,
+          "private": false
+        },
+        {
+          "name": "_hour_of_day",
+          "line": 588,
+          "private": true
+        },
+        {
+          "name": "get_nighttime_baseline",
+          "line": 597,
+          "private": false
+        },
+        {
+          "name": "available_columns",
+          "line": 738,
+          "private": false
+        },
+        {
+          "name": "formula_functions",
+          "line": 744,
+          "private": false
+        },
+        {
+          "name": "_arity",
+          "line": 749,
+          "private": true
+        },
+        {
+          "name": "_eval_node",
+          "line": 760,
+          "private": true
+        },
+        {
+          "name": "_check_nodes",
+          "line": 834,
+          "private": true
+        },
+        {
+          "name": "_formula_scope",
+          "line": 870,
+          "private": true
+        },
+        {
+          "name": "evaluate_formula",
+          "line": 890,
+          "private": false
+        },
+        {
+          "name": "__init__",
+          "line": 864,
+          "private": true
+        }
+      ]
+    },
+    {
+      "file": "geomag_plotter.py",
+      "definitions": [
+        {
+          "name": "_error",
+          "line": 86,
+          "private": true
+        },
+        {
+          "name": "_check_frame",
+          "line": 108,
+          "private": true
+        },
+        {
+          "name": "_column_unit",
+          "line": 169,
+          "private": true
+        },
+        {
+          "name": "_resolve_column",
+          "line": 181,
+          "private": true
+        },
+        {
+          "name": "_resolve_columns",
+          "line": 198,
+          "private": true
+        },
+        {
+          "name": "_has_cartesian",
+          "line": 216,
+          "private": true
+        },
+        {
+          "name": "_prepare",
+          "line": 221,
+          "private": true
+        },
+        {
+          "name": "_slug",
+          "line": 269,
+          "private": true
+        },
+        {
+          "name": "_downsample",
+          "line": 274,
+          "private": true
+        },
+        {
+          "name": "_time_of_day",
+          "line": 291,
+          "private": true
+        },
+        {
+          "name": "_write",
+          "line": 305,
+          "private": true
+        },
+        {
+          "name": "_unit_label",
+          "line": 321,
+          "private": true
+        },
+        {
+          "name": "plot_components",
+          "line": 331,
+          "private": false
+        },
+        {
+          "name": "plot_comparison",
+          "line": 484,
+          "private": false
+        },
+        {
+          "name": "plot_overlay",
+          "line": 645,
+          "private": false
+        },
+        {
+          "name": "plot_space_weather_comparison",
+          "line": 793,
+          "private": false
+        },
+        {
+          "name": "plot_magnetogram",
+          "line": 1029,
+          "private": false
+        },
+        {
+          "name": "_synthetic_day",
+          "line": 1117,
+          "private": true
+        },
+        {
+          "name": "_main",
+          "line": 1132,
+          "private": true
+        }
+      ]
+    },
+    {
+      "file": "gradio_app.py",
+      "definitions": [
+        {
+          "name": "split_result",
+          "line": 97,
+          "private": false
+        },
+        {
+          "name": "_chatbot_kwargs",
+          "line": 148,
+          "private": true
+        },
+        {
+          "name": "_plotly",
+          "line": 164,
+          "private": true
+        },
+        {
+          "name": "_message_text",
+          "line": 174,
+          "private": true
+        },
+        {
+          "name": "normalize_history",
+          "line": 195,
+          "private": false
+        },
+        {
+          "name": "_context_from_history",
+          "line": 234,
+          "private": true
+        },
+        {
+          "name": "_as_text",
+          "line": 278,
+          "private": true
+        },
+        {
+          "name": "_plot_paths",
+          "line": 303,
+          "private": true
+        },
+        {
+          "name": "_plot_names_in_text",
+          "line": 365,
+          "private": true
+        },
+        {
+          "name": "_dedupe",
+          "line": 372,
+          "private": true
+        },
+        {
+          "name": "_cached_figure",
+          "line": 391,
+          "private": true
+        },
+        {
+          "name": "_figure_for_slot",
+          "line": 402,
+          "private": true
+        },
+        {
+          "name": "_slot_updates",
+          "line": 413,
+          "private": true
+        },
+        {
+          "name": "_fallback_note",
+          "line": 447,
+          "private": true
+        },
+        {
+          "name": "_format_tool_log",
+          "line": 459,
+          "private": true
+        },
+        {
+          "name": "_scan_json_value",
+          "line": 507,
+          "private": true
+        },
+        {
+          "name": "_figure_from_html",
+          "line": 566,
+          "private": true
+        },
+        {
+          "name": "figure_from_plot_file",
+          "line": 628,
+          "private": false
+        },
+        {
+          "name": "_apply_session_logon",
+          "line": 651,
+          "private": true
+        },
+        {
+          "name": "_new_session_store",
+          "line": 667,
+          "private": true
+        },
+        {
+          "name": "_reset_chat",
+          "line": 672,
+          "private": true
+        },
+        {
+          "name": "make_chat_handler",
+          "line": 677,
+          "private": false
+        },
+        {
+          "name": "_project_choices",
+          "line": 795,
+          "private": true
+        },
+        {
+          "name": "_project_tree_frame",
+          "line": 803,
+          "private": true
+        },
+        {
+          "name": "_project_summary",
+          "line": 820,
+          "private": true
+        },
+        {
+          "name": "_refresh_projects",
+          "line": 840,
+          "private": true
+        },
+        {
+          "name": "_make_zip",
+          "line": 854,
+          "private": true
+        },
+        {
+          "name": "build_demo",
+          "line": 867,
+          "private": false
+        },
+        {
+          "name": "main",
+          "line": 1011,
+          "private": false
+        },
+        {
+          "name": "chat_and_plot",
+          "line": 680,
+          "private": false
+        },
+        {
+          "name": "answer_with",
+          "line": 712,
+          "private": false
+        },
+        {
+          "name": "submit",
+          "line": 960,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "intermagnet_loader.py",
+      "definitions": [
+        {
+          "name": "_http",
+          "line": 127,
+          "private": true
+        },
+        {
+          "name": "_request",
+          "line": 141,
+          "private": true
+        },
+        {
+          "name": "_error",
+          "line": 182,
+          "private": true
+        },
+        {
+          "name": "_norm_date",
+          "line": 212,
+          "private": true
+        },
+        {
+          "name": "_norm_station",
+          "line": 229,
+          "private": true
+        },
+        {
+          "name": "_norm_type",
+          "line": 238,
+          "private": true
+        },
+        {
+          "name": "_chunk_dates",
+          "line": 250,
+          "private": true
+        },
+        {
+          "name": "_to_float",
+          "line": 266,
+          "private": true
+        },
+        {
+          "name": "parse_iaga2002",
+          "line": 281,
+          "private": false
+        },
+        {
+          "name": "_parse_covjson",
+          "line": 333,
+          "private": true
+        },
+        {
+          "name": "_has_data",
+          "line": 350,
+          "private": true
+        },
+        {
+          "name": "_fetch_gin_capabilities",
+          "line": 362,
+          "private": true
+        },
+        {
+          "name": "_fetch_kyoto_catalog",
+          "line": 383,
+          "private": true
+        },
+        {
+          "name": "_station_cache_path",
+          "line": 410,
+          "private": true
+        },
+        {
+          "name": "_load_station_cache",
+          "line": 414,
+          "private": true
+        },
+        {
+          "name": "_load_station_registry",
+          "line": 427,
+          "private": true
+        },
+        {
+          "name": "get_station_details",
+          "line": 470,
+          "private": false
+        },
+        {
+          "name": "get_available_stations",
+          "line": 475,
+          "private": false
+        },
+        {
+          "name": "_gin_known_station",
+          "line": 499,
+          "private": true
+        },
+        {
+          "name": "_fetch_gin",
+          "line": 509,
+          "private": true
+        },
+        {
+          "name": "_fetch_kyoto",
+          "line": 559,
+          "private": true
+        },
+        {
+          "name": "_fetch_chunk",
+          "line": 603,
+          "private": true
+        },
+        {
+          "name": "_cache_key",
+          "line": 638,
+          "private": true
+        },
+        {
+          "name": "_use_parquet",
+          "line": 646,
+          "private": true
+        },
+        {
+          "name": "save_to_cache",
+          "line": 654,
+          "private": false
+        },
+        {
+          "name": "_coerce_dates",
+          "line": 702,
+          "private": true
+        },
+        {
+          "name": "load_from_cache",
+          "line": 716,
+          "private": false
+        },
+        {
+          "name": "clear_cache",
+          "line": 745,
+          "private": false
+        },
+        {
+          "name": "is_error",
+          "line": 760,
+          "private": false
+        },
+        {
+          "name": "fetch_observatory_data",
+          "line": 765,
+          "private": false
+        },
+        {
+          "name": "_main",
+          "line": 934,
+          "private": true
+        }
+      ]
+    },
+    {
+      "file": "iswa_loader.py",
+      "definitions": [
+        {
+          "name": "is_error",
+          "line": 180,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 185,
+          "private": true
+        },
+        {
+          "name": "parse_timestamp",
+          "line": 191,
+          "private": false
+        },
+        {
+          "name": "iso_z",
+          "line": 219,
+          "private": false
+        },
+        {
+          "name": "_norm_bbox",
+          "line": 224,
+          "private": true
+        },
+        {
+          "name": "_norm_size",
+          "line": 249,
+          "private": true
+        },
+        {
+          "name": "_http",
+          "line": 266,
+          "private": true
+        },
+        {
+          "name": "_request",
+          "line": 280,
+          "private": true
+        },
+        {
+          "name": "_unavailable",
+          "line": 312,
+          "private": true
+        },
+        {
+          "name": "_forecast_unavailable",
+          "line": 321,
+          "private": true
+        },
+        {
+          "name": "_no_data",
+          "line": 330,
+          "private": true
+        },
+        {
+          "name": "build_wms_url",
+          "line": 347,
+          "private": false
+        },
+        {
+          "name": "save_map_png",
+          "line": 395,
+          "private": false
+        },
+        {
+          "name": "_decommissioned",
+          "line": 444,
+          "private": true
+        },
+        {
+          "name": "get_ground_perturbation_map",
+          "line": 468,
+          "private": false
+        },
+        {
+          "name": "_wms_fault",
+          "line": 566,
+          "private": true
+        },
+        {
+          "name": "synthetic_map_png",
+          "line": 583,
+          "private": false
+        },
+        {
+          "name": "_png_chunk",
+          "line": 609,
+          "private": true
+        },
+        {
+          "name": "_now",
+          "line": 621,
+          "private": true
+        },
+        {
+          "name": "_hapi_data",
+          "line": 626,
+          "private": true
+        },
+        {
+          "name": "_row_time",
+          "line": 682,
+          "private": true
+        },
+        {
+          "name": "_num",
+          "line": 693,
+          "private": true
+        },
+        {
+          "name": "_kp_index",
+          "line": 710,
+          "private": true
+        },
+        {
+          "name": "_dst_index",
+          "line": 740,
+          "private": true
+        },
+        {
+          "name": "_grid",
+          "line": 754,
+          "private": true
+        },
+        {
+          "name": "get_dst_kp_forecast",
+          "line": 766,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "noaa_swpc_loader.py",
+      "definitions": [
+        {
+          "name": "is_error",
+          "line": 102,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 107,
+          "private": true
+        },
+        {
+          "name": "_ok",
+          "line": 118,
+          "private": true
+        },
+        {
+          "name": "_http",
+          "line": 130,
+          "private": true
+        },
+        {
+          "name": "_request",
+          "line": 144,
+          "private": true
+        },
+        {
+          "name": "_unavailable",
+          "line": 183,
+          "private": true
+        },
+        {
+          "name": "_fetch_json",
+          "line": 192,
+          "private": true
+        },
+        {
+          "name": "_parse_swpc_time",
+          "line": 221,
+          "private": true
+        },
+        {
+          "name": "_iso",
+          "line": 252,
+          "private": true
+        },
+        {
+          "name": "_norm_day",
+          "line": 256,
+          "private": true
+        },
+        {
+          "name": "_kp_to_g_scale",
+          "line": 272,
+          "private": true
+        },
+        {
+          "name": "_g_scale_word",
+          "line": 289,
+          "private": true
+        },
+        {
+          "name": "_num",
+          "line": 293,
+          "private": true
+        },
+        {
+          "name": "_parse_alert",
+          "line": 317,
+          "private": true
+        },
+        {
+          "name": "fetch_geomagnetic_alerts",
+          "line": 380,
+          "private": false
+        },
+        {
+          "name": "fetch_solar_wind_forecast",
+          "line": 418,
+          "private": false
+        },
+        {
+          "name": "fetch_solar_events",
+          "line": 474,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "peak_storm_2024.py",
+      "definitions": [
+        {
+          "name": "_sha256",
+          "line": 47,
+          "private": true
+        },
+        {
+          "name": "_day",
+          "line": 55,
+          "private": true
+        },
+        {
+          "name": "_write_csv",
+          "line": 61,
+          "private": true
+        },
+        {
+          "name": "_row",
+          "line": 66,
+          "private": true
+        },
+        {
+          "name": "_html_index",
+          "line": 87,
+          "private": true
+        },
+        {
+          "name": "build",
+          "line": 127,
+          "private": false
+        },
+        {
+          "name": "main",
+          "line": 340,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "physics_engine.py",
+      "definitions": [
+        {
+          "name": "is_error",
+          "line": 137,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 142,
+          "private": true
+        },
+        {
+          "name": "_jsonable",
+          "line": 165,
+          "private": true
+        },
+        {
+          "name": "_validate_frame",
+          "line": 178,
+          "private": true
+        },
+        {
+          "name": "_require_columns",
+          "line": 186,
+          "private": true
+        },
+        {
+          "name": "_hour_of_day",
+          "line": 198,
+          "private": true
+        },
+        {
+          "name": "_horizontal",
+          "line": 207,
+          "private": true
+        },
+        {
+          "name": "_first_difference",
+          "line": 216,
+          "private": true
+        },
+        {
+          "name": "extract_sq_baseline",
+          "line": 226,
+          "private": false
+        },
+        {
+          "name": "calculate_deltas",
+          "line": 325,
+          "private": false
+        },
+        {
+          "name": "calculate_gic_proxy",
+          "line": 376,
+          "private": false
+        },
+        {
+          "name": "calculate_dst_proxy",
+          "line": 409,
+          "private": false
+        },
+        {
+          "name": "_solar_wind_series",
+          "line": 480,
+          "private": true
+        },
+        {
+          "name": "_column_ci",
+          "line": 502,
+          "private": true
+        },
+        {
+          "name": "_coverage",
+          "line": 512,
+          "private": true
+        },
+        {
+          "name": "_finite_count",
+          "line": 528,
+          "private": true
+        },
+        {
+          "name": "align_solar_wind",
+          "line": 533,
+          "private": false
+        },
+        {
+          "name": "calculate_coupling_function",
+          "line": 804,
+          "private": false
+        },
+        {
+          "name": "detect_ssc",
+          "line": 947,
+          "private": false
+        },
+        {
+          "name": "calculate_burton_coupling",
+          "line": 1105,
+          "private": false
+        },
+        {
+          "name": "calculate_akasofu_epsilon",
+          "line": 1248,
+          "private": false
+        },
+        {
+          "name": "calculate_peak_dhdt",
+          "line": 1371,
+          "private": false
+        },
+        {
+          "name": "detect_substorm_onset",
+          "line": 1442,
+          "private": false
+        },
+        {
+          "name": "calculate_eej_index",
+          "line": 1534,
+          "private": false
+        },
+        {
+          "name": "_quiet",
+          "line": 290,
+          "private": true
+        },
+        {
+          "name": "_level",
+          "line": 355,
+          "private": true
+        },
+        {
+          "name": "_level",
+          "line": 449,
+          "private": true
+        },
+        {
+          "name": "_one",
+          "line": 638,
+          "private": true
+        },
+        {
+          "name": "_resample",
+          "line": 694,
+          "private": true
+        },
+        {
+          "name": "_reduce",
+          "line": 924,
+          "private": true
+        },
+        {
+          "name": "_step_nT",
+          "line": 1060,
+          "private": true
+        },
+        {
+          "name": "_column",
+          "line": 1152,
+          "private": true
+        },
+        {
+          "name": "_mean",
+          "line": 1161,
+          "private": true
+        },
+        {
+          "name": "_column",
+          "line": 1287,
+          "private": true
+        },
+        {
+          "name": "_mean",
+          "line": 1296,
+          "private": true
+        }
+      ]
+    },
+    {
+      "file": "project_store.py",
+      "definitions": [
+        {
+          "name": "utc_now",
+          "line": 110,
+          "private": false
+        },
+        {
+          "name": "agent_commit",
+          "line": 115,
+          "private": false
+        },
+        {
+          "name": "_slug",
+          "line": 147,
+          "private": true
+        },
+        {
+          "name": "_as_bool",
+          "line": 171,
+          "private": true
+        },
+        {
+          "name": "_is_link_like",
+          "line": 192,
+          "private": true
+        },
+        {
+          "name": "_is_within",
+          "line": 214,
+          "private": true
+        },
+        {
+          "name": "_iter_safe_children",
+          "line": 223,
+          "private": true
+        },
+        {
+          "name": "_walk_project",
+          "line": 235,
+          "private": true
+        },
+        {
+          "name": "project_dir",
+          "line": 250,
+          "private": false
+        },
+        {
+          "name": "list_projects",
+          "line": 272,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 279,
+          "private": true
+        },
+        {
+          "name": "is_error",
+          "line": 285,
+          "private": false
+        },
+        {
+          "name": "write_manifest",
+          "line": 292,
+          "private": false
+        },
+        {
+          "name": "read_project_manifest",
+          "line": 304,
+          "private": false
+        },
+        {
+          "name": "_safe_export_component",
+          "line": 330,
+          "private": true
+        },
+        {
+          "name": "_archive_filename",
+          "line": 355,
+          "private": true
+        },
+        {
+          "name": "_load_chart_index",
+          "line": 365,
+          "private": true
+        },
+        {
+          "name": "_write_chart_index",
+          "line": 377,
+          "private": true
+        },
+        {
+          "name": "_upsert_chart_index",
+          "line": 389,
+          "private": true
+        },
+        {
+          "name": "_source_from_relative_path",
+          "line": 406,
+          "private": true
+        },
+        {
+          "name": "_fallback_chart_row",
+          "line": 420,
+          "private": true
+        },
+        {
+          "name": "_chart_rows",
+          "line": 447,
+          "private": true
+        },
+        {
+          "name": "read_chart_index",
+          "line": 473,
+          "private": false
+        },
+        {
+          "name": "_normalise_sort_by",
+          "line": 497,
+          "private": true
+        },
+        {
+          "name": "_row_value",
+          "line": 511,
+          "private": true
+        },
+        {
+          "name": "sort_charts",
+          "line": 527,
+          "private": false
+        },
+        {
+          "name": "_index_row",
+          "line": 570,
+          "private": true
+        },
+        {
+          "name": "_index_csv",
+          "line": 590,
+          "private": true
+        },
+        {
+          "name": "_index_html",
+          "line": 602,
+          "private": true
+        },
+        {
+          "name": "_resolve_case_insensitive",
+          "line": 633,
+          "private": true
+        },
+        {
+          "name": "_glob_case_insensitive",
+          "line": 660,
+          "private": true
+        },
+        {
+          "name": "_resolve_export_folders",
+          "line": 678,
+          "private": true
+        },
+        {
+          "name": "project_manifest",
+          "line": 790,
+          "private": false
+        },
+        {
+          "name": "create_project",
+          "line": 823,
+          "private": false
+        },
+        {
+          "name": "artifact_dir",
+          "line": 880,
+          "private": false
+        },
+        {
+          "name": "_geomag_for_station",
+          "line": 900,
+          "private": true
+        },
+        {
+          "name": "save_artifact",
+          "line": 916,
+          "private": false
+        },
+        {
+          "name": "_human",
+          "line": 988,
+          "private": true
+        },
+        {
+          "name": "project_tree",
+          "line": 998,
+          "private": false
+        },
+        {
+          "name": "tree_markdown",
+          "line": 1031,
+          "private": false
+        },
+        {
+          "name": "_plotly_bundle",
+          "line": 1043,
+          "private": true
+        },
+        {
+          "name": "_compact_plotly_html",
+          "line": 1052,
+          "private": true
+        },
+        {
+          "name": "_relative_plotly_href",
+          "line": 1072,
+          "private": true
+        },
+        {
+          "name": "export_project",
+          "line": 1077,
+          "private": false
+        },
+        {
+          "name": "parse_slot",
+          "line": 1378,
+          "private": false
+        },
+        {
+          "name": "iter_manifests",
+          "line": 1542,
+          "private": false
+        },
+        {
+          "name": "key",
+          "line": 547,
+          "private": false
+        },
+        {
+          "name": "write_member",
+          "line": 1287,
+          "private": false
+        },
+        {
+          "name": "__init__",
+          "line": 1406,
+          "private": true
+        },
+        {
+          "name": "resolve",
+          "line": 1411,
+          "private": false
+        },
+        {
+          "name": "create",
+          "line": 1418,
+          "private": false
+        },
+        {
+          "name": "save",
+          "line": 1425,
+          "private": false
+        },
+        {
+          "name": "save_chart",
+          "line": 1450,
+          "private": false
+        },
+        {
+          "name": "tree_markdown",
+          "line": 1534,
+          "private": false
+        },
+        {
+          "name": "known",
+          "line": 1538,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "scenarios_e2e.py",
+      "definitions": [
+        {
+          "name": "_scan_json_array",
+          "line": 336,
+          "private": true
+        },
+        {
+          "name": "plot_trace_names",
+          "line": 366,
+          "private": false
+        },
+        {
+          "name": "_fetches",
+          "line": 399,
+          "private": true
+        },
+        {
+          "name": "_subject_of",
+          "line": 412,
+          "private": true
+        },
+        {
+          "name": "unrecovered_failures",
+          "line": 440,
+          "private": false
+        },
+        {
+          "name": "_check_project",
+          "line": 470,
+          "private": true
+        },
+        {
+          "name": "check",
+          "line": 517,
+          "private": false
+        },
+        {
+          "name": "run_scenario",
+          "line": 765,
+          "private": false
+        },
+        {
+          "name": "main",
+          "line": 804,
+          "private": false
+        },
+        {
+          "name": "__init__",
+          "line": 749,
+          "private": true
+        },
+        {
+          "name": "__call__",
+          "line": 752,
+          "private": true
+        },
+        {
+          "name": "__getattr__",
+          "line": 761,
+          "private": true
+        }
+      ]
+    },
+    {
+      "file": "space_weather_loader.py",
+      "definitions": [
+        {
+          "name": "is_error",
+          "line": 102,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 107,
+          "private": true
+        },
+        {
+          "name": "_http",
+          "line": 119,
+          "private": true
+        },
+        {
+          "name": "_request",
+          "line": 133,
+          "private": true
+        },
+        {
+          "name": "_safe_get",
+          "line": 171,
+          "private": true
+        },
+        {
+          "name": "_norm_day",
+          "line": 184,
+          "private": true
+        },
+        {
+          "name": "_parse_hapi_csv",
+          "line": 205,
+          "private": true
+        },
+        {
+          "name": "_fetch_table",
+          "line": 246,
+          "private": true
+        },
+        {
+          "name": "_window",
+          "line": 305,
+          "private": true
+        },
+        {
+          "name": "fetch_solar_wind",
+          "line": 314,
+          "private": false
+        },
+        {
+          "name": "_merge_indices",
+          "line": 427,
+          "private": true
+        },
+        {
+          "name": "fetch_geomagnetic_indices",
+          "line": 474,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "stress_300.py",
+      "definitions": [
+        {
+          "name": "_find_repo",
+          "line": 37,
+          "private": true
+        },
+        {
+          "name": "run_stage",
+          "line": 216,
+          "private": false
+        },
+        {
+          "name": "project_html",
+          "line": 235,
+          "private": false
+        },
+        {
+          "name": "canonical_chart_name",
+          "line": 242,
+          "private": false
+        },
+        {
+          "name": "check_chart_cells",
+          "line": 262,
+          "private": false
+        },
+        {
+          "name": "check_chart_metadata",
+          "line": 317,
+          "private": false
+        },
+        {
+          "name": "_archive_path",
+          "line": 405,
+          "private": true
+        },
+        {
+          "name": "check_default_archive",
+          "line": 411,
+          "private": false
+        },
+        {
+          "name": "matrix_prompt",
+          "line": 545,
+          "private": false
+        },
+        {
+          "name": "comparison_matrix_prompt",
+          "line": 558,
+          "private": false
+        },
+        {
+          "name": "custom_export_prompt",
+          "line": 580,
+          "private": false
+        },
+        {
+          "name": "check_custom_export",
+          "line": 596,
+          "private": false
+        },
+        {
+          "name": "read_matrix",
+          "line": 881,
+          "private": false
+        },
+        {
+          "name": "matrix_actions",
+          "line": 891,
+          "private": false
+        },
+        {
+          "name": "print_matrix_report",
+          "line": 898,
+          "private": false
+        },
+        {
+          "name": "check_matrix_shape",
+          "line": 919,
+          "private": false
+        },
+        {
+          "name": "check_matrix",
+          "line": 941,
+          "private": false
+        },
+        {
+          "name": "check_security_and_export_contract",
+          "line": 998,
+          "private": false
+        }
+      ]
+    },
+    {
+      "file": "supermag_loader.py",
+      "definitions": [
+        {
+          "name": "_safe_diagnostic",
+          "line": 108,
+          "private": true
+        },
+        {
+          "name": "is_error",
+          "line": 116,
+          "private": false
+        },
+        {
+          "name": "_error",
+          "line": 121,
+          "private": true
+        },
+        {
+          "name": "get_logon",
+          "line": 146,
+          "private": false
+        },
+        {
+          "name": "_http",
+          "line": 157,
+          "private": true
+        },
+        {
+          "name": "_request",
+          "line": 171,
+          "private": true
+        },
+        {
+          "name": "_norm_day",
+          "line": 206,
+          "private": true
+        },
+        {
+          "name": "_window",
+          "line": 222,
+          "private": true
+        },
+        {
+          "name": "_core_url",
+          "line": 234,
+          "private": true
+        },
+        {
+          "name": "_classify_service_error",
+          "line": 245,
+          "private": true
+        },
+        {
+          "name": "_read_body",
+          "line": 279,
+          "private": true
+        },
+        {
+          "name": "_read_rows",
+          "line": 322,
+          "private": true
+        },
+        {
+          "name": "_timestamp",
+          "line": 354,
+          "private": true
+        },
+        {
+          "name": "_scalar",
+          "line": 363,
+          "private": true
+        },
+        {
+          "name": "_component",
+          "line": 372,
+          "private": true
+        },
+        {
+          "name": "_sites_frame",
+          "line": 388,
+          "private": true
+        },
+        {
+          "name": "_indices_frame",
+          "line": 419,
+          "private": true
+        },
+        {
+          "name": "fetch_supermag_inventory",
+          "line": 443,
+          "private": false
+        },
+        {
+          "name": "_parse_inventory",
+          "line": 476,
+          "private": true
+        },
+        {
+          "name": "fetch_supermag_data",
+          "line": 514,
+          "private": false
+        },
+        {
+          "name": "_sort_by_time",
+          "line": 615,
+          "private": true
+        },
+        {
+          "name": "_no_data_or_unknown_station",
+          "line": 625,
+          "private": true
+        }
+      ]
+    }
+  ],
+  "source_sha256": {
+    "agent_core.py": "af3f3d6157223b17ed57a84921f014481dfd155a305418e1aa7fad6c70875359",
+    "agent_planner.py": "e418ab1ae4330a860d9e1545a2ad701a0e7c721a51a72a4eecc49c3692f752b0",
+    "agent_state.py": "9f74b4562e9450f9e304870d16e21b61cc78ee61d8b2b3d0be59792a2e4dbf2a",
+    "chart_naming.py": "9946b1c34d37e45631426675f1b0f3bf0947a0e668db2e05cd6423754c970658",
+    "chat_session.py": "ff69f46d306fded97d74e2bdae28d3e1db69d7603fb51c3bcb8f820a82ceacaa",
+    "demo_make_50.py": "4df314d4741b0b2716b63f0f591e4a0fc234eaddd96c67d911d0136bdca3873c",
+    "geomag_analyzer.py": "c24e7f6d3a594a15d99c497d98d1a0b3fa87abebd56f464443577952eec523f1",
+    "geomag_coords.py": "25e1910914471f4f235cda23f5aea916eec7f01a45fa946ef540c00aa63cfc8e",
+    "geomag_math.py": "52fbb94f99ce09646f5505ff5f3b4700aa2fbe3b5b89724c221a1d6ed022d633",
+    "geomag_plotter.py": "ac8a815d82575cd7862b0fdb2fa0288921f1e723942bef7485e69c1286e1c470",
+    "gradio_app.py": "9245103156255ba11147d1f85d80f1a97d8415f997a8d223f875f01538e81f09",
+    "intermagnet_loader.py": "6bfe845ec9e4da7547a53e05a2af3cdbcc8333aad9d00ae0557364b92f706b45",
+    "iswa_loader.py": "0d83a4c1a05711a0fd7dc727cb58cc2b6a536ee7fd52c53c025171c3916b3981",
+    "noaa_swpc_loader.py": "03581d686c2f6585c46ecc513905e283f64a78d7149b8e171751195b43b6236d",
+    "peak_storm_2024.py": "b42652a4456e0d6ecc733437f63d066f344274cc68d20ed9bdc03b29902d03f4",
+    "physics_engine.py": "22bb1f862f6fadaa482a9d95c612f7d09e2c6200a8c16b3700045f201929d231",
+    "project_store.py": "d4a3f9a17c5465db255906aac39db430a136a9ba49b52cc8cc14dc6c51780115",
+    "scenarios_e2e.py": "f00d47ad4aa23e8a842cf030c166494e7c45caf49029dc2e96bc0e6a042debd0",
+    "space_weather_loader.py": "99c8bb48a2d85cfbeda732d3166efb1fcd240aecc2d8eac34fb483e8ea4a8525",
+    "stress_300.py": "5fd32db51cb86950e7483fe5a09f2a88e8d89952685539905b6710e1f95e6a9c",
+    "supermag_loader.py": "251eb385c31db23f6aac7db467a272bc1ac776e420b9b5388d2a05e505ea4fbb"
+  }
+}

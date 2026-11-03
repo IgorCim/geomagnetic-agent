@@ -1,0 +1,25 @@
+{
+  "baseline_head": "eca4cb79f0cbb133d9abc934f0ac08f41aa7540a",
+  "scope": "Read-only QA design checks; not live acceptance",
+  "checks": {
+    "registry_and_cases": 29,
+    "physics_modes": 11,
+    "dsl_functions": 19,
+    "dependency_graph": "acyclic",
+    "local_document_links": "exist",
+    "agent_source_unchanged": true
+  },
+  "ey_probe": {
+    "V_km_s": 400,
+    "Bz_nT": -5,
+    "actual_labelled_mV_m": [
+      -2000.0,
+      -2000.0
+    ],
+    "same_sign_SI_product_mV_m": -2.0,
+    "standard_OMNI_Ey_mV_m": 2,
+    "verdict": "FAIL_SCALE; SIGN_CONTRACT_REVIEW_REQUIRED",
+    "reference": "https://omniweb.gsfc.nasa.gov/html/ow_min_data.html"
+  },
+  "acceptance_status": "NOT_RUN"
+}
