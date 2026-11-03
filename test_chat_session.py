@@ -295,6 +295,71 @@ def test_identical_retried_statistics_are_not_repeated_in_answer():
     assert result["ok"] and result["text"].count("- X:") == 1
 
 
+@pytest.mark.parametrize("component", ["X", "Y", "Z", "F", "H", "D", "I"])
+def test_ui_fully_bound_statistics_executes_once_without_model(component, monkeypatch):
+    store = ac.FrameStore()
+    h = seed(store, "bou")
+    def forbidden(*a, **k):
+        raise AssertionError("Bound statistics must not ask the model to reselect its arguments")
+    monkeypatch.setattr(ga, "run_agent", forbidden)
+    original, calls = ac.HANDLERS["get_statistics"], []
+    def counted(args, session):
+        calls.append(dict(args))
+        return original(args, session)
+    monkeypatch.setitem(ac.HANDLERS, "get_statistics", counted)
+    result = ga.make_chat_handler(object())(
+        f"Получи инструментом статистику {component} для BOU за 2024-09-10, без повторной загрузки.", [], [], store)
+    text = result[0][-1]["content"]
+    assert len(calls) == 1 and calls[0] == {"df_descriptor": h, "components": [component]}
+    assert f"- {component}:" in text and "Не удалось" not in text
+    assert "get_statistics" in ga.split_result(result)[2]
+
+
+def test_bound_statistics_failure_is_terminal_without_model_retry(monkeypatch):
+    store = ac.FrameStore()
+    h = seed(store, "bou")
+    store.put(h, store.get(h).drop(columns=["F"]))
+    monkeypatch.setattr(ga, "run_agent", lambda *a, **k: pytest.fail("No LLM retry after a real tool error"))
+    result = ga.make_chat_handler(object())("Получи статистику F для BOU за 2024-09-10", [], [], store)
+    assert "unknown_component" in result[0][-1]["content"]
+
+
+@pytest.mark.parametrize("question", [
+    "Получи статистику X для BOU за 2024-09-11",  # table absent
+    "Получи статистику X для BOU за 2024-09-10 и построй график",  # multiple operations
+    "Получи статистику X для BOU за 2024-09-10 после 12:00",  # time slice
+    "Получи статистику X для BOU за 2024-09-10 в 12:00",  # timestamp
+    "Получи медиану X для BOU за 2024-09-10, округли до 4 знаков",  # formatting
+    "Получи медиану X для BOU за 2024-09-10 с точностью 0.001",  # precision
+])
+def test_statistics_fast_path_declines_incomplete_or_extended_requests(question):
+    store = ac.FrameStore()
+    seed(store, "bou")
+    plan = SessionMemory().prepare(question, store)
+    assert plan.bound_statistics_args(store) is None
+
+
+def test_bound_statistics_respects_explicit_handle_and_does_not_mutate_frame():
+    store = ac.FrameStore()
+    h = seed(store, "bou")
+    before = store.get(h).copy(deep=True)
+    plan = SessionMemory().prepare(f"Получи медиану Y из {h}, без новой загрузки", store)
+    result = ac.run_bound_statistics(plan, store)
+    assert result["ok"] and result["rounds"] == 0 and result["stop_reason"] == "bound_statistics"
+    assert result["tool_calls"][0]["arguments"]["df_descriptor"] == h
+    assert result["tool_calls"][0]["statistics"]["Y"]["median"] == 4.0
+    pd.testing.assert_frame_equal(before, store.get(h))
+
+
+def test_bound_statistics_does_not_accept_empty_success_payload(monkeypatch):
+    store = ac.FrameStore()
+    h = seed(store, "bou")
+    plan = SessionMemory().prepare(f"Получи статистику Y из {h}", store)
+    monkeypatch.setitem(ac.HANDLERS, "get_statistics", lambda *a: ({"ok": True}, "placeholder"))
+    result = ac.run_bound_statistics(plan, store)
+    assert not result["ok"] and result["error"] == "request_incomplete"
+
+
 def test_lost_anchors_do_not_leak_between_browser_sessions(monkeypatch):
     def forbidden(*a, **k):
         raise AssertionError("An ambiguous first day must not reach the LLM")

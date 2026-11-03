@@ -85,6 +85,7 @@ __all__ = [
     "parse_tool_calls",
     "code_revision",
     "run_agent",
+    "run_bound_statistics",
     "run_agent_with_planner",
     "select_tools_for_task",
     "select_tools_for_query",
@@ -8312,6 +8313,12 @@ def _planned_task_result(
     if note:
         entry["note"] = note
     if isinstance(payload, dict):
+        if ok and name == "get_statistics":
+            handle = str(args.get("df_descriptor") or "").lower()
+            canonical = store.aliases().get(handle, handle)
+            entry["resolved_handles"] = [canonical] if store.get(canonical) is not None else []
+            entry["statistics"] = {k: v for k, v in payload.items()
+                                   if isinstance(v, dict) and "median" in v and "count" in v}
         for key in ("error", "message", "hint", "available", "detail"):
             value = payload.get(key)
             if value is not None:
@@ -8372,6 +8379,33 @@ def _planned_task_result(
         "rounds": 0,
         "stop_reason": "planned_call",
     }
+
+
+def run_bound_statistics(request: Any, store: FrameStore, verbose: bool = False) -> dict[str, Any] | None:
+    """Execute a verified, fully specified statistics task using the planner executor.
+
+    None means the request needs the normal model path. A returned failure is
+    terminal; it must not be retried with a different table or component.
+    """
+    args = request.bound_statistics_args(store)
+    if args is None:
+        return None
+    from agent_state import TaskStep
+    task = TaskStep(id="bound_statistics", description=request.query,
+                    tool_name="get_statistics", tool_args=args)
+    result = _planned_task_result(task, store, verbose=verbose)
+    if result is None:
+        return None
+    log = result["tool_calls"]
+    result["stop_reason"] = "bound_statistics"
+    result["text"] = _with_tool_failures(request.facts(log, store), log)
+    missing = request.missing(log, store)
+    if result["ok"] and missing:
+        result.update(ok=False, error="request_incomplete")
+        result["text"] = "Инструмент не подтвердил запрошенную статистику: " + "; ".join(missing) + ".\n" + result["text"]
+    if not result["ok"]:
+        result.setdefault("error", log[0].get("error") or "statistics_failed")
+    return result
 
 
 def _format_task_plan(task: Any) -> str:

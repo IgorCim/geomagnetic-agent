@@ -1,0 +1,85 @@
+{
+  "scope": "Synthetic figure-object inspection; no model, no remote data, no HTML rendered or written",
+  "plotter_sha256": "ac8a815d82575cd7862b0fdb2fa0288921f1e723942bef7485e69c1286e1c470",
+  "plotter_unchanged": true,
+  "cases": [
+    {
+      "traces": [
+        "X (nT)",
+        "Y (nT)",
+        "Z (nT)"
+      ],
+      "y_axis_references": [
+        "y",
+        "y",
+        "y"
+      ],
+      "independent_y_axes": 1,
+      "call": "plot_components(['X', 'Y', 'Z'])"
+    },
+    {
+      "traces": [
+        "H (nT)",
+        "F (nT)"
+      ],
+      "y_axis_references": [
+        "y",
+        "y"
+      ],
+      "independent_y_axes": 1,
+      "call": "plot_components(['H', 'F'])"
+    },
+    {
+      "traces": [
+        "H (nT)",
+        "D (deg)",
+        "I (deg)"
+      ],
+      "y_axis_references": [
+        "y",
+        "y2",
+        "y3"
+      ],
+      "independent_y_axes": 3,
+      "call": "plot_components(['H', 'D', 'I'])"
+    },
+    {
+      "traces": [
+        "D (deg)",
+        "I (deg)"
+      ],
+      "y_axis_references": [
+        "y",
+        "y"
+      ],
+      "independent_y_axes": 1,
+      "call": "plot_components(['D', 'I'])"
+    },
+    {
+      "traces": [
+        "Dst (nT)",
+        "Kp (dimensionless)"
+      ],
+      "y_axis_references": [
+        "y",
+        "y2"
+      ],
+      "independent_y_axes": 2,
+      "call": "plot_components(['Dst', 'Kp'])"
+    },
+    {
+      "traces": [
+        "H (nT)",
+        "Bz (nT)",
+        "V (km/s)"
+      ],
+      "y_axis_references": [
+        "y",
+        "y2",
+        "y3"
+      ],
+      "independent_y_axes": 3,
+      "call": "plot_space_weather_comparison(H, Bz/V)"
+    }
+  ]
+}

@@ -42,6 +42,32 @@ class Request:
     wants_derived: bool = False
     routine: bool = False
 
+    def bound_statistics_args(self, store: Any) -> dict | None:
+        """Resolve only a simple complete request against existing tables.
+
+        Execution still goes through get_statistics. No network, new frame,
+        model-generated argument, or stored answer is used here.
+        """
+        if (not self.routine or not self.wants_stats or not self.components
+                or self.wants_plot or self.wants_derived or self.clarification):
+            return None
+        if len(set(DATES.findall(self.query))) > 1:
+            return None
+        if re.search(r"\b\d{1,2}:\d{2}|час|минут|интервал|окн|фильтр|после|перед|между|услов|округл|знак|точност|precision|round|digits|decimal|экспорт|сохран|обнов|\b(?:csv|json|fetch|download)\b", self.query, re.I):
+            return None
+        if re.search(r"\b(?:загрузи|загрузить|скачай|скачать)\b", self.query, re.I):
+            return None
+        candidates = [self.handle] if self.handle else [self.target]
+        if not self.handle and self.station and self.date:
+            candidates.extend((f"raw:{self.station}:{self.date}", f"derived:{self.station}:{self.date}"))
+        for handle in dict.fromkeys(h for h in candidates if h):
+            if store.get(handle) is None:
+                continue
+            args = {"df_descriptor": handle, "components": list(self.components)}
+            if self.check_call("get_statistics", args, store) is None:
+                return args
+        return None
+
     def check_call(self, name: str, args: dict, store: Any) -> str | None:
         if name == "get_statistics" and self.components:
             actual = args.get("components")

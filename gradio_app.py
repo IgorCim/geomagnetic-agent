@@ -740,14 +740,16 @@ def make_chat_handler(brain: Any):
                     verbose=VERBOSE,
                 )
             else:
-                result = run_agent(
-                    question_with_context,
-                    brain=brain,
-                    store=store,
-                    verbose=VERBOSE,
-                    routing_query=plan.query,
-                    contract=plan,
-                )
+                result = core.run_bound_statistics(plan, store, verbose=VERBOSE)
+                if result is None:
+                    result = run_agent(
+                        question_with_context,
+                        brain=brain,
+                        store=store,
+                        verbose=VERBOSE,
+                        routing_query=plan.query,
+                        contract=plan,
+                    )
             if isinstance(result, dict):
                 store.conversation.record(result.get("tool_calls") or [], store)
         except Exception as exc:  # one bad turn must not kill the server
