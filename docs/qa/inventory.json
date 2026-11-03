@@ -1,6 +1,6 @@
 {
-  "generated_utc": "2026-11-03T13:11:41.185301+00:00",
-  "head": "7f4b608aec94df5c83cab51733d3f8fe8ca062f4",
+  "generated_utc": "2026-11-03T16:14:04.157618+00:00",
+  "head": "6e05057c514123a1f13cba444f3a162b9d1a3bbb",
   "head_note": "Parent checkout revision; source_sha256 identifies inspected working-tree files, including pending edits.",
   "scope": "Read-only test-design inventory. Does not execute tools, Qwen, external services, plots or qualification tests.",
   "tool_count": 29,
@@ -19,7 +19,7 @@
       "name": "fetch_observatory_data",
       "handler": "_handle_fetch",
       "handler_file": "agent_core.py",
-      "handler_line": 3869,
+      "handler_line": 3875,
       "required": [
         "station_code",
         "start_date",
@@ -65,7 +65,7 @@
       "name": "create_project",
       "handler": "_handle_create_project",
       "handler_file": "agent_core.py",
-      "handler_line": 5062,
+      "handler_line": 5076,
       "required": [
         "name"
       ],
@@ -81,7 +81,7 @@
       "name": "fetch_many",
       "handler": "_handle_fetch_many",
       "handler_file": "agent_core.py",
-      "handler_line": 5079,
+      "handler_line": 5093,
       "required": [
         "stations",
         "start_date",
@@ -138,7 +138,7 @@
       "name": "list_projects",
       "handler": "_handle_list_projects",
       "handler_file": "agent_core.py",
-      "handler_line": 6267,
+      "handler_line": 6281,
       "required": [],
       "parameters": {}
     },
@@ -147,7 +147,7 @@
       "name": "export_project",
       "handler": "_handle_export_project",
       "handler_file": "agent_core.py",
-      "handler_line": 5202,
+      "handler_line": 5216,
       "required": [],
       "parameters": {
         "name": {
@@ -193,7 +193,7 @@
       "name": "create_task_matrix",
       "handler": "_handle_create_task_matrix",
       "handler_file": "agent_core.py",
-      "handler_line": 5529,
+      "handler_line": 5543,
       "required": [
         "events",
         "stations",
@@ -243,7 +243,7 @@
       "name": "process_matrix_batch",
       "handler": "_handle_process_matrix_batch",
       "handler_file": "agent_core.py",
-      "handler_line": 5771,
+      "handler_line": 5785,
       "required": [
         "matrix_path"
       ],
@@ -272,7 +272,7 @@
       "name": "calculate_derived_components",
       "handler": "_handle_derive",
       "handler_file": "agent_core.py",
-      "handler_line": 4518,
+      "handler_line": 4524,
       "required": [
         "df_descriptor"
       ],
@@ -300,7 +300,7 @@
       "name": "get_statistics",
       "handler": "_handle_stats",
       "handler_file": "agent_core.py",
-      "handler_line": 4575,
+      "handler_line": 4585,
       "required": [
         "df_descriptor"
       ],
@@ -327,7 +327,7 @@
       "name": "detect_anomalies",
       "handler": "_handle_anomalies",
       "handler_file": "agent_core.py",
-      "handler_line": 4596,
+      "handler_line": 4606,
       "required": [
         "df_descriptor"
       ],
@@ -359,7 +359,7 @@
       "name": "calculate_derived_math",
       "handler": "_handle_derived_math",
       "handler_file": "agent_core.py",
-      "handler_line": 4622,
+      "handler_line": 4633,
       "required": [
         "df_descriptor",
         "metric"
@@ -406,7 +406,7 @@
       "name": "calculate_baseline",
       "handler": "_handle_baseline",
       "handler_file": "agent_core.py",
-      "handler_line": 4757,
+      "handler_line": 4771,
       "required": [
         "df_descriptor"
       ],
@@ -449,7 +449,7 @@
       "name": "evaluate_custom_formula",
       "handler": "_handle_custom_formula",
       "handler_file": "agent_core.py",
-      "handler_line": 4827,
+      "handler_line": 4841,
       "required": [
         "df_descriptor",
         "formula"
@@ -470,7 +470,7 @@
       "name": "plot_components",
       "handler": "_handle_plot_components",
       "handler_file": "agent_core.py",
-      "handler_line": 4911,
+      "handler_line": 4925,
       "required": [
         "df_descriptor",
         "components"
@@ -514,7 +514,7 @@
       "name": "plot_comparison",
       "handler": "_handle_plot_comparison",
       "handler_file": "agent_core.py",
-      "handler_line": 4964,
+      "handler_line": 4978,
       "required": [
         "df1",
         "df2",
@@ -560,7 +560,7 @@
       "name": "get_station_geomagnetic_coords",
       "handler": "_handle_get_station_geomagnetic_coords",
       "handler_file": "agent_core.py",
-      "handler_line": 6292,
+      "handler_line": 6306,
       "required": [
         "station_code"
       ],
@@ -576,7 +576,7 @@
       "name": "calculate_mlt",
       "handler": "_handle_calculate_mlt",
       "handler_file": "agent_core.py",
-      "handler_line": 6326,
+      "handler_line": 6340,
       "required": [
         "station_code",
         "timestamp"
@@ -597,7 +597,7 @@
       "name": "group_stations_by_mlt",
       "handler": "_handle_group_stations_by_mlt",
       "handler_file": "agent_core.py",
-      "handler_line": 6340,
+      "handler_line": 6354,
       "required": [
         "stations",
         "timestamp"
@@ -625,7 +625,7 @@
       "name": "calculate_local_time",
       "handler": "_handle_calculate_local_time",
       "handler_file": "agent_core.py",
-      "handler_line": 6364,
+      "handler_line": 6378,
       "required": [
         "station_code",
         "timestamp"
@@ -646,7 +646,7 @@
       "name": "apply_physics_formula",
       "handler": "_handle_apply_physics_formula",
       "handler_file": "agent_core.py",
-      "handler_line": 6788,
+      "handler_line": 6802,
       "required": [
         "df_descriptor",
         "metric"
@@ -692,7 +692,7 @@
       "name": "calculate_eej_index",
       "handler": "_handle_calculate_eej_index",
       "handler_file": "agent_core.py",
-      "handler_line": 7015,
+      "handler_line": 7042,
       "required": [
         "equatorial_station",
         "reference_station",
@@ -722,7 +722,7 @@
       "name": "plot_overlay",
       "handler": "_handle_plot_overlay",
       "handler_file": "agent_core.py",
-      "handler_line": 7124,
+      "handler_line": 7151,
       "required": [
         "stations",
         "dates"
@@ -793,7 +793,7 @@
       "name": "plot_space_weather_comparison",
       "handler": "_handle_plot_space_weather_comparison",
       "handler_file": "agent_core.py",
-      "handler_line": 7392,
+      "handler_line": 7419,
       "required": [
         "ground_df_descriptor",
         "solar_wind_df_descriptor",
@@ -835,7 +835,7 @@
       "name": "fetch_solar_wind",
       "handler": "_handle_fetch_solar_wind",
       "handler_file": "agent_core.py",
-      "handler_line": 3999,
+      "handler_line": 4005,
       "required": [
         "start_date"
       ],
@@ -855,7 +855,7 @@
       "name": "fetch_geomagnetic_indices",
       "handler": "_handle_fetch_geomagnetic_indices",
       "handler_file": "agent_core.py",
-      "handler_line": 4031,
+      "handler_line": 4037,
       "required": [
         "start_date"
       ],
@@ -875,7 +875,7 @@
       "name": "get_noaa_space_weather_context",
       "handler": "_handle_noaa_context",
       "handler_file": "agent_core.py",
-      "handler_line": 4110,
+      "handler_line": 4116,
       "required": [
         "query_type"
       ],
@@ -904,7 +904,7 @@
       "name": "fetch_supermag_data",
       "handler": "_handle_fetch_supermag",
       "handler_file": "agent_core.py",
-      "handler_line": 4414,
+      "handler_line": 4420,
       "required": [
         "start_date"
       ],
@@ -936,7 +936,7 @@
       "name": "get_iswa_perturbation_map",
       "handler": "_handle_iswa_perturbation_map",
       "handler_file": "agent_core.py",
-      "handler_line": 4188,
+      "handler_line": 4194,
       "required": [
         "timestamp"
       ],
@@ -967,7 +967,7 @@
       "name": "get_iswa_forecast",
       "handler": "_handle_iswa_forecast",
       "handler_file": "agent_core.py",
-      "handler_line": 4331,
+      "handler_line": 4337,
       "required": [],
       "parameters": {}
     }
@@ -1106,6 +1106,7 @@
       "metric": "eej_index",
       "template": "Вычисли apply_physics_formula metric=eej_index для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
       "offered_tools": [
+        "apply_physics_formula",
         "calculate_eej_index",
         "fetch_observatory_data"
       ],
@@ -1239,807 +1240,807 @@
         },
         {
           "name": "select_tools_for_query",
-          "line": 1962,
+          "line": 1965,
           "private": false
         },
         {
           "name": "explain_tool_selection",
-          "line": 1987,
+          "line": 1990,
           "private": false
         },
         {
           "name": "estimate_tokens",
-          "line": 1998,
+          "line": 2001,
           "private": false
         },
         {
           "name": "prompt_budget",
-          "line": 2009,
+          "line": 2012,
           "private": false
         },
         {
           "name": "_trim_history",
-          "line": 2439,
+          "line": 2445,
           "private": true
         },
         {
           "name": "_self_correction_hint",
-          "line": 2571,
+          "line": 2577,
           "private": true
         },
         {
           "name": "_compact_tool_message",
-          "line": 2613,
+          "line": 2619,
           "private": true
         },
         {
           "name": "build_dynamic_prompt",
-          "line": 2688,
+          "line": 2694,
           "private": false
         },
         {
           "name": "_shard_sort_key",
-          "line": 2717,
+          "line": 2723,
           "private": true
         },
         {
           "name": "_first_shard",
-          "line": 2722,
+          "line": 2728,
           "private": true
         },
         {
           "name": "_gguf_files",
-          "line": 2727,
+          "line": 2733,
           "private": true
         },
         {
           "name": "_entry_shard",
-          "line": 2731,
+          "line": 2737,
           "private": true
         },
         {
           "name": "_purge_incomplete",
-          "line": 2745,
+          "line": 2751,
           "private": true
         },
         {
           "name": "model_is_downloaded",
-          "line": 2758,
+          "line": 2764,
           "private": false
         },
         {
           "name": "download_model",
-          "line": 2763,
+          "line": 2769,
           "private": false
         },
         {
           "name": "shutil_copyfileobj",
-          "line": 2868,
+          "line": 2874,
           "private": false
         },
         {
           "name": "_resolve_gpu_layers",
-          "line": 2943,
+          "line": 2949,
           "private": true
         },
         {
           "name": "load_brain",
-          "line": 2962,
+          "line": 2968,
           "private": false
         },
         {
           "name": "_clean",
-          "line": 3040,
-          "private": true
-        },
-        {
-          "name": "_coerce_arguments",
           "line": 3046,
           "private": true
         },
         {
+          "name": "_coerce_arguments",
+          "line": 3052,
+          "private": true
+        },
+        {
           "name": "_reply_text",
-          "line": 3064,
+          "line": 3070,
           "private": true
         },
         {
           "name": "_iter_json_spans",
-          "line": 3079,
+          "line": 3085,
           "private": true
         },
         {
           "name": "_straighten_quotes",
-          "line": 3118,
+          "line": 3124,
           "private": true
         },
         {
           "name": "_single_quotes_to_double",
-          "line": 3129,
+          "line": 3135,
           "private": true
         },
         {
           "name": "_drop_trailing_commas",
-          "line": 3158,
+          "line": 3164,
           "private": true
         },
         {
           "name": "_unwrap_doubled_braces",
-          "line": 3188,
+          "line": 3194,
           "private": true
         },
         {
           "name": "_load_bases",
-          "line": 3221,
-          "private": true
-        },
-        {
-          "name": "_try_loads",
           "line": 3227,
           "private": true
         },
         {
+          "name": "_try_loads",
+          "line": 3233,
+          "private": true
+        },
+        {
           "name": "_json_payloads",
-          "line": 3252,
+          "line": 3258,
           "private": true
         },
         {
           "name": "_normalize_call",
-          "line": 3286,
+          "line": 3292,
           "private": true
         },
         {
           "name": "_calls_from_json",
-          "line": 3320,
+          "line": 3326,
           "private": true
         },
         {
           "name": "_api_envelope",
-          "line": 3340,
+          "line": 3346,
           "private": true
         },
         {
           "name": "_why_unparsed",
-          "line": 3402,
+          "line": 3408,
           "private": true
         },
         {
           "name": "parse_tool_calls",
-          "line": 3414,
+          "line": 3420,
           "private": false
         },
         {
           "name": "_summarise_frame",
-          "line": 3648,
+          "line": 3654,
           "private": true
         },
         {
           "name": "_offline_frame",
-          "line": 3683,
+          "line": 3689,
           "private": true
         },
         {
           "name": "_normalise_frame_alias",
-          "line": 3694,
+          "line": 3700,
           "private": true
         },
         {
           "name": "_accepts_legacy_df",
-          "line": 3740,
+          "line": 3746,
           "private": true
         },
         {
           "name": "_slot_for_frame",
-          "line": 3756,
+          "line": 3762,
           "private": true
         },
         {
           "name": "_first_present",
-          "line": 3766,
+          "line": 3772,
           "private": true
         },
         {
           "name": "_is_derived_handle",
-          "line": 3796,
+          "line": 3802,
           "private": true
         },
         {
           "name": "_auto_derive",
-          "line": 3801,
+          "line": 3807,
           "private": true
         },
         {
           "name": "_resolve_plottable",
-          "line": 3847,
+          "line": 3853,
           "private": true
         },
         {
           "name": "_handle_fetch",
-          "line": 3869,
+          "line": 3875,
           "private": true
         },
         {
           "name": "_offline_solar_wind",
-          "line": 3908,
+          "line": 3914,
           "private": true
         },
         {
           "name": "_offline_indices",
-          "line": 3937,
+          "line": 3943,
           "private": true
         },
         {
           "name": "_offline_noaa",
-          "line": 3957,
+          "line": 3963,
           "private": true
         },
         {
           "name": "_handle_fetch_solar_wind",
-          "line": 3999,
+          "line": 4005,
           "private": true
         },
         {
           "name": "_handle_fetch_geomagnetic_indices",
-          "line": 4031,
+          "line": 4037,
           "private": true
         },
         {
           "name": "_summarize_noaa",
-          "line": 4070,
+          "line": 4076,
           "private": true
         },
         {
           "name": "_handle_noaa_context",
-          "line": 4110,
+          "line": 4116,
           "private": true
         },
         {
           "name": "_offline_iswa_map",
-          "line": 4156,
+          "line": 4162,
           "private": true
         },
         {
           "name": "_handle_iswa_perturbation_map",
-          "line": 4188,
+          "line": 4194,
           "private": true
         },
         {
           "name": "_offline_iswa_forecast",
-          "line": 4235,
+          "line": 4241,
           "private": true
         },
         {
           "name": "_summarize_iswa_forecast",
-          "line": 4303,
+          "line": 4309,
           "private": true
         },
         {
           "name": "_handle_iswa_forecast",
-          "line": 4331,
+          "line": 4337,
           "private": true
         },
         {
           "name": "_offline_supermag",
-          "line": 4367,
+          "line": 4373,
           "private": true
         },
         {
           "name": "_handle_fetch_supermag",
-          "line": 4414,
+          "line": 4420,
           "private": true
         },
         {
           "name": "_frame_handle",
-          "line": 4496,
+          "line": 4502,
           "private": true
         },
         {
           "name": "_handle_derive",
-          "line": 4519,
+          "line": 4525,
           "private": true
         },
         {
           "name": "_compact_statistics_note",
-          "line": 4540,
+          "line": 4550,
           "private": true
         },
         {
           "name": "_handle_stats",
-          "line": 4576,
+          "line": 4586,
           "private": true
         },
         {
           "name": "_handle_anomalies",
-          "line": 4597,
+          "line": 4607,
           "private": true
         },
         {
           "name": "_handle_derived_math",
-          "line": 4623,
+          "line": 4634,
           "private": true
         },
         {
           "name": "_handle_baseline",
-          "line": 4758,
+          "line": 4772,
           "private": true
         },
         {
           "name": "_handle_custom_formula",
-          "line": 4828,
+          "line": 4842,
           "private": true
         },
         {
           "name": "_file_into_project",
-          "line": 4889,
+          "line": 4903,
           "private": true
         },
         {
           "name": "_handle_plot_components",
-          "line": 4912,
+          "line": 4926,
           "private": true
         },
         {
           "name": "_handle_plot_comparison",
-          "line": 4964,
+          "line": 4978,
           "private": true
         },
         {
           "name": "_date_range",
-          "line": 5028,
+          "line": 5042,
           "private": true
         },
         {
           "name": "_handle_create_project",
-          "line": 5062,
+          "line": 5076,
           "private": true
         },
         {
           "name": "_handle_fetch_many",
-          "line": 5079,
+          "line": 5093,
           "private": true
         },
         {
           "name": "_handle_export_project",
-          "line": 5202,
+          "line": 5216,
           "private": true
         },
         {
           "name": "_matrix_dir",
-          "line": 5243,
+          "line": 5257,
           "private": true
         },
         {
           "name": "_matrix_path",
-          "line": 5248,
-          "private": true
-        },
-        {
-          "name": "_matrix_path_is_allowed",
           "line": 5262,
           "private": true
         },
         {
+          "name": "_matrix_path_is_allowed",
+          "line": 5276,
+          "private": true
+        },
+        {
           "name": "_normalise_matrix_events",
-          "line": 5281,
+          "line": 5295,
           "private": true
         },
         {
           "name": "_normalise_matrix_stations",
-          "line": 5297,
+          "line": 5311,
           "private": true
         },
         {
           "name": "_normalise_matrix_actions",
-          "line": 5307,
+          "line": 5321,
           "private": true
         },
         {
           "name": "_matrix_task_args",
-          "line": 5325,
+          "line": 5339,
           "private": true
         },
         {
           "name": "_ensure_matrix_fetch",
-          "line": 5379,
+          "line": 5393,
           "private": true
         },
         {
           "name": "_ensure_matrix_derived",
-          "line": 5403,
+          "line": 5417,
           "private": true
         },
         {
           "name": "_execute_matrix_task",
-          "line": 5432,
+          "line": 5446,
           "private": true
         },
         {
           "name": "_handle_create_task_matrix",
-          "line": 5529,
+          "line": 5543,
           "private": true
         },
         {
           "name": "_matrix_station_class",
-          "line": 5744,
+          "line": 5758,
           "private": true
         },
         {
           "name": "_handle_process_matrix_batch",
-          "line": 5771,
+          "line": 5785,
           "private": true
         },
         {
           "name": "_factor_plan_for_matrix",
-          "line": 6070,
+          "line": 6084,
           "private": true
         },
         {
           "name": "_run_matrix_job",
-          "line": 6159,
+          "line": 6173,
           "private": true
         },
         {
           "name": "_handle_list_projects",
-          "line": 6267,
+          "line": 6281,
           "private": true
         },
         {
           "name": "_handle_get_station_geomagnetic_coords",
-          "line": 6292,
+          "line": 6306,
           "private": true
         },
         {
           "name": "_handle_calculate_mlt",
-          "line": 6326,
-          "private": true
-        },
-        {
-          "name": "_handle_group_stations_by_mlt",
           "line": 6340,
           "private": true
         },
         {
+          "name": "_handle_group_stations_by_mlt",
+          "line": 6354,
+          "private": true
+        },
+        {
           "name": "_handle_calculate_local_time",
-          "line": 6364,
+          "line": 6378,
           "private": true
         },
         {
           "name": "_station_registry_coords",
-          "line": 6411,
+          "line": 6425,
           "private": true
         },
         {
           "name": "_strict_argument_check",
-          "line": 6482,
+          "line": 6496,
           "private": true
         },
         {
           "name": "_frame_kind",
-          "line": 6571,
+          "line": 6585,
           "private": true
         },
         {
           "name": "_data_type_error",
-          "line": 6583,
+          "line": 6597,
           "private": true
         },
         {
           "name": "_validate_data_type",
-          "line": 6605,
+          "line": 6619,
           "private": true
         },
         {
           "name": "_resolve_solar_wind_frame",
-          "line": 6694,
+          "line": 6708,
           "private": true
         },
         {
           "name": "_resolve_reference_frame",
-          "line": 6761,
+          "line": 6775,
           "private": true
         },
         {
           "name": "_handle_apply_physics_formula",
-          "line": 6789,
+          "line": 6803,
           "private": true
         },
         {
           "name": "_physics_note",
-          "line": 6907,
+          "line": 6934,
           "private": true
         },
         {
           "name": "_handle_calculate_eej_index",
-          "line": 7015,
+          "line": 7042,
           "private": true
         },
         {
           "name": "_overlay_component",
-          "line": 7094,
+          "line": 7121,
           "private": true
         },
         {
           "name": "_handle_plot_overlay",
-          "line": 7124,
+          "line": 7151,
           "private": true
         },
         {
           "name": "_resolve_column_name",
-          "line": 7341,
+          "line": 7368,
           "private": true
         },
         {
           "name": "_merge_solar_wind_columns",
-          "line": 7352,
+          "line": 7379,
           "private": true
         },
         {
           "name": "_handle_plot_space_weather_comparison",
-          "line": 7392,
+          "line": 7419,
           "private": true
         },
         {
           "name": "_sort_stations_north_first",
-          "line": 7552,
+          "line": 7579,
           "private": true
         },
         {
           "name": "_overlay_time_shift",
-          "line": 7569,
+          "line": 7596,
           "private": true
         },
         {
           "name": "code_revision",
-          "line": 7631,
+          "line": 7658,
           "private": false
         },
         {
           "name": "run_agent",
-          "line": 7662,
+          "line": 7689,
           "private": false
         },
         {
           "name": "_planned_task_result",
-          "line": 8273,
+          "line": 8304,
           "private": true
         },
         {
           "name": "run_bound_statistics",
-          "line": 8387,
+          "line": 8421,
           "private": false
         },
         {
           "name": "_format_task_plan",
-          "line": 8414,
+          "line": 8448,
           "private": true
         },
         {
           "name": "_strip_child_plot_tally",
-          "line": 8426,
+          "line": 8460,
           "private": true
         },
         {
           "name": "run_agent_with_planner",
-          "line": 8436,
+          "line": 8470,
           "private": false
         },
         {
           "name": "_unique",
-          "line": 8650,
+          "line": 8684,
           "private": true
         },
         {
           "name": "_attempted_plot_name",
-          "line": 8661,
+          "line": 8695,
           "private": true
         },
         {
           "name": "_with_plot_tally",
-          "line": 8680,
+          "line": 8714,
           "private": true
         },
         {
           "name": "_failure_entries",
-          "line": 8732,
+          "line": 8766,
           "private": true
         },
         {
           "name": "find_nt_values",
-          "line": 8760,
+          "line": 8794,
           "private": false
         },
         {
           "name": "run_recovered",
-          "line": 8788,
+          "line": 8822,
           "private": false
         },
         {
           "name": "_with_tool_failures",
-          "line": 8815,
+          "line": 8849,
           "private": true
         },
         {
           "name": "_short",
-          "line": 8868,
+          "line": 8902,
           "private": true
         },
         {
           "name": "_demo_script",
-          "line": 8879,
+          "line": 8913,
           "private": true
         },
         {
           "name": "_unwrap",
-          "line": 8909,
+          "line": 8943,
           "private": true
         },
         {
           "name": "_main",
-          "line": 8920,
+          "line": 8954,
           "private": true
         },
         {
           "name": "__init__",
-          "line": 2121,
+          "line": 2127,
           "private": true
         },
         {
           "name": "reset",
-          "line": 2140,
+          "line": 2146,
           "private": false
         },
         {
           "name": "update_handle",
-          "line": 2151,
+          "line": 2157,
           "private": false
         },
         {
           "name": "register_handle",
-          "line": 2158,
+          "line": 2164,
           "private": false
         },
         {
           "name": "note_elided",
-          "line": 2206,
+          "line": 2212,
           "private": false
         },
         {
           "name": "add_result",
-          "line": 2211,
+          "line": 2217,
           "private": false
         },
         {
           "name": "_describe_handle",
-          "line": 2235,
+          "line": 2241,
           "private": true
         },
         {
           "name": "_displayed_handles",
-          "line": 2265,
+          "line": 2271,
           "private": true
         },
         {
           "name": "add_completed_step",
-          "line": 2279,
+          "line": 2285,
           "private": false
         },
         {
           "name": "add_error",
-          "line": 2288,
+          "line": 2294,
           "private": false
         },
         {
           "name": "add_failure",
-          "line": 2297,
+          "line": 2303,
           "private": false
         },
         {
           "name": "clear_failures",
-          "line": 2313,
+          "line": 2319,
           "private": false
         },
         {
           "name": "repeated_failure",
-          "line": 2317,
+          "line": 2323,
           "private": false
         },
         {
           "name": "to_prompt_injection",
-          "line": 2345,
+          "line": 2351,
           "private": false
         },
         {
           "name": "_next_step",
-          "line": 2401,
+          "line": 2407,
           "private": true
         },
         {
           "name": "say",
-          "line": 2794,
+          "line": 2800,
           "private": false
         },
         {
           "name": "__init__",
-          "line": 2882,
+          "line": 2888,
           "private": true
         },
         {
           "name": "chat",
-          "line": 2894,
+          "line": 2900,
           "private": false
         },
         {
           "name": "__init__",
-          "line": 2932,
+          "line": 2938,
           "private": true
         },
         {
           "name": "chat",
-          "line": 2936,
+          "line": 2942,
           "private": false
         },
         {
           "name": "_try_load",
-          "line": 2988,
+          "line": 2994,
           "private": true
         },
         {
           "name": "_add",
-          "line": 3261,
+          "line": 3267,
           "private": true
         },
         {
           "name": "__init__",
-          "line": 3535,
+          "line": 3541,
           "private": true
         },
         {
           "name": "_normalise",
-          "line": 3552,
+          "line": 3558,
           "private": true
         },
         {
           "name": "put",
-          "line": 3555,
+          "line": 3561,
           "private": false
         },
         {
           "name": "derive_name",
-          "line": 3566,
+          "line": 3572,
           "private": false
         },
         {
           "name": "get",
-          "line": 3576,
+          "line": 3582,
           "private": false
         },
         {
           "name": "names",
-          "line": 3592,
+          "line": 3598,
           "private": false
         },
         {
           "name": "aliases",
-          "line": 3596,
+          "line": 3602,
           "private": false
         },
         {
           "name": "resolve",
-          "line": 3606,
+          "line": 3612,
           "private": false
         },
         {
           "name": "decorate",
-          "line": 3743,
+          "line": 3749,
           "private": false
         },
         {
           "name": "_fetch",
-          "line": 7045,
+          "line": 7072,
           "private": true
         },
         {
           "name": "wrapper",
-          "line": 3745,
+          "line": 3751,
           "private": false
         }
       ]
@@ -2303,58 +2304,73 @@
       "file": "chat_session.py",
       "definitions": [
         {
+          "name": "capture_calculation",
+          "line": 25,
+          "private": false
+        },
+        {
           "name": "station_in",
-          "line": 21,
+          "line": 35,
+          "private": false
+        },
+        {
+          "name": "should_use_facts",
+          "line": 66,
+          "private": false
+        },
+        {
+          "name": "observe_result",
+          "line": 73,
           "private": false
         },
         {
           "name": "bound_statistics_args",
-          "line": 46,
+          "line": 78,
           "private": false
         },
         {
           "name": "check_call",
-          "line": 72,
+          "line": 104,
           "private": false
         },
         {
           "name": "missing",
-          "line": 119,
+          "line": 180,
           "private": false
         },
         {
           "name": "facts",
-          "line": 141,
+          "line": 205,
           "private": false
         },
         {
           "name": "record",
-          "line": 198,
+          "line": 267,
           "private": false
         },
         {
           "name": "touch",
-          "line": 219,
+          "line": 288,
           "private": false
         },
         {
           "name": "summary_requested",
-          "line": 224,
+          "line": 293,
           "private": false
         },
         {
           "name": "prepare",
-          "line": 232,
+          "line": 301,
           "private": false
         },
         {
           "name": "context",
-          "line": 324,
+          "line": 416,
           "private": false
         },
         {
           "name": "summary",
-          "line": 330,
+          "line": 422,
           "private": false
         }
       ]
@@ -2933,13 +2949,18 @@
           "private": true
         },
         {
-          "name": "build_demo",
+          "name": "_project_archives",
           "line": 869,
+          "private": true
+        },
+        {
+          "name": "build_demo",
+          "line": 896,
           "private": false
         },
         {
           "name": "main",
-          "line": 1015,
+          "line": 1043,
           "private": false
         },
         {
@@ -2954,7 +2975,7 @@
         },
         {
           "name": "submit",
-          "line": 964,
+          "line": 992,
           "private": false
         }
       ]
@@ -3479,32 +3500,32 @@
         },
         {
           "name": "detect_ssc",
-          "line": 947,
+          "line": 945,
           "private": false
         },
         {
           "name": "calculate_burton_coupling",
-          "line": 1105,
+          "line": 1103,
           "private": false
         },
         {
           "name": "calculate_akasofu_epsilon",
-          "line": 1248,
+          "line": 1246,
           "private": false
         },
         {
           "name": "calculate_peak_dhdt",
-          "line": 1371,
+          "line": 1369,
           "private": false
         },
         {
           "name": "detect_substorm_onset",
-          "line": 1442,
+          "line": 1440,
           "private": false
         },
         {
           "name": "calculate_eej_index",
-          "line": 1534,
+          "line": 1532,
           "private": false
         },
         {
@@ -3534,32 +3555,32 @@
         },
         {
           "name": "_reduce",
-          "line": 924,
+          "line": 922,
           "private": true
         },
         {
           "name": "_step_nT",
-          "line": 1060,
+          "line": 1058,
           "private": true
         },
         {
           "name": "_column",
-          "line": 1152,
+          "line": 1150,
           "private": true
         },
         {
           "name": "_mean",
-          "line": 1161,
+          "line": 1159,
           "private": true
         },
         {
           "name": "_column",
-          "line": 1287,
+          "line": 1285,
           "private": true
         },
         {
           "name": "_mean",
-          "line": 1296,
+          "line": 1294,
           "private": true
         }
       ]
@@ -4186,22 +4207,22 @@
     }
   ],
   "source_sha256": {
-    "agent_core.py": "ffe01381ee449ad90f3efdadc2d25fc83671c0769f138da7178971ff5a0649bf",
+    "agent_core.py": "7e06a01486c78431bbf9748906b805d02e969020a30d8dd9adafcf4eba0cacca",
     "agent_planner.py": "e418ab1ae4330a860d9e1545a2ad701a0e7c721a51a72a4eecc49c3692f752b0",
     "agent_state.py": "9f74b4562e9450f9e304870d16e21b61cc78ee61d8b2b3d0be59792a2e4dbf2a",
     "chart_naming.py": "9946b1c34d37e45631426675f1b0f3bf0947a0e668db2e05cd6423754c970658",
-    "chat_session.py": "49f03904f605f2e8571bbeaa9bd7ff4dce27b209164e9498499e5adacde8b4a0",
+    "chat_session.py": "54ce1862f182401339432fcd00b2c2dcf98a3588c764ddac2315896b5914a64c",
     "demo_make_50.py": "4df314d4741b0b2716b63f0f591e4a0fc234eaddd96c67d911d0136bdca3873c",
     "geomag_analyzer.py": "c24e7f6d3a594a15d99c497d98d1a0b3fa87abebd56f464443577952eec523f1",
     "geomag_coords.py": "25e1910914471f4f235cda23f5aea916eec7f01a45fa946ef540c00aa63cfc8e",
     "geomag_math.py": "52fbb94f99ce09646f5505ff5f3b4700aa2fbe3b5b89724c221a1d6ed022d633",
     "geomag_plotter.py": "ac8a815d82575cd7862b0fdb2fa0288921f1e723942bef7485e69c1286e1c470",
-    "gradio_app.py": "e74c40c11d0f5fcb17e19fef3561eb398c1300a3c94eeb0c83d4c4895d62d962",
+    "gradio_app.py": "00b762fa75bb5038caf5e2131ab4126295fcda4d5d73bbd2fd28aa7460d51fdc",
     "intermagnet_loader.py": "6bfe845ec9e4da7547a53e05a2af3cdbcc8333aad9d00ae0557364b92f706b45",
     "iswa_loader.py": "0d83a4c1a05711a0fd7dc727cb58cc2b6a536ee7fd52c53c025171c3916b3981",
     "noaa_swpc_loader.py": "03581d686c2f6585c46ecc513905e283f64a78d7149b8e171751195b43b6236d",
     "peak_storm_2024.py": "b42652a4456e0d6ecc733437f63d066f344274cc68d20ed9bdc03b29902d03f4",
-    "physics_engine.py": "22bb1f862f6fadaa482a9d95c612f7d09e2c6200a8c16b3700045f201929d231",
+    "physics_engine.py": "0cd841c4307ae7959b667448c315c96262fce67e7f98cac4fa0965c75b6f404d",
     "project_store.py": "d4a3f9a17c5465db255906aac39db430a136a9ba49b52cc8cc14dc6c51780115",
     "scenarios_e2e.py": "f00d47ad4aa23e8a842cf030c166494e7c45caf49029dc2e96bc0e6a042debd0",
     "space_weather_loader.py": "99c8bb48a2d85cfbeda732d3166efb1fcd240aecc2d8eac34fb483e8ea4a8525",

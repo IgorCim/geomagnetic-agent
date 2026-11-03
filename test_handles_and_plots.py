@@ -500,7 +500,8 @@ def test_the_demo_wires_one_plot_slot_per_figure():
     kinds = [c.get("type") for c in components]
     assert "gallery" not in kinds, "no Gallery may be instantiated"
     assert kinds.count("plot") >= ga.MAX_PLOTS_IN_PANEL
-    assert kinds.count("file") == 1, "gr.Files must survive"
+    assert kinds.count("file") == 2, "Chart files and project ZIP files must both be downloadable"
+    assert any('Готовые ZIP' in str(c.get('props', {}).get('label', '')) for c in components)
     assert kinds.count("chatbot") == 1
 
 

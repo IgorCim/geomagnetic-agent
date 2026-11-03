@@ -54,6 +54,14 @@ def test_calculate_coupling_function_computes_ey():
     res = pe.calculate_coupling_function(df, sw)
     assert not pe.is_error(res)
     assert 'E_y' in res.columns
+    np.testing.assert_allclose(res['E_y'], [2., 2.], atol=1e-12)
+
+
+def test_omni_ey_southward_northward_and_zero_control_points():
+    ground = pd.DataFrame({'H': [5., 5., 5.]})
+    wind = pd.DataFrame({'V': [400., 400., 400.], 'Bz': [-5., 5., 0.]})
+    result = pe.calculate_coupling_function(ground, wind)
+    np.testing.assert_allclose(result['E_y'], [2., -2., 0.], atol=1e-12)
 
 def test_detect_ssc_finds_jump():
     idx = pd.date_range('2024-09-10 00:00:00', periods=5, freq='min', tz='UTC')
@@ -192,13 +200,13 @@ def test_calculate_coupling_function_vectorizes_ey():
     assert not pe.is_error(res)
     np.testing.assert_allclose(
         res['E_y'].to_numpy(),
-        (aligned['V'] * aligned['Bz']).to_numpy(),
+        [0.4, 0.82, 1.26, 1.72, 2.2],
     )
     info = res.attrs['ey_coupling']
     assert info['mode'] == 'vector'
     assert info['n_samples'] == 5
-    assert abs(info['E_y_mV_m_peak_abs'] - 2200.0) < 1e-9
-    assert abs(info['E_y_mV_m_min'] + 2200.0) < 1e-9
+    assert abs(info['E_y_mV_m_peak_abs'] - 2.2) < 1e-9
+    assert abs(info['E_y_mV_m_min'] - 0.4) < 1e-9
 
 
 def test_calculate_coupling_function_requires_an_aligned_frame():
@@ -217,7 +225,7 @@ def test_calculate_coupling_function_constant_frame_records_scalar_summary():
     assert not pe.is_error(res)
     info = res.attrs['ey_coupling']
     assert info['mode'] == 'scalar'
-    assert abs(info['E_y_mV_m'] + 2000.0) < 1e-9
+    assert abs(info['E_y_mV_m'] - 2.0) < 1e-9
 
 
 # --- Phase 5.2: five more physics metrics -----------------------------------

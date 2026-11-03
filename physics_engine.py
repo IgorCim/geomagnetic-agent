@@ -7,7 +7,7 @@ statistics). This module answers "what do the numbers *mean* physically":
 * the Sq-removed deltas,
 * the GIC proxy (the rate of change of the field),
 * a simplified Dst proxy (the equatorial ring-current depression),
-* the solar-wind coupling function ``E_y = V * B_z``,
+* the OMNI electric field ``E_y = -V * B_z * 1e-3`` mV/m,
 * sudden commencement (SSC) detection.
 
 It is deliberately thin and pure: every function takes a DataFrame and returns
@@ -539,7 +539,7 @@ def align_solar_wind(
 ) -> pd.DataFrame | dict[str, Any]:
     """Resample the solar wind onto the observatory's own minute grid.
 
-    ``E_y = V * B_z`` only means something when the L1 sample and the ground
+    Ey only means something when the L1 sample and the ground
     sample describe the same instant, and the two feeds rarely share a clock:
     OMNI is bow-shock shifted, the magnetometer is not, and either can have
     instrument gaps. This function:
@@ -804,13 +804,11 @@ def align_solar_wind(
 def calculate_coupling_function(
     df: pd.DataFrame, solar_wind: Any = None
 ) -> pd.DataFrame | dict[str, Any]:
-    """Solar-wind coupling function ``E_y = V * B_z``.
+    """OMNI electric field ``E_y = -V * B_z * 1e-3`` in mV/m.
 
-    The interplanetary electric field that drives geomagnetic activity is
-    ``E_y = -V * B_z``; with the common sign convention (``B_z`` southward is
-    negative) a southward field gives a positive coupling, so this module
-    reports ``E_y = V * B_z`` and lets the caller read the sign. Units are the
-    conventional proxied mV/m when ``V`` is in km/s and ``B_z`` in nT.
+    V is speed in km/s, B_z is GSM in nT. The conversion follows NASA OMNI
+    https://omniweb.gsfc.nasa.gov/html/ow_min_data.html (parameter 29).
+    A southward (negative) B_z gives positive Ey; 400 km/s and -5 nT give 2 mV/m.
 
     This is the one function that cannot be answered from the magnetometer frame
     alone: it needs solar-wind data (L1 / OMNIWeb). The caller passes the aligned
@@ -833,7 +831,7 @@ def calculate_coupling_function(
     if solar_wind is None:
         return _error(
             "missing_solar_wind",
-            "Ey requires solar-wind data: E_y = V * B_z.",
+            "Ey requires solar-wind data: E_y = -V * B_z * 1e-3 mV/m.",
             hint=(
                 "Pass 'solar_wind_handle' with a solar-wind frame handle "
                 "(e.g. 'sw:omni:2024-09-12'); the system aligns it automatically."
@@ -892,7 +890,7 @@ def calculate_coupling_function(
 
     # -- scalar path: a constant frame yields one E_y for the whole frame -----
     if np.unique(v_arr).size == 1 and np.unique(bz_arr).size == 1 and np.isfinite(v_arr[0]) and np.isfinite(bz_arr[0]):
-        ey = float(v_arr[0]) * float(bz_arr[0])
+        ey = -float(v_arr[0]) * float(bz_arr[0]) * 1e-3
         out["E_y"] = ey
         out.attrs["ey_coupling"] = {
             "mode": "scalar",
@@ -903,7 +901,7 @@ def calculate_coupling_function(
         return out
 
     # -- vector path: one E_y per observatory row -----------------------------
-    ey = v_arr * bz_arr
+    ey = -v_arr * bz_arr * 1e-3
     finite = np.isfinite(ey)
     if not finite.any():
         return _error(

@@ -343,12 +343,9 @@
     "prompt_template": "Вычисли apply_physics_formula metric={METRIC} для {GROUND_HANDLE}, используя {WIND_HANDLE} и {REFERENCE_HANDLE}, только когда они нужны этой метрике. Назови единицы и границы применимости.",
     "result_check": "отдельная карточка на каждую из 11 метрик, независимый oracle; Ey сейчас известный FAIL",
     "status": "PLANNED_NOT_EXECUTED",
-    "standalone_router_offers_target_in_template_dry_run": false,
+    "standalone_router_offers_target_in_template_dry_run": true,
     "template_router_tools": [
-      "calculate_derived_components",
-      "fetch_observatory_data",
-      "get_statistics",
-      "plot_components"
+      "apply_physics_formula"
     ],
     "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
   },

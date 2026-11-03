@@ -9,13 +9,27 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 import re
+import math
+import ast
 from typing import Any
 
-HANDLE = re.compile(r"\b(?:raw|derived|anomalies|sw|idx):[a-z0-9_-]+:\d{4}-\d{2}-\d{2}\b", re.I)
+HANDLE = re.compile(r"\b(?:raw|derived|anomalies|anomaly|math|formula|sw|idx):[a-z0-9_-]+:\d{4}-\d{2}-\d{2}\b", re.I)
 DATES = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 FRAME_ARGS = {"df_descriptor", "df1", "df2", "ground_df_descriptor", "solar_wind_df_descriptor", "solar_wind_handle"}
 FETCH = {"fetch_observatory_data", "fetch_solar_wind", "fetch_geomagnetic_indices", "fetch_supermag_data"}
 EXCLUDE_CODES = {"OMNI", "NOAA", "ISWA", "DST", "IAGA", "HTML", "GSM", "UTC", "ZIP", "APIX"}
+CALCULATION_TOOLS = {"calculate_derived_components", "calculate_baseline", "calculate_derived_math",
+                     "evaluate_custom_formula", "apply_physics_formula", "detect_anomalies"}
+
+
+def capture_calculation(entry: dict, name: str, payload: Any) -> None:
+    """Preserve only known calculation-result fields, never model prose or credentials."""
+    if name not in CALCULATION_TOOLS or not isinstance(payload, dict):
+        return
+    keys = ("metric", "component", "computed", "definitions", "baseline", "mode", "window", "night_hours",
+            "n_samples", "n_finite", "unit", "delta", "max_delta", "mean_delta", "peak_rate",
+            "formula", "min", "max", "mean", "column", "n_flagged", "sigma_threshold", "result", "limitations")
+    entry["calculation"] = {k: payload[k] for k in keys if k in payload}
 
 
 def station_in(question: str) -> str | None:
@@ -42,6 +56,24 @@ class Request:
     wants_derived: bool = False
     routine: bool = False
     wants_local_time: bool = False
+    calculation_tools: tuple[str, ...] = ()
+    requested_metric: str | None = None
+    baseline_mode: str | None = None
+    observed_baselines: dict = field(default_factory=dict)
+    requested_formula: str | None = None
+    baseline_hours: tuple[int, int] | None = None
+
+    def should_use_facts(self, log: list[dict]) -> bool:
+        if self.routine or self.calculation_tools:
+            return True
+        interpretation = re.search(r"проанализ|объясн|интерпрет|почему|\b(?:interpret|explain|analy[sz])", self.query, re.I)
+        return not interpretation and any(
+            e.get("tool") in CALCULATION_TOOLS or e.get("tool") == "get_statistics" for e in log)
+
+    def observe_result(self, name: str, args: dict, payload: Any) -> None:
+        if name == "calculate_baseline" and isinstance(payload, dict) and not payload.get("error") and payload.get("baseline") is not None:
+            key = (str(args.get("df_descriptor", "")).lower(), str(args.get("component") or "H").upper())
+            self.observed_baselines[key] = payload["baseline"]
 
     def bound_statistics_args(self, store: Any) -> dict | None:
         """Resolve only a simple complete request against existing tables.
@@ -70,6 +102,35 @@ class Request:
         return None
 
     def check_call(self, name: str, args: dict, store: Any) -> str | None:
+        if name == "evaluate_custom_formula" and self.requested_formula:
+            try:
+                expected = ast.dump(ast.parse(self.requested_formula, mode="eval"))
+                actual = ast.dump(ast.parse(str(args.get("formula") or ""), mode="eval"))
+            except SyntaxError:
+                expected, actual = self.requested_formula.strip(), str(args.get("formula") or "").strip()
+            if expected != actual:
+                return "Используй выражение текущего запроса; не подменяй его формулой предыдущей реплики."
+        if name == "calculate_baseline" and self.baseline_hours is not None:
+            hours = args.get("night_hours", [0, 4])
+            if not isinstance(hours, (list, tuple)) or tuple(hours) != self.baseline_hours:
+                return f"Запрошено UTC-окно night_hours={list(self.baseline_hours)}."
+        if name in {"calculate_derived_math", "apply_physics_formula"} and self.requested_metric:
+            actual = str(args.get("metric") or "").lower()
+            aliases = {"ssc_flag": "detect_ssc"}
+            if aliases.get(actual, actual) != aliases.get(self.requested_metric, self.requested_metric):
+                return f"Запрошена metric={self.requested_metric}; передана metric={actual}."
+        if name == "calculate_baseline" and self.baseline_mode and str(args.get("mode") or "night").lower() != self.baseline_mode:
+            return f"Запрошен baseline mode={self.baseline_mode}."
+        if (name == "calculate_derived_math" and str(args.get("metric")).lower() == "anomaly"
+                and "calculate_baseline" in self.calculation_tools):
+            key = (str(args.get("df_descriptor", "")).lower(), str(args.get("component") or "H").upper())
+            baseline = self.observed_baselines.get(key)
+            try:
+                matches = baseline is not None and math.isclose(float(args.get("baseline_value")), float(baseline), rel_tol=1e-12, abs_tol=1e-12)
+            except (TypeError, ValueError):
+                matches = False
+            if not matches:
+                return "Сначала получи baseline для этой таблицы/компоненты в текущем запросе и передай его точное значение в baseline_value."
         if self.wants_local_time and name == "calculate_local_time":
             requested = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", self.query)
             if requested and str(args.get("timestamp")) != requested.group():
@@ -118,6 +179,9 @@ class Request:
 
     def missing(self, log: list[dict], store: Any) -> list[str]:
         missing = []
+        for tool in self.calculation_tools:
+            if not any(e.get("ok") and e.get("tool") == tool and e.get("calculation") for e in log):
+                missing.append(f"выполнить {tool} и получить фактический результат")
         if self.wants_local_time and not any(e.get("ok") and e.get("tool") == "calculate_local_time" for e in log):
             missing.append("вычислить местное среднее солнечное время инструментом calculate_local_time")
         if self.target and store.get(self.target) is None:
@@ -164,6 +228,11 @@ class Request:
         for entry in log:
             if not entry.get("ok"):
                 continue
+            calculation = entry.get("calculation")
+            if calculation:
+                lines.append(f"- {entry['tool']}:")
+                for key, value in calculation.items():
+                    lines.append(f"  {key}: {value}.")
             if entry.get("local_time"):
                 result = entry["local_time"]
                 lines.append(f"- Местное среднее солнечное время: {result['lt_hm']}; дата и время: {result['local_mean_solar_datetime']}; "
@@ -302,7 +371,28 @@ class SessionMemory:
         stats_text = question[stats_start.end():] if stats_start else question
         stats_text = re.split(r"постро|график|\bplot\b", stats_text, maxsplit=1, flags=re.I)[0]
         request.components = tuple(dict.fromkeys(re.findall(r"\b(?:Dst|Kp|[XYZFHDI])\b", stats_text, re.I))) if request.wants_stats else ()
-        request.wants_derived = bool(re.search(r"\bh\s*[/,]\s*d\s*[/,]\s*i\b", q))
+        request.wants_derived = bool(re.search(r"\bh\s*[/,]\s*d\s*[/,]\s*i\b", q)) and not request.wants_stats
+        action_text = re.sub(r"не\s+(?:рассчитывай|вычисляй|считай|применяй|вызывай|используй)\b", "", q)
+        computing = bool(re.search(r"рассчита|вычисл|посчита|получи|найди|определ|примени|\b(?:calculate|compute|evaluate|apply|find)\b", action_text))
+        required = [name for name in sorted(CALCULATION_TOOLS) if (computing or q.lstrip().startswith(name)) and re.search(r"\b" + name + r"\b", q)
+                    and not re.search(r"не\s+(?:вызывай|используй|применяй|рассчитывай)\s+" + name + r"\b", q)]
+        if computing and re.search(r"\bbaseline\b|базов\w*\s+лини", q) and not required:
+            required.append("calculate_baseline")
+        if request.wants_derived and "calculate_derived_components" not in required:
+            required.append("calculate_derived_components")
+        metric = re.search(r"\bmetric\s*=\s*([a-z_]+)", q)
+        if metric:
+            request.requested_metric = metric[1]
+        baseline_mode = re.search(r"\bmode\s*=\s*(night|full)\b", q)
+        if baseline_mode:
+            request.baseline_mode = baseline_mode[1]
+        request.calculation_tools = tuple(required)
+        formula = re.search(r"выражение\s+(.+?)\s+для\s+(?:raw|derived|formula|math):", question, re.I)
+        if formula:
+            request.requested_formula = formula[1].strip().strip('`')
+        hours = re.search(r"night_hours\s*=\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]", q)
+        if hours:
+            request.baseline_hours = (int(hours[1]), int(hours[2]))
         fetch_asked = bool(re.search(r"загруз|скача|получ[иь]\w*|\bfetch\b|\bload\b", q))
         if fetch_asked and request.fetch_date and not request.handle:
             if re.search(r"\bomni\b|солнечн\w*\s+вет", q):
@@ -315,6 +405,8 @@ class SessionMemory:
             r"проанализ|объясн|почему|\b(?:ssc|gic|burton|proxy|epsilon|formula)\b|формул|метрик|аномал|размах|производн|mlt|налож", q)
         request.wants_local_time = bool(re.search(r"calculate_local_time|(?:местн\w*\s+солнечн|солнечн\w*\s+врем)|mean\s+solar\s+time", q))
         if request.wants_local_time:
+            request.routine = True
+        if request.calculation_tools or request.wants_derived:
             request.routine = True
         if request.wants_stats and request.components:
             request.query += (f"\nПараметры статистики текущего запроса: components={list(request.components)!r}. "

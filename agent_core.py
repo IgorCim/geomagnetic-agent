@@ -1798,7 +1798,7 @@ _CAPABILITY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("detect_anomalies", "calculate_baseline"),
     ),
     (
-        r"размах|дельт|\bdelta\b|d[hz]_?dt|производн|скорость\s+изменен",
+        r"размах|дельт|\bdelta\b|\banomaly\b|отклонени\w*\s+от\s+(?:baseline|базов)|d[hz]_?dt|производн|скорость\s+изменен",
         ("calculate_derived_math",),
     ),
     (
@@ -1904,6 +1904,9 @@ def _selection_plan(
     ]
 
     mandatory: list[str] = []
+    # Exact registered names in the current request are explicit capabilities.
+    # Do not lose calculate_derived_math inside a multi-step baseline request.
+    mandatory.extend(name for name in TOOLS_BY_NAME if re.search(r"\b" + re.escape(name) + r"\b", text))
     for metric in metrics:
         mandatory.extend(_METRIC_SOURCE_TOOLS.get(metric, ()))
         mandatory.append(_METRIC_DECISIVE_TOOL.get(metric, "apply_physics_formula"))
@@ -2034,6 +2037,9 @@ _MODEL_PAYLOAD_KEYS = (
     "map_path", "metadata", "warnings", "fallback_hint", "allowed",
     "required", "missing", "empty", "columns", "reason", "observatory_coverage",
     "solar_wind_coverage", "overlap", "lag_minutes",
+    "baseline", "mode", "window", "night_hours", "component", "unit", "definitions",
+    "formula", "column", "min", "max", "mean", "n_finite", "n_flagged", "sigma_threshold",
+    "delta", "max_delta", "mean_delta", "peak_rate", "limitations",
 )
 
 
@@ -4534,6 +4540,10 @@ def _handle_derive(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     store.put(slot, result)
     summary = _summarise_frame(result, store, slot)
     summary["computed"] = [c for c in ("H", "D", "I") if c in result.columns]
+    summary["definitions"] = {
+        "H": "hypot(X,Y); nT", "D": "degrees(atan2(Y,X)); deg",
+        "I": "degrees(atan2(Z,hypot(X,Y))); deg",
+    }
     return summary, f"Computed {', '.join(summary['computed'])} -> handle {slot!r}."
 
 
@@ -4616,6 +4626,7 @@ def _handle_anomalies(args: dict[str, Any], store: FrameStore) -> tuple[Any, str
     summary = _summarise_frame(result, store, slot)
     summary["component"] = component
     summary["n_flagged"] = int(len(result))
+    summary["sigma_threshold"] = float(threshold) if threshold is not None else 3.0
     return summary, f"Flagged {len(result)} samples of {component} -> handle {slot!r}."
 
 
@@ -4669,7 +4680,10 @@ def _handle_derived_math(args: dict[str, Any], store: FrameStore) -> tuple[Any, 
                 f"-> handle {slot!r}."
             )
         slot = store.derive_name(handle, "math")
-        summary = _summarise_frame(frame, store, slot)
+        frame_out = frame.copy()
+        frame_out["DELTA"] = float(result)
+        store.put(slot, frame_out)
+        summary = _summarise_frame(frame_out, store, slot)
         summary.update(
             {
                 "metric": metric,
@@ -6882,6 +6896,19 @@ def _handle_apply_physics_formula(args: dict[str, Any], store: FrameStore) -> tu
         "frame_handle": slot,
         "available_handles": store.names(),
         "result": note,
+        "limitations": {
+            "sq_baseline": "Constant nighttime baseline in UTC, not a complete Sq model or guaranteed local quiet night.",
+            "deltas": "Differences relative to the implemented baseline, not a calibrated current measurement.",
+            "gic": "Minute-grid derivative proxy, not a current in amperes; does not model conductivity or the power grid.",
+            "dst_proxy": "Simplified proxy from the provided ground frame, not official Kyoto Dst.",
+            "ey_coupling": "OMNI convention: -V[km/s]*Bz[GSM,nT]*1e-3 mV/m; depends on aligned finite solar-wind samples.",
+            "detect_ssc": "Single-station candidates, not confirmed SSC; requires independent solar-wind/network confirmation.",
+            "burton_coupling": "Simplified one-hour model, not a validated operational Dst forecast.",
+            "akasofu_epsilon": "Implemented energy-coupling approximation; scientific validation remains incomplete.",
+            "peak_dhdt": "Window is a number of samples despite legacy window_seconds name; derivative assumes a minute grid.",
+            "substorm_onset": "SML-based candidate detector, not a confirmed event catalogue.",
+            "eej_index": "H-difference proxy; station pair and baseline need independent scientific justification.",
+        }[metric],
     }
     if "solar_wind_alignment" in result.attrs:
         payload["solar_wind_alignment"] = result.attrs["solar_wind_alignment"]
@@ -6990,7 +7017,7 @@ def _physics_note(metric: str, result: pd.DataFrame, slot: str) -> str:
     if metric == "peak_dhdt":
         info = attrs.get("peak_dhdt", {})
         return (
-            f"✅ Пиковый dH/dt за {info.get('window_seconds')} с: "
+            f"✅ Пиковый dH/dt, окно {info.get('window_seconds')} отсчётов: "
             f"{info.get('peak_dhdt_nT_min')} нТ/мин, уровень "
             f"{info.get('warning_level')} -> хэндл {slot!r}."
         )
@@ -7920,7 +7947,7 @@ def run_agent(
                     ),
                 }
 
-            text = contract.facts(log, store) if contract is not None and contract.routine else leftover.strip() or content.strip()
+            text = contract.facts(log, store) if contract is not None and contract.should_use_facts(log) else leftover.strip() or content.strip()
             if verbose:
                 print(f"[agent] round {round_no}: final answer ({len(text)} chars)")
             return {
@@ -8092,6 +8119,10 @@ def run_agent(
             entry["ok"] = not is_error(payload)
             entry.setdefault("executed", True)
             if entry["ok"]:
+                from chat_session import capture_calculation
+                capture_calculation(entry, name, payload)
+                if contract is not None:
+                    contract.observe_result(name, args, payload)
                 if name == "calculate_local_time" and isinstance(payload, dict):
                     entry["local_time"] = {k: payload[k] for k in ("lt_hm", "local_mean_solar_datetime", "longitude", "model")}
                 entry["resolved_handles"] = list(dict.fromkeys(
@@ -8259,7 +8290,7 @@ def run_agent(
     return {
         "ok": stop_reason != "no_tool_calls",
         "text": _with_tool_failures(
-            (contract.facts(log, store) if contract is not None and contract.routine else (leftover or content or "").strip())
+            (contract.facts(log, store) if contract is not None and contract.should_use_facts(log) else (leftover or content or "").strip())
             or "Модель не сформулировала ответ в пределах отведённого числа шагов.",
             log,
         ),
@@ -8316,6 +8347,9 @@ def _planned_task_result(
     if note:
         entry["note"] = note
     if isinstance(payload, dict):
+        if ok:
+            from chat_session import capture_calculation
+            capture_calculation(entry, name, payload)
         if ok and name == "get_statistics":
             handle = str(args.get("df_descriptor") or "").lower()
             canonical = store.aliases().get(handle, handle)

@@ -866,6 +866,33 @@ def _make_zip(name: str) -> Any:
     return gr.update(value=result["path"], visible=True)
 
 
+def _project_archives(name: str) -> list[str]:
+    """Expose existing default/custom ZIPs belonging to the selected project.
+
+    Trust only the bounded manifest project field, never paths from a ZIP.
+    No extraction or file creation; broken/foreign/link archives are omitted.
+    """
+    import zipfile
+    if not name or name not in _project_choices():
+        return []
+    root = Path(project_store.EXPORTS_ROOT).resolve()
+    found = []
+    for path in sorted(root.glob("*.zip")):
+        try:
+            if path.is_symlink() or path.resolve().parent != root:
+                continue
+            with zipfile.ZipFile(path) as archive:
+                info = archive.getinfo("export_manifest.json")
+                if info.file_size > 65536:
+                    continue
+                metadata = json.loads(archive.read(info))
+                if isinstance(metadata, dict) and metadata.get("project") == name:
+                    found.append(str(path.resolve()))
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile, RuntimeError):
+            continue
+    return found
+
+
 def build_demo(brain: Any) -> gr.Blocks:
     """Assemble the interface around an already-loaded brain."""
     chat_and_plot = make_chat_handler(brain)
@@ -925,7 +952,7 @@ def build_demo(brain: Any) -> gr.Blocks:
                 "и с какими аргументами."
             )
 
-        with gr.Accordion("Проекты", open=False):
+        with gr.Accordion("Проекты и скачивание ZIP", open=True):
             gr.Markdown(
                 "Проект группирует данные по схеме `<станция>/<дата>/`, "
                 "рядом с каждым набором лежит `manifest.json` — версия данных, "
@@ -954,6 +981,7 @@ def build_demo(brain: Any) -> gr.Blocks:
             download = gr.DownloadButton(
                 label="Скачать проект (ZIP)", visible=False, scale=1
             )
+            archive_files = gr.Files(label="Готовые ZIP выбранного проекта — нажмите имя для скачивания", height=140)
 
         plots_state = gr.State([])
         # One FrameStore per browser session. The chat handler mutates it, so a
@@ -997,17 +1025,17 @@ def build_demo(brain: Any) -> gr.Blocks:
         refresh.click(
             lambda: _refresh_projects(),
             outputs=project_outputs,
-        )
+        ).then(_project_archives, inputs=[project_pick], outputs=[archive_files])
         project_pick.change(
             lambda name: _refresh_projects(name),
             inputs=[project_pick],
             outputs=project_outputs,
-        )
+        ).then(_project_archives, inputs=[project_pick], outputs=[archive_files])
         build_zip.click(
             _make_zip,
             inputs=[project_pick],
             outputs=[download],
-        )
+        ).then(_project_archives, inputs=[project_pick], outputs=[archive_files])
 
     return demo
 

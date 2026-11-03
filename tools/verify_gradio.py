@@ -130,6 +130,17 @@ def main() -> int:
                 assert bundle.testzip() is None
                 assert "export_manifest.json" in bundle.namelist()
             checks.append("Create/select empty project, build ZIP through UI endpoint, download and validate ZIP")
+            ps.save_artifact('http_fixture', 'IRT', '2024-09-10', fetch('IRT', '2024-09-10', '2024-09-10'), root=ps.PROJECTS_ROOT)
+            custom = ps.export_project('http_fixture', archive_name='http_custom', folders={'Stations': ['irt']})
+            assert not ps.is_error(custom), custom
+            archive_list = first.predict('http_fixture', api_name='/_project_archives')
+            custom_file = next(item for item in archive_list if 'http_custom' in str(item))
+            custom_bytes = requests.get(custom_file['url'], timeout=15)
+            assert custom_bytes.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(custom_bytes.content)) as bundle:
+                assert bundle.testzip() is None
+                assert any(name.startswith('Stations/irt/') for name in bundle.namelist())
+            checks.append('Custom ZIP is offered by the project archive file list and downloads with its Stations folder')
             blank = predict(first, "", history)
             assert blank is not None
             checks.append("Empty input does not crash the queued event")

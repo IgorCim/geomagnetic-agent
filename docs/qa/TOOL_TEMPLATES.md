@@ -244,7 +244,7 @@ Target доступен при standalone dry-run шаблона: True.
 
 Проверяет runner: отдельная карточка на каждую из 11 метрик, независимый oracle; Ey сейчас известный FAIL.
 
-Target доступен при standalone dry-run шаблона: False.
+Target доступен при standalone dry-run шаблона: True.
 
 ## TOOL-21: calculate_eej_index
 

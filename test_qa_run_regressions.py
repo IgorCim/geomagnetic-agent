@@ -39,7 +39,11 @@ def test_literal_raw_handle_has_real_derived_postcondition():
     assert request.missing([], store)
     result, _ = ac._handle_derive({'df_descriptor': 'raw:irt:2024-09-10', 'components': ['H', 'D', 'I']}, store)
     assert not ac.is_error(result)
-    assert request.missing([], store) == []
+    from chat_session import capture_calculation
+    entry = {'tool': 'calculate_derived_components', 'ok': True}
+    capture_calculation(entry, 'calculate_derived_components', result)
+    assert request.missing([], store), 'An old table alone is not proof of a new calculation call'
+    assert request.missing([entry], store) == []
 
 
 def test_fetch_answer_preserves_publication_metadata(monkeypatch):
@@ -98,3 +102,20 @@ def test_zip_download_becomes_visible_and_is_valid(tmp_path, monkeypatch):
     import zipfile
     with zipfile.ZipFile(result['value']) as bundle:
         assert bundle.testzip() is None
+
+
+def test_custom_archives_are_listed_only_for_their_project(tmp_path, monkeypatch):
+    import zipfile
+    monkeypatch.setattr(ps, 'PROJECTS_ROOT', tmp_path/'projects')
+    monkeypatch.setattr(ps, 'EXPORTS_ROOT', tmp_path/'exports')
+    ps.create_project('one')
+    ps.create_project('two')
+    one = ps.export_project('one', archive_name='custom_report')
+    two = ps.export_project('two', archive_name='other_report')
+    invalid = ps.EXPORTS_ROOT/'broken.zip'
+    invalid.write_bytes(b'not a zip')
+    with zipfile.ZipFile(ps.EXPORTS_ROOT/'oversized.zip', 'w') as z:
+        z.writestr('export_manifest.json', '{' + ' ' * 70000 + '}')
+    assert ga._project_archives('one') == [str(Path(one['path']).resolve())]
+    assert str(Path(two['path']).resolve()) not in ga._project_archives('one')
+    assert ga._project_archives('../one') == []
