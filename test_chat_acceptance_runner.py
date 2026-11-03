@@ -146,3 +146,40 @@ def test_source_guard_ignores_generated_zip_but_refuses_changed_python(tmp_path)
     source.write_text('changed source', encoding='utf-8')
     with pytest.raises(RuntimeError, match='SOURCE VERIFIED'):
         RUNNER['_verify_frozen_source'](tmp_path)
+
+
+@pytest.mark.parametrize('bad_hash', [False, True])
+def test_kaggle_cell_downloads_only_pinned_helper_reuses_brain_and_checks_hash(tmp_path, monkeypatch, bad_hash):
+    import urllib.request
+    source = Path(__file__).parent/'tools/run_chat_acceptance.py'
+    cell = (Path(__file__).parent/'tools/kaggle_chat_acceptance.py').read_text(encoding='utf-8')
+    compile(cell, 'kaggle-chat-acceptance', 'exec')
+    monkeypatch.setattr(ac, '__file__', str(tmp_path/'agent_core.py'))
+    payload = b'changed' if bad_hash else source.read_bytes()
+    downloaded, calls = [], []
+    def open_fixture(url, **kw):
+        downloaded.append(url)
+        return io.BytesIO(payload)
+    monkeypatch.setattr(urllib.request, 'urlopen', open_fixture)
+    fixture_brain = object.__new__(ac.LlamaBrain)
+    class Demo:
+        def close(self): calls.append('close')
+    def path_fixture(path, **kw):
+        assert Path(path).parent == tmp_path/'verification'
+        assert '3b8666c00127e241daaf15190e637ce325f0c9b8' in kw['init_globals']['RUNNER_ORIGIN']
+        def execute(brain):
+            assert brain is fixture_brain
+            calls.append('run')
+            return {'run_dir': 'FIXTURE', 'archive': 'FIXTURE.zip'}
+        return {'_verify_frozen_source': lambda root: None, 'run_acceptance': execute}
+    monkeypatch.setattr(runpy, 'run_path', path_fixture)
+    scope = {'brain': fixture_brain, 'demo': Demo()}
+    if bad_hash:
+        with pytest.raises(AssertionError, match='SHA256'):
+            exec(cell, scope)
+        assert not calls and not (tmp_path/'verification').exists()
+    else:
+        exec(cell, scope)
+        assert calls == ['close', 'run']
+        assert (tmp_path/'verification').is_dir()
+    assert len(downloaded) == 1 and '/master/' not in downloaded[0]

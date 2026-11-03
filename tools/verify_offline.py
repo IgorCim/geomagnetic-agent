@@ -26,7 +26,7 @@ def main() -> int:
     files += [root / "pytest.ini"]
     # The replay-runner tests read the same checked-in prompt documents as Kaggle.
     files += [root / name for name in [
-        'tools/run_chat_acceptance.py', 'docs/LONG_CHAT.md',
+        'tools/run_chat_acceptance.py', 'tools/kaggle_chat_acceptance.py', 'docs/LONG_CHAT.md',
         'docs/qa/ready_tool_cases.json', 'docs/qa/TOOL_RUNBOOK.md',
         'docs/qa/FORMULA_RUNBOOK.md', 'docs/qa/inventory.json',
     ]]
