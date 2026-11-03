@@ -1,0 +1,217 @@
+[
+  {
+    "id": "TOOL-01",
+    "status": "NOT_RUN",
+    "prompt": "Загрузи INTERMAGNET IRT за 2024-09-10. Укажи точный handle, источник, число строк и фактический тип публикации.",
+    "dependencies": [
+      "TOOL-02"
+    ]
+  },
+  {
+    "id": "TOOL-02",
+    "status": "NOT_RUN",
+    "prompt": "Создай проект qa_tools_round2. Укажи фактическое имя каталога и путь внутри корня проектов.",
+    "dependencies": []
+  },
+  {
+    "id": "TOOL-03",
+    "status": "NOT_RUN",
+    "prompt": "В проект qa_tools_round2 загрузи IRT и BOU за 2024-09-10 одним пакетным запросом, max_downloads=2. Перечисли фактические таблицы и ошибки.",
+    "dependencies": [
+      "TOOL-02"
+    ]
+  },
+  {
+    "id": "TOOL-04",
+    "status": "NOT_RUN",
+    "prompt": "Перечисли существующие проекты через list_projects. Не создавай новые проекты.",
+    "dependencies": [
+      "TOOL-02"
+    ]
+  },
+  {
+    "id": "TOOL-05",
+    "status": "NOT_RUN",
+    "prompt": "Экспортируй проект qa_tools_round2 в архив qa_report.zip. Внутри создай папку Stations для irt и bou, сортировка date,station. Укажи фактический путь архива.",
+    "dependencies": [
+      "TOOL-03",
+      "TOOL-14"
+    ]
+  },
+  {
+    "id": "TOOL-06",
+    "status": "NOT_RUN",
+    "prompt": "Создай одну матрицу IRT и BOU × 2024-09-10 и 2024-09-11, действия fetch_observatory_data, calculate_derived_components, plot_components, проект qa_matrix_round2. Верни путь матрицы.",
+    "dependencies": []
+  },
+  {
+    "id": "TOOL-07",
+    "status": "NOT_RUN",
+    "prompt": "Продолжи обработку существующей матрицы projects/qa_matrix_round2/qa_matrix_round2_matrix.json, run_until_complete=True. Матрицу заново не создавай. Укажи покрытие и архив.",
+    "dependencies": [
+      "TOOL-06"
+    ]
+  },
+  {
+    "id": "TOOL-08",
+    "status": "NOT_RUN",
+    "prompt": "Для raw:irt:2024-09-10 вычисли H/D/I, без повторной загрузки. Укажи новый handle и единицы компонентов.",
+    "dependencies": [
+      "TOOL-01"
+    ]
+  },
+  {
+    "id": "TOOL-09",
+    "status": "NOT_RUN",
+    "prompt": "Получи статистику Y для BOU за 2024-09-10, без повторной загрузки. Покажи медиану, count и пропуски.",
+    "dependencies": [
+      "TOOL-03"
+    ]
+  },
+  {
+    "id": "TOOL-10",
+    "status": "NOT_RUN",
+    "prompt": "Для derived:irt:2024-09-10 найди статистические выбросы H с sigma_threshold=3. Укажи порог и число; не объявляй их автоматически бурями.",
+    "dependencies": [
+      "TOOL-08"
+    ]
+  },
+  {
+    "id": "TOOL-11",
+    "status": "NOT_RUN",
+    "prompt": "Для derived:irt:2024-09-10 вычисли размах H через calculate_derived_math, metric=delta, без новой загрузки. Укажи окно и единицы.",
+    "dependencies": [
+      "TOOL-08"
+    ]
+  },
+  {
+    "id": "TOOL-12",
+    "status": "NOT_RUN",
+    "prompt": "Для derived:irt:2024-09-10 вычисли baseline H в UTC-окне 00–04, mode=night, night_hours=[0,4]. Назови выбранные строки и единицы.",
+    "dependencies": [
+      "TOOL-08"
+    ]
+  },
+  {
+    "id": "TOOL-13",
+    "status": "NOT_RUN",
+    "prompt": "Для raw:irt:2024-09-10 вычисли безопасную формулу hypot(X,Y). Укажи фактический новый handle. Исходные данные не меняй.",
+    "dependencies": [
+      "TOOL-01"
+    ]
+  },
+  {
+    "id": "TOOL-14",
+    "status": "NOT_RUN",
+    "prompt": "Построй H из derived:irt:2024-09-10 без новой загрузки. Имя файла выбери автоматически. Укажи реально созданный файл.",
+    "dependencies": [
+      "TOOL-08"
+    ]
+  },
+  {
+    "id": "TOOL-15",
+    "status": "NOT_RUN",
+    "prompt": "Сравни H IRT за 2024-09-10 и 2024-09-11 на одном графике, используй derived:irt:2024-09-10 и derived:irt:2024-09-11 без новой загрузки. Нужны две подписанные кривые.",
+    "dependencies": [
+      "TOOL-08",
+      "SETUP-IRT-D1"
+    ]
+  },
+  {
+    "id": "TOOL-16",
+    "status": "NOT_RUN",
+    "prompt": "Покажи геомагнитные координаты станции IRT через get_station_geomagnetic_coords и назови использованное приближение.",
+    "dependencies": []
+  },
+  {
+    "id": "TOOL-17",
+    "status": "NOT_RUN",
+    "prompt": "Вычисли магнитное местное время MLT для IRT в 2024-09-10T12:00:00Z. Укажи модель и нормализацию суток.",
+    "dependencies": [
+      "TOOL-16"
+    ]
+  },
+  {
+    "id": "TOOL-18",
+    "status": "NOT_RUN",
+    "prompt": "Сгруппируй IRT, BOU и ABG по MLT на 2024-09-10T12:00:00Z, bin_hours=3. Укажи все группы и модель.",
+    "dependencies": []
+  },
+  {
+    "id": "TOOL-19",
+    "status": "NOT_RUN",
+    "prompt": "Вычисли местное солнечное время IRT в 2024-09-10T23:30:00Z по долготе. Не подменяй его гражданским часовым поясом.",
+    "dependencies": [
+      "TOOL-16"
+    ]
+  },
+  {
+    "id": "TOOL-20",
+    "status": "NOT_RUN",
+    "prompt": "Примени apply_physics_formula metric=sq_baseline к raw:irt:2024-09-10, без новой загрузки. Укажи фактический handle, метод, UTC-окно и ограничения baseline. Не называй фиксированное UTC-окно гарантированно спокойной местной ночью.",
+    "dependencies": [
+      "SCIENCE-GATE",
+      "METRIC-SPECIFIC-INPUTS"
+    ]
+  },
+  {
+    "id": "TOOL-21",
+    "status": "BLOCKED_SCIENCE_SETUP",
+    "prompt": null
+  },
+  {
+    "id": "TOOL-22",
+    "status": "NOT_RUN",
+    "prompt": "Наложи H IRT и BOU за 2024-09-10, time_system=UT, offsets IRT=0 и BOU=100. Используй имеющиеся таблицы; объясни, что смещение только для отображения.",
+    "dependencies": [
+      "TOOL-03"
+    ]
+  },
+  {
+    "id": "TOOL-23",
+    "status": "NOT_RUN",
+    "prompt": "Сопоставь H из derived:irt:2024-09-10 с Bz и V из sw:omni:2024-09-10, без новой загрузки. Построй сравнение земли и солнечного ветра и укажи время и единицы панелей.",
+    "dependencies": [
+      "TOOL-08",
+      "TOOL-24"
+    ]
+  },
+  {
+    "id": "TOOL-24",
+    "status": "NOT_RUN",
+    "prompt": "Загрузи солнечный ветер OMNI за 2024-09-10. Укажи dataset, handle, число строк, координаты IMF и единицы.",
+    "dependencies": []
+  },
+  {
+    "id": "TOOL-25",
+    "status": "NOT_RUN",
+    "prompt": "Получи реальные индексы Kyoto Dst/Kp за 2024-09-10. Укажи источник, handle, время и исходное разрешение Kp. Не рассчитывай dst_proxy.",
+    "dependencies": []
+  },
+  {
+    "id": "TOOL-26",
+    "status": "NOT_RUN",
+    "prompt": "Получи текущие NOAA alerts. Отдели наблюдение, предупреждение и прогноз; укажи фактическое окно данных.",
+    "dependencies": []
+  },
+  {
+    "id": "TOOL-27",
+    "status": "NOT_RUN",
+    "prompt": "Запроси SuperMAG indices SME/SML/SMU за 2024-09-10. При отказе покажи реальную причину, не заменяй их Kyoto и не раскрывай логин.",
+    "dependencies": [
+      "SETUP-SUPERMAG"
+    ]
+  },
+  {
+    "id": "TOOL-28",
+    "status": "NOT_RUN",
+    "prompt": "Запроси карту ISWA magnetic perturbation на 2024-09-10T12:00:00Z. Если текущий клиент её не поддерживает, честно сообщи отказ без выдуманного изображения.",
+    "dependencies": []
+  },
+  {
+    "id": "TOOL-29",
+    "status": "NOT_RUN",
+    "prompt": "Получи текущий прогноз ISWA. Отдели прогноз Kp от наблюдений Dst, укажи источники и горизонт времени.",
+    "dependencies": []
+  }
+]

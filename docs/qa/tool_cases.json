@@ -58,11 +58,12 @@
     "prompt_template": "Перечисли существующие проекты через list_projects. Не создавай новые проекты.",
     "result_check": "список совпадает с разрешёнными каталогами на диске",
     "status": "PLANNED_NOT_EXECUTED",
-    "standalone_router_offers_target_in_template_dry_run": false,
+    "standalone_router_offers_target_in_template_dry_run": true,
     "template_router_tools": [
       "create_project",
       "export_project",
-      "fetch_many"
+      "fetch_many",
+      "list_projects"
     ],
     "router_note": "Dry-run only, not live evidence. Workflow/planner and substituted templates need separate validation."
   },

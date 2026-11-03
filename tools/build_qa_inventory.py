@@ -95,6 +95,7 @@ def main():
     report = {
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "head_note": "Parent checkout revision; source_sha256 identifies inspected working-tree files, including pending edits.",
         "scope": "Read-only test-design inventory. Does not execute tools, Qwen, external services, plots or qualification tests.",
         "tool_count": len(tools), "get_statistics_included": True,
         "not_additional_tools": ["run_bound_statistics", "run_agent", "run_agent_with_planner", "Planner", "LLMPlanner", "parse_tool_calls"],
@@ -118,7 +119,7 @@ def main():
                       "```text", case["prompt_template"], "```", "",
                       "Проверяет runner: " + case["result_check"] + ".", "",
                       "Target доступен при standalone dry-run шаблона: " + str(case["standalone_router_offers_target_in_template_dry_run"]) + ".", ""])
-    (output / "TOOL_RUNBOOK.md").write_text("\n".join(lines), encoding="utf-8")
+    (output / "TOOL_TEMPLATES.md").write_text("\n".join(lines), encoding="utf-8")
     missing = [c["target_tool"] for c in cases if not c["standalone_router_offers_target_in_template_dry_run"]]
     print(json.dumps({"tools": len(tools), "physics_metrics": len(report["physics_registry"]),
                       "dsl_functions": len(report["dsl_functions"]), "source_files_unchanged": True,

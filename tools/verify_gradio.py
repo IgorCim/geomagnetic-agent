@@ -119,6 +119,8 @@ def main() -> int:
             refreshed = first.predict("http_fixture", api_name="/lambda_1")
             assert "http_fixture" in str(refreshed), "New empty project could not be selected"
             archive = first.predict("http_fixture", api_name="/_make_zip")
+            assert archive.get("visible") is True, "ZIP download button stayed hidden"
+            archive = archive.get("value", archive)
             assert isinstance(archive, dict) and archive.get("url"), "ZIP download was not serialized"
             zipped = requests.get(archive["url"], timeout=15)
             assert zipped.status_code == 200

@@ -712,10 +712,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "calculate_baseline",
             "description": (
-                "Establish the quiet reference level for a component, so that departures "
-                "from it can be reported as anomalies. mode='night' averages the quietest "
-                "window of the day (00:00-04:00 UTC by default), when the ring current is "
-                "minimal. Returns the baseline value; pass it to calculate_derived_math "
+                "Establish a reference level for a component. mode='night' takes the mean "
+                "over the specified UTC window (00:00-04:00 by default). The window is not "
+                "automatically selected for quietness and is not necessarily local night. "
+                "Returns the baseline value; pass it to calculate_derived_math "
                 "with metric='anomaly'."
             ),
             "parameters": {
@@ -872,7 +872,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Magnetic Local Time (MLT) of one station at a UTC instant; mlt_hours in [0,24), "
                 "MLT=12 means magnetic noon. USE for 'what magnetic time is it at X'. DO NOT USE "
-                "when the user wants ordinary civil local time -- that is calculate_local_time; "
+                "when the user wants longitude-based mean solar local time -- that is calculate_local_time; "
                 "MLT and LT differ by the magnetic-vs-geographic longitude."
             ),
             "parameters": {
@@ -910,9 +910,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "calculate_local_time",
             "description": (
-                "Civil local time (LT) at a station: LT = UT + longitude/15, wrapped to [0,24), "
-                "returned as lt_hours and lt_hm. USE for 'what local time is it at X'. DO NOT USE "
-                "for magnetic local time -- that is calculate_mlt."
+                "Local mean solar time (LT): UTC + geographic longitude/15, wrapped to [0,24). "
+                "Returns lt_hours, lt_hm and local_mean_solar_datetime. Not civil timezone time, "
+                "not apparent solar time (no equation-of-time correction), not magnetic local time. "
+                "USE for longitude-based local/solar time; magnetic local time uses calculate_mlt."
             ),
             "parameters": {
                 "type": "object",
@@ -989,11 +990,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "H_equatorial - H_reference as a derived frame. Do NOT use "
                 "apply_physics_formula for EEJ (one frame only). REQUIRED: "
                 "'equatorial_station', 'reference_station' (IAGA codes) and "
-                "'start_date'. CRITICAL FALLBACK: definitive data for equatorial "
-                "stations (like AAE) often lags by months. If you get a 'no_data' "
-                "error for the current year, YOU MUST AUTOMATICALLY RETRY the tool "
-                "call with data_type='auto' OR a historical year (e.g. "
-                "'2023-09-12'). Do not give up."
+                "'start_date'. Require an explicit justified pair; never call IRT equatorial. "
+                "Raw H-difference is a proxy, not validated EEJ. Report missing data; "
+                "never substitute another date/station."
             ),
             "parameters": {
                 "type": "object",
@@ -1251,8 +1250,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Карта наземных возмущений ISWA (WMS ground_mag_perturbation) — "
                 "ДЕКОМИССИРОВАНА: NASA CCMC удалила публичный WMS-слой при миграции, "
-                "инструмент вернёт service_decommissioned. Для глобальной картины "
-                "суббурь используй fetch_supermag_data(data_type='indices') (SME/SML/SMU)."
+                "инструмент вернёт service_decommissioned. SuperMAG SME/SML/SMU — "
+                "временные ряды индексов, не замена пространственной карте."
             ),
             "parameters": {
                 "type": "object",
@@ -1825,7 +1824,7 @@ _CAPABILITY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("calculate_derived_components", "plot_overlay"),
     ),
     (
-        r"(список|какие|покажи)\s+проект|\blist\s+projects?\b",
+        r"(?:список|какие|покажи|перечисли|перечислить)\s+(?:существующ\w*\s+|все\s+|доступн\w*\s+)?проект|\blist[_\s]+projects?\b",
         ("list_projects",),
     ),
     (
@@ -3901,6 +3900,7 @@ def _handle_fetch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     summary = _summarise_frame(result, store, slot)
     summary["station"] = station or args.get("station_code")
     summary["publication_state"] = (result.attrs or {}).get("publication_state")
+    summary["publication_states"] = (result.attrs or {}).get("publication_states")
     summary["source"] = (result.attrs or {}).get("source")
     return summary, f"Fetched {len(result)} rows for {station or args.get('station_code')} -> handle {slot!r}."
 
@@ -6390,11 +6390,9 @@ def _handle_calculate_local_time(args, store):
         return _error('invalid_input', f'Cannot parse timestamp {ts!r}: {exc}'), 'bad timestamp'
     ut_hours = (stamp.hour + stamp.minute / 60.0 + stamp.second / 3600.0) % 24.0
     lt = (ut_hours + longitude / 15.0) % 24.0
-    h = int(lt)
-    m = int((lt - h) * 60.0 + 0.5) % 60
-    if m == 60:
-        h = (h + 1) % 24
-        m = 0
+    rounded_minutes = int(lt * 60.0 + 0.5) % (24 * 60)
+    h, m = divmod(rounded_minutes, 60)
+    local_stamp = stamp + pd.Timedelta(hours=longitude / 15.0)
     result = {
         'ok': True,
         'station_code': code,
@@ -6403,6 +6401,9 @@ def _handle_calculate_local_time(args, store):
         'lt_hm': f'{h:02d}:{m:02d}',
         'longitude': longitude,
         'model': 'lt_ut_plus_lon_over_15',
+        'time_kind': 'local_mean_solar_time',
+        'local_mean_solar_datetime': local_stamp.strftime('%Y-%m-%dT%H:%M:%S'),
+        'note': 'Geographic longitude; not civil timezone time or apparent solar time; no tilted-dipole conversion.',
     }
     return result, f"local time for {code} at {result['timestamp_utc']}: {result['lt_hm']}"
 
@@ -8091,6 +8092,8 @@ def run_agent(
             entry["ok"] = not is_error(payload)
             entry.setdefault("executed", True)
             if entry["ok"]:
+                if name == "calculate_local_time" and isinstance(payload, dict):
+                    entry["local_time"] = {k: payload[k] for k in ("lt_hm", "local_mean_solar_datetime", "longitude", "model")}
                 entry["resolved_handles"] = list(dict.fromkeys(
                     store.aliases().get(str(args[k]).lower(), str(args[k]).lower())
                     for k in ("df_descriptor", "df1", "df2", "ground_df_descriptor", "solar_wind_df_descriptor", "solar_wind_handle")

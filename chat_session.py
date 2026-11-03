@@ -41,6 +41,7 @@ class Request:
     components: tuple[str, ...] = ()
     wants_derived: bool = False
     routine: bool = False
+    wants_local_time: bool = False
 
     def bound_statistics_args(self, store: Any) -> dict | None:
         """Resolve only a simple complete request against existing tables.
@@ -69,6 +70,12 @@ class Request:
         return None
 
     def check_call(self, name: str, args: dict, store: Any) -> str | None:
+        if self.wants_local_time and name == "calculate_local_time":
+            requested = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", self.query)
+            if requested and str(args.get("timestamp")) != requested.group():
+                return "Используй точный UTC timestamp текущего запроса."
+            if self.station and str(args.get("station_code", "")).lower() != self.station:
+                return "Используй станцию текущего запроса."
         if name == "get_statistics" and self.components:
             actual = args.get("components")
             expected = {c.casefold() for c in self.components}
@@ -111,6 +118,8 @@ class Request:
 
     def missing(self, log: list[dict], store: Any) -> list[str]:
         missing = []
+        if self.wants_local_time and not any(e.get("ok") and e.get("tool") == "calculate_local_time" for e in log):
+            missing.append("вычислить местное среднее солнечное время инструментом calculate_local_time")
         if self.target and store.get(self.target) is None:
             missing.append(f"получить таблицу {self.target}")
         if self.wants_derived:
@@ -138,9 +147,28 @@ class Request:
             if handle and store.get(handle) is not None:
                 frame = store.get(handle)
                 lines.append(f"- `{handle}`: {len(frame)} строк.")
+                attrs = frame.attrs or {}
+                for key, label in (("source", "Источник"), ("dataset", "Dataset"), ("datasets", "Datasets"),
+                                   ("publication_states", "Типы публикации"), ("publication_state", "Тип публикации"),
+                                   ("note", "Метаданные")):
+                    if attrs.get(key) is not None:
+                        lines.append(f"  {label}: {attrs[key]}.")
+                if handle.startswith("raw:") and not (attrs.get("publication_states") or attrs.get("publication_state")):
+                    lines.append("  Тип публикации: не подтверждён метаданными таблицы.")
+                if "timestamp" in frame and len(frame):
+                    lines.append(f"  Временное покрытие: {frame['timestamp'].min()} … {frame['timestamp'].max()}; время загрузчиков — UTC.")
+                if handle.startswith("sw:omni:"):
+                    lines.append("  Единицы OMNI: Bx/By/Bz — nT; V — km/s; Np — cm^-3; T — K. By/Bz — GSM; Bx общий для GSE/GSM.")
+                elif handle.startswith("idx:kyoto:"):
+                    lines.append("  Dst — nT, исходный шаг 1 час; Kp — безразмерный, исходный шаг 3 часа; часовая таблица не означает часовые измерения Kp.")
         for entry in log:
             if not entry.get("ok"):
                 continue
+            if entry.get("local_time"):
+                result = entry["local_time"]
+                lines.append(f"- Местное среднее солнечное время: {result['lt_hm']}; дата и время: {result['local_mean_solar_datetime']}; "
+                             f"географическая долгота: {result['longitude']}°; модель: {result['model']}. "
+                             "Это не гражданский часовой пояс и не истинное солнечное время; поправка уравнения времени не применяется.")
             for component, values in (entry.get("statistics") or {}).items():
                 key = (tuple(entry.get("resolved_handles", [])), component, repr(sorted(values.items())))
                 if key in seen_statistics:
@@ -148,7 +176,8 @@ class Request:
                 seen_statistics.add(key)
                 facts = ", ".join(f"{label}: {values[k]}" for k, label in (
                     ("min", "минимум"), ("max", "максимум"), ("mean", "среднее"),
-                    ("median", "медиана"), ("std", "стандартное отклонение")) if k in values)
+                    ("median", "медиана"), ("std", "стандартное отклонение"),
+                    ("count", "число значений"), ("missing", "пропуски")) if k in values)
                 lines.append(f"- {component}: {facts}; единицы: {values.get('unit') or 'не указаны'}.")
             if entry.get("plot") and Path(entry["plot"]).is_file():
                 lines.append(f"- График: `{Path(entry['plot']).name}`.")
@@ -203,6 +232,11 @@ class SessionMemory:
     def prepare(self, question: str, store: Any) -> Request:
         q = question.lower()
         request = Request(question)
+        placeholders = list(dict.fromkeys(re.findall(r"\{[A-Z][A-Z0-9_]*\}", question)))
+        if placeholders:
+            request.clarification = ("В запросе остались незаполненные поля: " + ", ".join(placeholders)
+                                     + ". Укажите реальные имена, handle или параметры. Данные и станции по догадке не выбираю; инструменты не вызывались.")
+            return request
         explicit = list(dict.fromkeys(h.lower() for h in HANDLE.findall(question)))
         days = list(dict.fromkeys(DATES.findall(question)))
         station = station_in(question)
@@ -279,6 +313,9 @@ class SessionMemory:
                 request.target = f"raw:{station}:{request.fetch_date}"
         request.routine = bool(request.target or request.wants_stats or request.wants_plot) and not re.search(
             r"проанализ|объясн|почему|\b(?:ssc|gic|burton|proxy|epsilon|formula)\b|формул|метрик|аномал|размах|производн|mlt|налож", q)
+        request.wants_local_time = bool(re.search(r"calculate_local_time|(?:местн\w*\s+солнечн|солнечн\w*\s+врем)|mean\s+solar\s+time", q))
+        if request.wants_local_time:
+            request.routine = True
         if request.wants_stats and request.components:
             request.query += (f"\nПараметры статистики текущего запроса: components={list(request.components)!r}. "
                               "Не переноси компоненты предыдущих реплик в этот вызов get_statistics.")

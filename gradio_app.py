@@ -858,10 +858,12 @@ def _make_zip(name: str) -> Any:
     try:
         result = project_store.export_project(name)
     except OSError as exc:
-        return gr.Info(f"Не удалось собрать архив: {exc}")
+        gr.Info(f"Не удалось собрать архив: {exc}")
+        return gr.update(value=None, visible=False)
     if project_store.is_error(result):
-        return gr.Info(result["message"])
-    return result["path"]
+        gr.Info(result["message"])
+        return gr.update(value=None, visible=False)
+    return gr.update(value=result["path"], visible=True)
 
 
 def build_demo(brain: Any) -> gr.Blocks:
@@ -928,6 +930,8 @@ def build_demo(brain: Any) -> gr.Blocks:
                 "Проект группирует данные по схеме `<станция>/<дата>/`, "
                 "рядом с каждым набором лежит `manifest.json` — версия данных, "
                 "время загрузки и коммит агента."
+                "\n\nЧтобы скачать архив: нажмите «Обновить», выберите проект, "
+                "нажмите «Собрать ZIP», затем «Скачать проект (ZIP)»."
             )
             with gr.Row():
                 project_pick = gr.Dropdown(

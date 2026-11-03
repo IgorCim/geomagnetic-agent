@@ -1,6 +1,7 @@
 {
-  "generated_utc": "2026-11-03T10:26:13.189514+00:00",
-  "head": "eca4cb79f0cbb133d9abc934f0ac08f41aa7540a",
+  "generated_utc": "2026-11-03T13:11:41.185301+00:00",
+  "head": "7f4b608aec94df5c83cab51733d3f8fe8ca062f4",
+  "head_note": "Parent checkout revision; source_sha256 identifies inspected working-tree files, including pending edits.",
   "scope": "Read-only test-design inventory. Does not execute tools, Qwen, external services, plots or qualification tests.",
   "tool_count": 29,
   "get_statistics_included": true,
@@ -18,7 +19,7 @@
       "name": "fetch_observatory_data",
       "handler": "_handle_fetch",
       "handler_file": "agent_core.py",
-      "handler_line": 3870,
+      "handler_line": 3869,
       "required": [
         "station_code",
         "start_date",
@@ -645,7 +646,7 @@
       "name": "apply_physics_formula",
       "handler": "_handle_apply_physics_formula",
       "handler_file": "agent_core.py",
-      "handler_line": 6787,
+      "handler_line": 6788,
       "required": [
         "df_descriptor",
         "metric"
@@ -691,7 +692,7 @@
       "name": "calculate_eej_index",
       "handler": "_handle_calculate_eej_index",
       "handler_file": "agent_core.py",
-      "handler_line": 7014,
+      "handler_line": 7015,
       "required": [
         "equatorial_station",
         "reference_station",
@@ -721,7 +722,7 @@
       "name": "plot_overlay",
       "handler": "_handle_plot_overlay",
       "handler_file": "agent_core.py",
-      "handler_line": 7123,
+      "handler_line": 7124,
       "required": [
         "stations",
         "dates"
@@ -792,7 +793,7 @@
       "name": "plot_space_weather_comparison",
       "handler": "_handle_plot_space_weather_comparison",
       "handler_file": "agent_core.py",
-      "handler_line": 7391,
+      "handler_line": 7392,
       "required": [
         "ground_df_descriptor",
         "solar_wind_df_descriptor",
@@ -1168,292 +1169,292 @@
         },
         {
           "name": "select_tools_for_task",
-          "line": 1404,
+          "line": 1403,
           "private": false
         },
         {
           "name": "_tool_properties",
-          "line": 1425,
+          "line": 1424,
           "private": true
         },
         {
           "name": "expected_frame_handle",
-          "line": 1436,
+          "line": 1435,
           "private": false
         },
         {
           "name": "_slug",
-          "line": 1462,
+          "line": 1461,
           "private": true
         },
         {
           "name": "_default_plot_filename",
-          "line": 1468,
+          "line": 1467,
           "private": true
         },
         {
           "name": "normalize_tool_name",
-          "line": 1515,
+          "line": 1514,
           "private": false
         },
         {
           "name": "normalize_tool_args",
-          "line": 1522,
+          "line": 1521,
           "private": false
         },
         {
           "name": "missing_required_args",
-          "line": 1609,
+          "line": 1608,
           "private": false
         },
         {
           "name": "_build_metric_query_patterns",
-          "line": 1737,
+          "line": 1736,
           "private": true
         },
         {
           "name": "_ordered_unique",
-          "line": 1842,
+          "line": 1841,
           "private": true
         },
         {
           "name": "_bulk_units",
-          "line": 1853,
+          "line": 1852,
           "private": true
         },
         {
           "name": "_is_bulk_query",
-          "line": 1860,
+          "line": 1859,
           "private": true
         },
         {
           "name": "is_bulk_query",
-          "line": 1879,
+          "line": 1878,
           "private": false
         },
         {
           "name": "_selection_plan",
-          "line": 1889,
+          "line": 1888,
           "private": true
         },
         {
           "name": "select_tools_for_query",
-          "line": 1963,
+          "line": 1962,
           "private": false
         },
         {
           "name": "explain_tool_selection",
-          "line": 1988,
+          "line": 1987,
           "private": false
         },
         {
           "name": "estimate_tokens",
-          "line": 1999,
+          "line": 1998,
           "private": false
         },
         {
           "name": "prompt_budget",
-          "line": 2010,
+          "line": 2009,
           "private": false
         },
         {
           "name": "_trim_history",
-          "line": 2440,
+          "line": 2439,
           "private": true
         },
         {
           "name": "_self_correction_hint",
-          "line": 2572,
+          "line": 2571,
           "private": true
         },
         {
           "name": "_compact_tool_message",
-          "line": 2614,
+          "line": 2613,
           "private": true
         },
         {
           "name": "build_dynamic_prompt",
-          "line": 2689,
+          "line": 2688,
           "private": false
         },
         {
           "name": "_shard_sort_key",
-          "line": 2718,
+          "line": 2717,
           "private": true
         },
         {
           "name": "_first_shard",
-          "line": 2723,
+          "line": 2722,
           "private": true
         },
         {
           "name": "_gguf_files",
-          "line": 2728,
+          "line": 2727,
           "private": true
         },
         {
           "name": "_entry_shard",
-          "line": 2732,
+          "line": 2731,
           "private": true
         },
         {
           "name": "_purge_incomplete",
-          "line": 2746,
+          "line": 2745,
           "private": true
         },
         {
           "name": "model_is_downloaded",
-          "line": 2759,
+          "line": 2758,
           "private": false
         },
         {
           "name": "download_model",
-          "line": 2764,
+          "line": 2763,
           "private": false
         },
         {
           "name": "shutil_copyfileobj",
-          "line": 2869,
+          "line": 2868,
           "private": false
         },
         {
           "name": "_resolve_gpu_layers",
-          "line": 2944,
+          "line": 2943,
           "private": true
         },
         {
           "name": "load_brain",
-          "line": 2963,
+          "line": 2962,
           "private": false
         },
         {
           "name": "_clean",
-          "line": 3041,
+          "line": 3040,
           "private": true
         },
         {
           "name": "_coerce_arguments",
-          "line": 3047,
+          "line": 3046,
           "private": true
         },
         {
           "name": "_reply_text",
-          "line": 3065,
+          "line": 3064,
           "private": true
         },
         {
           "name": "_iter_json_spans",
-          "line": 3080,
+          "line": 3079,
           "private": true
         },
         {
           "name": "_straighten_quotes",
-          "line": 3119,
+          "line": 3118,
           "private": true
         },
         {
           "name": "_single_quotes_to_double",
-          "line": 3130,
+          "line": 3129,
           "private": true
         },
         {
           "name": "_drop_trailing_commas",
-          "line": 3159,
+          "line": 3158,
           "private": true
         },
         {
           "name": "_unwrap_doubled_braces",
-          "line": 3189,
+          "line": 3188,
           "private": true
         },
         {
           "name": "_load_bases",
-          "line": 3222,
+          "line": 3221,
           "private": true
         },
         {
           "name": "_try_loads",
-          "line": 3228,
+          "line": 3227,
           "private": true
         },
         {
           "name": "_json_payloads",
-          "line": 3253,
+          "line": 3252,
           "private": true
         },
         {
           "name": "_normalize_call",
-          "line": 3287,
+          "line": 3286,
           "private": true
         },
         {
           "name": "_calls_from_json",
-          "line": 3321,
+          "line": 3320,
           "private": true
         },
         {
           "name": "_api_envelope",
-          "line": 3341,
+          "line": 3340,
           "private": true
         },
         {
           "name": "_why_unparsed",
-          "line": 3403,
+          "line": 3402,
           "private": true
         },
         {
           "name": "parse_tool_calls",
-          "line": 3415,
+          "line": 3414,
           "private": false
         },
         {
           "name": "_summarise_frame",
-          "line": 3649,
+          "line": 3648,
           "private": true
         },
         {
           "name": "_offline_frame",
-          "line": 3684,
+          "line": 3683,
           "private": true
         },
         {
           "name": "_normalise_frame_alias",
-          "line": 3695,
+          "line": 3694,
           "private": true
         },
         {
           "name": "_accepts_legacy_df",
-          "line": 3741,
+          "line": 3740,
           "private": true
         },
         {
           "name": "_slot_for_frame",
-          "line": 3757,
+          "line": 3756,
           "private": true
         },
         {
           "name": "_first_present",
-          "line": 3767,
+          "line": 3766,
           "private": true
         },
         {
           "name": "_is_derived_handle",
-          "line": 3797,
+          "line": 3796,
           "private": true
         },
         {
           "name": "_auto_derive",
-          "line": 3802,
+          "line": 3801,
           "private": true
         },
         {
           "name": "_resolve_plottable",
-          "line": 3848,
+          "line": 3847,
           "private": true
         },
         {
           "name": "_handle_fetch",
-          "line": 3870,
+          "line": 3869,
           "private": true
         },
         {
@@ -1703,342 +1704,342 @@
         },
         {
           "name": "_station_registry_coords",
-          "line": 6410,
+          "line": 6411,
           "private": true
         },
         {
           "name": "_strict_argument_check",
-          "line": 6481,
+          "line": 6482,
           "private": true
         },
         {
           "name": "_frame_kind",
-          "line": 6570,
+          "line": 6571,
           "private": true
         },
         {
           "name": "_data_type_error",
-          "line": 6582,
+          "line": 6583,
           "private": true
         },
         {
           "name": "_validate_data_type",
-          "line": 6604,
+          "line": 6605,
           "private": true
         },
         {
           "name": "_resolve_solar_wind_frame",
-          "line": 6693,
+          "line": 6694,
           "private": true
         },
         {
           "name": "_resolve_reference_frame",
-          "line": 6760,
+          "line": 6761,
           "private": true
         },
         {
           "name": "_handle_apply_physics_formula",
-          "line": 6788,
+          "line": 6789,
           "private": true
         },
         {
           "name": "_physics_note",
-          "line": 6906,
+          "line": 6907,
           "private": true
         },
         {
           "name": "_handle_calculate_eej_index",
-          "line": 7014,
+          "line": 7015,
           "private": true
         },
         {
           "name": "_overlay_component",
-          "line": 7093,
+          "line": 7094,
           "private": true
         },
         {
           "name": "_handle_plot_overlay",
-          "line": 7123,
+          "line": 7124,
           "private": true
         },
         {
           "name": "_resolve_column_name",
-          "line": 7340,
+          "line": 7341,
           "private": true
         },
         {
           "name": "_merge_solar_wind_columns",
-          "line": 7351,
+          "line": 7352,
           "private": true
         },
         {
           "name": "_handle_plot_space_weather_comparison",
-          "line": 7391,
+          "line": 7392,
           "private": true
         },
         {
           "name": "_sort_stations_north_first",
-          "line": 7551,
+          "line": 7552,
           "private": true
         },
         {
           "name": "_overlay_time_shift",
-          "line": 7568,
+          "line": 7569,
           "private": true
         },
         {
           "name": "code_revision",
-          "line": 7630,
+          "line": 7631,
           "private": false
         },
         {
           "name": "run_agent",
-          "line": 7661,
+          "line": 7662,
           "private": false
         },
         {
           "name": "_planned_task_result",
-          "line": 8270,
+          "line": 8273,
           "private": true
         },
         {
           "name": "run_bound_statistics",
-          "line": 8384,
+          "line": 8387,
           "private": false
         },
         {
           "name": "_format_task_plan",
-          "line": 8411,
+          "line": 8414,
           "private": true
         },
         {
           "name": "_strip_child_plot_tally",
-          "line": 8423,
+          "line": 8426,
           "private": true
         },
         {
           "name": "run_agent_with_planner",
-          "line": 8433,
+          "line": 8436,
           "private": false
         },
         {
           "name": "_unique",
-          "line": 8647,
+          "line": 8650,
           "private": true
         },
         {
           "name": "_attempted_plot_name",
-          "line": 8658,
+          "line": 8661,
           "private": true
         },
         {
           "name": "_with_plot_tally",
-          "line": 8677,
+          "line": 8680,
           "private": true
         },
         {
           "name": "_failure_entries",
-          "line": 8729,
+          "line": 8732,
           "private": true
         },
         {
           "name": "find_nt_values",
-          "line": 8757,
+          "line": 8760,
           "private": false
         },
         {
           "name": "run_recovered",
-          "line": 8785,
+          "line": 8788,
           "private": false
         },
         {
           "name": "_with_tool_failures",
-          "line": 8812,
+          "line": 8815,
           "private": true
         },
         {
           "name": "_short",
-          "line": 8865,
+          "line": 8868,
           "private": true
         },
         {
           "name": "_demo_script",
-          "line": 8876,
+          "line": 8879,
           "private": true
         },
         {
           "name": "_unwrap",
-          "line": 8906,
+          "line": 8909,
           "private": true
         },
         {
           "name": "_main",
-          "line": 8917,
+          "line": 8920,
           "private": true
         },
         {
           "name": "__init__",
-          "line": 2122,
+          "line": 2121,
           "private": true
         },
         {
           "name": "reset",
-          "line": 2141,
+          "line": 2140,
           "private": false
         },
         {
           "name": "update_handle",
-          "line": 2152,
+          "line": 2151,
           "private": false
         },
         {
           "name": "register_handle",
-          "line": 2159,
+          "line": 2158,
           "private": false
         },
         {
           "name": "note_elided",
-          "line": 2207,
+          "line": 2206,
           "private": false
         },
         {
           "name": "add_result",
-          "line": 2212,
+          "line": 2211,
           "private": false
         },
         {
           "name": "_describe_handle",
-          "line": 2236,
+          "line": 2235,
           "private": true
         },
         {
           "name": "_displayed_handles",
-          "line": 2266,
+          "line": 2265,
           "private": true
         },
         {
           "name": "add_completed_step",
-          "line": 2280,
+          "line": 2279,
           "private": false
         },
         {
           "name": "add_error",
-          "line": 2289,
+          "line": 2288,
           "private": false
         },
         {
           "name": "add_failure",
-          "line": 2298,
+          "line": 2297,
           "private": false
         },
         {
           "name": "clear_failures",
-          "line": 2314,
+          "line": 2313,
           "private": false
         },
         {
           "name": "repeated_failure",
-          "line": 2318,
+          "line": 2317,
           "private": false
         },
         {
           "name": "to_prompt_injection",
-          "line": 2346,
+          "line": 2345,
           "private": false
         },
         {
           "name": "_next_step",
-          "line": 2402,
+          "line": 2401,
           "private": true
         },
         {
           "name": "say",
-          "line": 2795,
+          "line": 2794,
           "private": false
         },
         {
           "name": "__init__",
-          "line": 2883,
+          "line": 2882,
           "private": true
         },
         {
           "name": "chat",
-          "line": 2895,
+          "line": 2894,
           "private": false
         },
         {
           "name": "__init__",
-          "line": 2933,
+          "line": 2932,
           "private": true
         },
         {
           "name": "chat",
-          "line": 2937,
+          "line": 2936,
           "private": false
         },
         {
           "name": "_try_load",
-          "line": 2989,
+          "line": 2988,
           "private": true
         },
         {
           "name": "_add",
-          "line": 3262,
+          "line": 3261,
           "private": true
         },
         {
           "name": "__init__",
-          "line": 3536,
+          "line": 3535,
           "private": true
         },
         {
           "name": "_normalise",
-          "line": 3553,
+          "line": 3552,
           "private": true
         },
         {
           "name": "put",
-          "line": 3556,
+          "line": 3555,
           "private": false
         },
         {
           "name": "derive_name",
-          "line": 3567,
+          "line": 3566,
           "private": false
         },
         {
           "name": "get",
-          "line": 3577,
+          "line": 3576,
           "private": false
         },
         {
           "name": "names",
-          "line": 3593,
+          "line": 3592,
           "private": false
         },
         {
           "name": "aliases",
-          "line": 3597,
+          "line": 3596,
           "private": false
         },
         {
           "name": "resolve",
-          "line": 3607,
+          "line": 3606,
           "private": false
         },
         {
           "name": "decorate",
-          "line": 3744,
+          "line": 3743,
           "private": false
         },
         {
           "name": "_fetch",
-          "line": 7044,
+          "line": 7045,
           "private": true
         },
         {
           "name": "wrapper",
-          "line": 3746,
+          "line": 3745,
           "private": false
         }
       ]
@@ -2308,52 +2309,52 @@
         },
         {
           "name": "bound_statistics_args",
-          "line": 45,
+          "line": 46,
           "private": false
         },
         {
           "name": "check_call",
-          "line": 71,
+          "line": 72,
           "private": false
         },
         {
           "name": "missing",
-          "line": 112,
+          "line": 119,
           "private": false
         },
         {
           "name": "facts",
-          "line": 132,
+          "line": 141,
           "private": false
         },
         {
           "name": "record",
-          "line": 169,
+          "line": 198,
           "private": false
         },
         {
           "name": "touch",
-          "line": 190,
+          "line": 219,
           "private": false
         },
         {
           "name": "summary_requested",
-          "line": 195,
+          "line": 224,
           "private": false
         },
         {
           "name": "prepare",
-          "line": 203,
+          "line": 232,
           "private": false
         },
         {
           "name": "context",
-          "line": 287,
+          "line": 324,
           "private": false
         },
         {
           "name": "summary",
-          "line": 293,
+          "line": 330,
           "private": false
         }
       ]
@@ -2933,12 +2934,12 @@
         },
         {
           "name": "build_demo",
-          "line": 867,
+          "line": 869,
           "private": false
         },
         {
           "name": "main",
-          "line": 1011,
+          "line": 1015,
           "private": false
         },
         {
@@ -2953,7 +2954,7 @@
         },
         {
           "name": "submit",
-          "line": 960,
+          "line": 964,
           "private": false
         }
       ]
@@ -4185,17 +4186,17 @@
     }
   ],
   "source_sha256": {
-    "agent_core.py": "af3f3d6157223b17ed57a84921f014481dfd155a305418e1aa7fad6c70875359",
+    "agent_core.py": "ffe01381ee449ad90f3efdadc2d25fc83671c0769f138da7178971ff5a0649bf",
     "agent_planner.py": "e418ab1ae4330a860d9e1545a2ad701a0e7c721a51a72a4eecc49c3692f752b0",
     "agent_state.py": "9f74b4562e9450f9e304870d16e21b61cc78ee61d8b2b3d0be59792a2e4dbf2a",
     "chart_naming.py": "9946b1c34d37e45631426675f1b0f3bf0947a0e668db2e05cd6423754c970658",
-    "chat_session.py": "ff69f46d306fded97d74e2bdae28d3e1db69d7603fb51c3bcb8f820a82ceacaa",
+    "chat_session.py": "49f03904f605f2e8571bbeaa9bd7ff4dce27b209164e9498499e5adacde8b4a0",
     "demo_make_50.py": "4df314d4741b0b2716b63f0f591e4a0fc234eaddd96c67d911d0136bdca3873c",
     "geomag_analyzer.py": "c24e7f6d3a594a15d99c497d98d1a0b3fa87abebd56f464443577952eec523f1",
     "geomag_coords.py": "25e1910914471f4f235cda23f5aea916eec7f01a45fa946ef540c00aa63cfc8e",
     "geomag_math.py": "52fbb94f99ce09646f5505ff5f3b4700aa2fbe3b5b89724c221a1d6ed022d633",
     "geomag_plotter.py": "ac8a815d82575cd7862b0fdb2fa0288921f1e723942bef7485e69c1286e1c470",
-    "gradio_app.py": "9245103156255ba11147d1f85d80f1a97d8415f997a8d223f875f01538e81f09",
+    "gradio_app.py": "e74c40c11d0f5fcb17e19fef3561eb398c1300a3c94eeb0c83d4c4895d62d962",
     "intermagnet_loader.py": "6bfe845ec9e4da7547a53e05a2af3cdbcc8333aad9d00ae0557364b92f706b45",
     "iswa_loader.py": "0d83a4c1a05711a0fd7dc727cb58cc2b6a536ee7fd52c53c025171c3916b3981",
     "noaa_swpc_loader.py": "03581d686c2f6585c46ecc513905e283f64a78d7149b8e171751195b43b6236d",
