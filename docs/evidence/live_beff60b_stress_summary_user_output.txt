@@ -1,0 +1,39 @@
+STRESS TEST SUMMARY
+========================================================================
+run dir: /kaggle/working/geomagnetic_github_1ev9eoh5/stress_runs/stress_68jr7z5e
+projects: may2024_matrix_A_200, may2024_matrix_B_50, may2024_spaceweather_50
+matrix A: 200 charts; 200/200
+matrix B: 50 charts; 50/50
+comparisons: 50 charts; 50/50
+total: 300
+ZIP A: /kaggle/working/geomagnetic_github_1ev9eoh5/stress_runs/stress_68jr7z5e/exports/may2024_matrix_a_200.zip
+ZIP B: /kaggle/working/geomagnetic_github_1ev9eoh5/stress_runs/stress_68jr7z5e/exports/may2024_matrix_b_50.zip
+ZIP C: /kaggle/working/geomagnetic_github_1ev9eoh5/stress_runs/stress_68jr7z5e/exports/may2024_spaceweather_50.zip
+custom ZIP: /kaggle/working/geomagnetic_github_1ev9eoh5/stress_runs/stress_68jr7z5e/exports/storm_report_2024.zip folders: ['1', '2', '3']
+skipped: ['SuperMAG: переменная SUPERMAG_LOGON не задана']
+security probe: ok
+security notes: none
+coverage note: BOX excluded (no May 2024 data); ABG replaces BOX; window starts 14 May because ABG has no 13 May day and ends 2 June to give all ten stations twenty complete days.
+expected service notes:
+  - SuperMAG: skipped because SUPERMAG_LOGON is not set
+  - NOAA solar_events: 0 records for May 2024 (7-day current window only)
+  - NOAA alerts/forecast: current window only, not historical May 2024
+  - ISWA perturbation map: service_decommissioned by NASA
+failures: none
+STRESS TEST PASSED: 300 distinct canonical charts, 5 sources exercised; SuperMAG skipped, 3 matrix runs, 3 default ZIPs, 1 prompt-named custom ZIP
+CURRENT STRICT GATE: FAIL; inspect per-source and matrix results above
+Traceback (most recent call last):
+  File "/tmp/ipykernel_49/3938336334.py", line 22, in <cell line: 0>
+    assert stress_ns.get('r_smag') is not None, 'Six-source gate: SuperMAG пропущен; настрой SUPERMAG_LOGON и повтори. 300 графиков сами по себе не означают проверку шести источников.'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Six-source gate: SuperMAG пропущен; настрой SUPERMAG_LOGON и повтори. 300 графиков сами по себе не означают проверку шести источников.
+---------------------------------------------------------------------------
+AssertionError                            Traceback (most recent call last)
+/tmp/ipykernel_49/3938336334.py in <cell line: 0>()
+     20         try:
+     21             exec(compile(Path('stress_300.py').read_text(encoding='utf-8-sig'), 'stress_300.py', 'exec'), stress_ns)
+---> 22             assert stress_ns.get('r_smag') is not None, 'Six-source gate: SuperMAG пропущен; настрой SUPERMAG_LOGON и повтори. 300 графиков сами по себе не означают проверку шести источников.'
+     23             stress_status['status'] = 'PASS'
+     24         except BaseException as exc:
+
+AssertionError: Six-source gate: SuperMAG пропущен; настрой SUPERMAG_LOGON и повтори. 300 графиков сами по себе не означают проверку шести источников.

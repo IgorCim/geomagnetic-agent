@@ -1,0 +1,15 @@
+{
+  "time_utc": "20261103T061151Z",
+  "gradio": "6.29.0",
+  "checks": [
+    "Same HTTP session: button and textbox-submit endpoints; Plotly serialized",
+    "Actual HTML download route returns the complete chart",
+    "14 HTTP turns: stored frame survives and transcript grows",
+    "Second HTTP session cannot resolve the first session frame",
+    "Create/select empty project, build ZIP through UI endpoint, download and validate ZIP",
+    "Empty input does not crash the queued event",
+    "Explicit New chat resets frames and conversation facts in the same HTTP session"
+  ],
+  "status": "PASS",
+  "scope": "Real local Gradio HTTP queue; deterministic brain and station loader; not real Qwen or remote service validation."
+}

@@ -43,6 +43,13 @@ class Request:
     routine: bool = False
 
     def check_call(self, name: str, args: dict, store: Any) -> str | None:
+        if name == "get_statistics" and self.components:
+            actual = args.get("components")
+            expected = {c.casefold() for c in self.components}
+            if (not isinstance(actual, list) or not actual
+                    or any(not isinstance(c, str) or c.strip().casefold() not in expected for c in actual)):
+                return (f"Для текущей статистики нужны components={list(self.components)!r}. "
+                        f"Передано components={actual!r}. Используй запрошенные компоненты, а не компоненты прошлых реплик.")
         if self.no_fetch and name in FETCH:
             return "Запрошено использование прежних данных без повторной загрузки."
         fetch_date = self.fetch_date or self.date
@@ -90,13 +97,15 @@ class Request:
         if self.wants_stats:
             done = {c.casefold() for e in stats for c in e["statistics"]}
             if not stats or (self.components and not set(c.casefold() for c in self.components) <= done):
-                missing.append("получить статистику запрошенных компонентов через get_statistics")
+                missing.append("получить статистику через get_statistics, components="
+                               + (repr(list(self.components)) if self.components else "запрошенные компоненты"))
         if self.wants_plot and not any(e.get("ok") and e.get("plot") and Path(e["plot"]).is_file() for e in log):
             missing.append("построить запрошенный график")
         return missing
 
     def facts(self, log: list[dict], store: Any) -> str:
         lines = ["Подтверждённые результаты:"]
+        seen_statistics = set()
         handles = list(dict.fromkeys([self.target, self.handle] + [e.get("frame_handle") for e in log if e.get("ok")]
                                      + [h for e in log if e.get("ok") for h in e.get("resolved_handles", [])]))
         for handle in handles:
@@ -107,6 +116,10 @@ class Request:
             if not entry.get("ok"):
                 continue
             for component, values in (entry.get("statistics") or {}).items():
+                key = (tuple(entry.get("resolved_handles", [])), component, repr(sorted(values.items())))
+                if key in seen_statistics:
+                    continue
+                seen_statistics.add(key)
                 facts = ", ".join(f"{label}: {values[k]}" for k, label in (
                     ("min", "минимум"), ("max", "максимум"), ("mean", "среднее"),
                     ("median", "медиана"), ("std", "стандартное отклонение")) if k in values)
@@ -151,6 +164,15 @@ class SessionMemory:
     def touch(self, handle: str) -> None:
         self.last_good = handle
         self.recent = [h for h in self.recent if h != handle][-11:] + [handle]
+
+    @staticmethod
+    def summary_requested(question: str) -> bool:
+        q = question.lower()
+        assets = bool(re.search(r"станц|дат|файл|результат|handle|files|dates|results", q))
+        summary = bool(re.search(r"сводк|\bsummary\b", q))
+        enumerate_session = (bool(re.search(r"перечисл|подведи\s+итог|\blist\b", q))
+                             and bool(re.search(r"использован|разговор|диалог|контекст|подтверд", q)))
+        return assets and (summary or enumerate_session)
 
     def prepare(self, question: str, store: Any) -> Request:
         q = question.lower()
@@ -231,6 +253,9 @@ class SessionMemory:
                 request.target = f"raw:{station}:{request.fetch_date}"
         request.routine = bool(request.target or request.wants_stats or request.wants_plot) and not re.search(
             r"проанализ|объясн|почему|\b(?:ssc|gic|burton|proxy|epsilon|formula)\b|формул|метрик|аномал|размах|производн|mlt|налож", q)
+        if request.wants_stats and request.components:
+            request.query += (f"\nПараметры статистики текущего запроса: components={list(request.components)!r}. "
+                              "Не переноси компоненты предыдущих реплик в этот вызов get_statistics.")
         return request
 
     def context(self) -> str:

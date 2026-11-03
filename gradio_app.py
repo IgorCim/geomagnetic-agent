@@ -723,7 +723,7 @@ def make_chat_handler(brain: Any):
             )
 
         try:
-            if re.search(r"сводк|\bsummary\b", question, re.I) and re.search(r"станц|дат|файл|handle|files|dates", question, re.I):
+            if store.conversation.summary_requested(question):
                 return answer_with(store.conversation.summary(store, saved))
             plan = store.conversation.prepare(question, store)
             if plan.clarification:

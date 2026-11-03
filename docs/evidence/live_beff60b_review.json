@@ -1,0 +1,31 @@
+{
+  "provenance": "User-provided pasted Kaggle/Gradio output; not independently executed here; HTML/CSV/ZIP not inspected",
+  "head": "beff60b5eb844c7a873feaf929dd1c985fa0a871",
+  "inputs": [
+    {
+      "role": "gradio",
+      "sha256": "f0c02415e46fa1b7dd67fccf3774133f1e684c26b7be52b1477cda60c3e505e1"
+    },
+    {
+      "role": "dependencies",
+      "sha256": "84a108ec53835fe78a3209a095180f6744c72a9edd5ba553feabcb064e07a552"
+    },
+    {
+      "role": "checks",
+      "sha256": "95a28ba9acdf0626c0e037a168e8c22412c15692f91bf4885d8c12ed9af3deab"
+    },
+    {
+      "role": "stress",
+      "sha256": "455719dfe163b07ee9af073cd2a97c01873eb74ea9dfd86100185046fc025690"
+    }
+  ],
+  "offline_user_run": {
+    "passed": 1040,
+    "skipped": 3,
+    "deselected": 22
+  },
+  "http_fixture": "7 groups PASS; deterministic model",
+  "matrix_charts": 300,
+  "six_source_gate": "FAIL: SuperMAG skipped (not configured)",
+  "live_dialogue": "PARTIAL / FAIL: X,Y,Z,F statistics incomplete; unverified final summary"
+}

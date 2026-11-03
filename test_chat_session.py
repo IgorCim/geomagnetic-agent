@@ -221,6 +221,80 @@ def test_model_invented_raw_handle_cannot_reach_plotter_fallback(monkeypatch):
     assert result["tool_calls"][0]["executed"] is False
 
 
+@pytest.mark.parametrize("component,wrong", [("X", ["D"]), ("Y", ["H"]),
+                                            ("Z", ["H", "D", "I"]), ("F", ["H", "D", "I"])])
+def test_wrong_statistics_component_is_blocked_then_recovered(component, wrong):
+    store = ac.FrameStore()
+    h = seed(store, "bou")
+    plan = SessionMemory().prepare(f"Получи инструментом статистику {component} для BOU за 2024-09-10, без повторной загрузки.", store)
+    brain = ac.ScriptedBrain([call("get_statistics", df_descriptor=h, components=wrong),
+                              call("get_statistics", df_descriptor=h, components=[component]),
+                              {"content": "Медиана 999 nT"}])
+    result = ac.run_agent(plan.query, brain=brain, store=store, contract=plan, verbose=False)
+    assert result["ok"], result
+    rejected, accepted = result["tool_calls"]
+    assert rejected["ok"] is False and rejected["executed"] is False
+    assert rejected["error"] == "request_mismatch"
+    assert "components" in rejected["message"] and component in rejected["message"]
+    assert set(accepted["statistics"]) == {component}
+    assert "999" not in result["text"]
+
+
+def test_statistics_correction_names_the_actual_requested_component():
+    store = ac.FrameStore()
+    h = seed(store, "bou")
+    plan = SessionMemory().prepare("Получи статистику X для BOU за 2024-09-10", store)
+    assert "components" in plan.query and "X" in plan.query
+    missing = "; ".join(plan.missing([], store))
+    assert "components" in missing and "X" in missing
+    assert plan.check_call("get_statistics", {"df_descriptor": h}, store)
+
+
+def test_partial_index_statistics_can_be_completed_in_separate_calls():
+    store = ac.FrameStore()
+    store.put("idx:kyoto:2024-09-10", pd.DataFrame({"Dst": [-10., -20.], "Kp": [1., 2.]}))
+    h = "idx:kyoto:2024-09-10"
+    plan = SessionMemory().prepare(f"Получи статистику Dst и Kp из {h}", store)
+    brain = ac.ScriptedBrain([call("get_statistics", df_descriptor=h, components=["dst"]),
+                              call("get_statistics", df_descriptor=h, components=["kp"]), {"content": "Готово."}])
+    result = ac.run_agent(plan.query, brain=brain, store=store, contract=plan, verbose=False)
+    assert result["ok"] and all(e["ok"] for e in result["tool_calls"]), result
+
+
+@pytest.mark.parametrize("question", [
+    "Кратко перечисли станции, даты и результаты, которые можешь подтвердить доступным контекстом и инструментами. Не восстанавливай забытые числа по догадке; явно укажи пробелы.",
+    "Перечисли использованные станции, даты и файлы в этом разговоре.",
+    "Дай краткую сводку по станциям, датам и файлам.",
+])
+def test_summary_variants_use_session_facts_without_model(question, tmp_path, monkeypatch):
+    def forbidden(*a, **k):
+        raise AssertionError("Session summary must not reach the model")
+    monkeypatch.setattr(ga, "run_agent", forbidden)
+    store = ac.FrameStore()
+    seed(store, "bou")
+    artifact = tmp_path / "comparison.html"
+    artifact.write_text("test", encoding="utf-8")
+    result = ga.make_chat_handler(object())(question, [], [{"path": str(artifact)}], store)
+    text = result[0][-1]["content"]
+    assert "raw:bou:2024-09-10" in text and "comparison.html" in text
+    assert "существует" in text and "BOX" not in text
+
+
+@pytest.mark.parametrize("question", ["Перечисли станции каталога INTERMAGNET", "Перечисли даты наблюдений в каталоге OMNI"])
+def test_catalog_list_is_not_a_conversation_summary(question):
+    assert not SessionMemory.summary_requested(question)
+
+
+def test_identical_retried_statistics_are_not_repeated_in_answer():
+    store = ac.FrameStore()
+    h = seed(store, "bou")
+    plan = SessionMemory().prepare(f"Получи статистику X из {h}", store)
+    brain = ac.ScriptedBrain([call("get_statistics", df_descriptor=h, components=["X"]),
+                              call("get_statistics", df_descriptor=h, components=["X"]), {"content": "Готово."}])
+    result = ac.run_agent(plan.query, brain=brain, store=store, contract=plan, verbose=False)
+    assert result["ok"] and result["text"].count("- X:") == 1
+
+
 def test_lost_anchors_do_not_leak_between_browser_sessions(monkeypatch):
     def forbidden(*a, **k):
         raise AssertionError("An ambiguous first day must not reach the LLM")
