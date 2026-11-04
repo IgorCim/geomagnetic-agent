@@ -59,3 +59,19 @@ def test_http_probe_records_external_evidence_without_claiming_decommission(tmp_
 def test_no_fixture_model_accepted_by_public_entry(tmp_path):
     with pytest.raises(RuntimeError, match='LlamaBrain'):
         D['run_diagnostics'](object(), helper_path=tmp_path/'absent.py')
+
+
+def test_launcher_pins_both_scripts_without_updating_agent_or_embedding_login():
+    import ast
+    source = (ROOT/'tools/kaggle_prompt_diagnostics.py').read_text(encoding='utf-8')
+    tree = ast.parse(source)
+    assignment = next(n for n in tree.body if isinstance(n, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == 'qa_files' for t in n.targets))
+    pins = ast.literal_eval(assignment.value)
+    assert pins[0] == ('3b8666c00127e241daaf15190e637ce325f0c9b8', 'run_chat_acceptance.py', D['HELPER_SHA'])
+    import subprocess
+    import hashlib
+    for commit, name, digest in pins:
+        assert hashlib.sha256(subprocess.check_output(['git', 'show', commit+':tools/'+name], cwd=ROOT)).hexdigest() == digest
+    assert 'git pull' not in source and 'load_brain(' not in source
+    assert 'IgorCim' not in source.replace('https://raw.githubusercontent.com/IgorCim/', '')

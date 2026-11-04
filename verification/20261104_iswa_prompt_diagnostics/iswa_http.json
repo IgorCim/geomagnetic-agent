@@ -1,0 +1,35 @@
+{
+  "observations": [
+    {
+      "id": "current_catalog",
+      "requested_url": "https://iswa.ccmc.gsfc.nasa.gov/api/info",
+      "utc": "2026-11-04T06:05:40.331183+00:00",
+      "status": 200,
+      "final_url": "https://iswa.ccmc.gsfc.nasa.gov/api/info",
+      "content_type": "application/json",
+      "bytes": 785395,
+      "sha256": "d8f7c4584b4614273527acd5df4d4bc5cce32ec7c36e2d543e02fc04992e499d",
+      "png": false,
+      "keyword_snippets": [],
+      "datafeed_count": 1352,
+      "protocols": [
+        "ftp",
+        "https",
+        "mv",
+        "sftp"
+      ]
+    },
+    {
+      "id": "legacy_getmap",
+      "requested_url": "https://iswa.gsfc.nasa.gov/wmts/wmts.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=ground_mag_perturbation&TIME=2024-09-10T12:00:00Z&BBOX=-180,-90,180,90&WIDTH=1024&HEIGHT=512&FORMAT=image/png&SRS=EPSG:4326",
+      "utc": "2026-11-04T06:05:42.430763+00:00",
+      "status": 404,
+      "final_url": "https://iswa.gsfc.nasa.gov/wmts/wmts.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=ground_mag_perturbation&TIME=2024-09-10T12:00:00Z&BBOX=-180,-90,180,90&WIDTH=1024&HEIGHT=512&FORMAT=image/png&SRS=EPSG:4326",
+      "content_type": "text/html; charset=iso-8859-1",
+      "bytes": 196,
+      "sha256": "80c3fe2ae1062abf56456f52518bd670f9ec3917b7f85e152b347ac6b6faf880",
+      "png": false
+    }
+  ],
+  "verdict": "REVIEW_REQUIRED: 404 establishes only that URL; 403/timeout cannot establish decommissioning. Catalog keywords are candidates, not proof of a usable map."
+}
