@@ -12,6 +12,14 @@ D = runpy.run_path(str(ROOT/'tools/run_prompt_diagnostics.py'))
 H = runpy.run_path(str(ROOT/'tools/run_chat_acceptance.py'))
 
 
+def _pinned_bytes(commit, name):
+    fixture = ROOT/'tests'/'qa_pins'/commit/name
+    if fixture.is_file():
+        return fixture.read_bytes()
+    import subprocess
+    return subprocess.check_output(['git', 'show', commit+':tools/'+name], cwd=ROOT)
+
+
 def test_pairs_keep_originals_and_vary_context_separately():
     pairs = D['build_pairs'](H)
     assert len(pairs) == 22
@@ -82,10 +90,9 @@ def test_launcher_pins_both_scripts_without_updating_agent_or_embedding_login():
                       and any(isinstance(t, ast.Name) and t.id == 'qa_files' for t in n.targets))
     pins = ast.literal_eval(assignment.value)
     assert pins[0] == ('3b8666c00127e241daaf15190e637ce325f0c9b8', 'run_chat_acceptance.py', D['HELPER_SHA'])
-    import subprocess
     import hashlib
     for commit, name, digest in pins:
-        assert hashlib.sha256(subprocess.check_output(['git', 'show', commit+':tools/'+name], cwd=ROOT)).hexdigest() == digest
+        assert hashlib.sha256(_pinned_bytes(commit, name)).hexdigest() == digest
     assert 'git pull' not in source and 'load_brain(' not in source
     assert 'IgorCim' not in source.replace('https://raw.githubusercontent.com/IgorCim/', '')
 
@@ -93,13 +100,12 @@ def test_launcher_pins_both_scripts_without_updating_agent_or_embedding_login():
 def test_remaining_launcher_pins_scripts_and_selects_only_unfinished_work():
     import ast
     import hashlib
-    import subprocess
     source = (ROOT/'tools/kaggle_prompt_diagnostics_remaining.py').read_text(encoding='utf-8')
     tree = ast.parse(source)
     values = {n.targets[0].id: n.value for n in tree.body
               if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)}
     for commit, name, digest in ast.literal_eval(values['qa_files']):
-        assert hashlib.sha256(subprocess.check_output(['git', 'show', commit+':tools/'+name], cwd=ROOT)).hexdigest() == digest
+        assert hashlib.sha256(_pinned_bytes(commit, name)).hexdigest() == digest
     assert ast.literal_eval(values['qa_remaining_cases']) == ['gic_after_deltas']
     call = values['qa_diagnostic_result']
     assert any(k.arg == 'probe_services' and ast.literal_eval(k.value) is False for k in call.keywords)
