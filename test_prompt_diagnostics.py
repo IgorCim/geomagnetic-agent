@@ -61,6 +61,19 @@ def test_no_fixture_model_accepted_by_public_entry(tmp_path):
         D['run_diagnostics'](object(), helper_path=tmp_path/'absent.py')
 
 
+def test_continuation_only_unfinished_pair_and_preserves_verbatim_setup():
+    full = D['build_pairs'](H)
+    selected = D['select_pairs'](H, ['gic_after_deltas'])
+    assert selected == [p for p in full if p['case'] == 'gic_after_deltas']
+    assert [p['variant'] for p in selected] == ['original', 'explicit']
+    assert sum(len(p['setup'])+1 for p in selected)+1 == 7
+    assert all([c['id'] for c in p['setup']] == ['TOOL-01', 'C02'] for p in selected)
+    for bad in ([], 'gic_after_deltas', ['unknown']):
+        with pytest.raises(ValueError):
+            D['select_pairs'](H, bad)
+    assert D['select_pairs'](H) == full
+
+
 def test_launcher_pins_both_scripts_without_updating_agent_or_embedding_login():
     import ast
     source = (ROOT/'tools/kaggle_prompt_diagnostics.py').read_text(encoding='utf-8')

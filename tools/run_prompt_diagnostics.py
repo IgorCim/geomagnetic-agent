@@ -126,7 +126,19 @@ def missing_setup(card, store, projects_root):
     return missing, projects, {name: cols for name, cols in columns.items() if cols}
 
 
-def run_diagnostics(brain, *, helper_path, logon='', repeats=1):
+def select_pairs(helper, case_ids=None):
+    pairs = build_pairs(helper)
+    if case_ids is None:
+        return pairs
+    if not isinstance(case_ids, (list, tuple)) or not case_ids:
+        raise ValueError('case_ids должен быть непустым списком имён проверок.')
+    unknown = set(case_ids) - {p['case'] for p in pairs}
+    if unknown:
+        raise ValueError(f'Неизвестные проверки: {sorted(unknown)}')
+    return [p for p in pairs if p['case'] in case_ids]
+
+
+def run_diagnostics(brain, *, helper_path, logon='', repeats=1, case_ids=None, probe_services=True):
     import agent_core as ac
     import gradio_app as ga
     import project_store as ps
@@ -140,6 +152,7 @@ def run_diagnostics(brain, *, helper_path, logon='', repeats=1):
     assert hashlib.sha256(helper_path.read_bytes()).hexdigest() == HELPER_SHA
     h = runpy.run_path(str(helper_path))
     h['_verify_frozen_source'](ROOT)
+    pairs = select_pairs(h, case_ids)
     parent = ROOT/'verification'
     parent.mkdir(exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix='prompt_diagnostics_', dir=parent))
@@ -152,12 +165,14 @@ def run_diagnostics(brain, *, helper_path, logon='', repeats=1):
               'python': sys.version, 'model_repo': ac.MODEL_REPO, 'model_stem': ac.MODEL_STEM,
               'n_ctx': getattr(brain, '_n_ctx', None),
               'diagnostic_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+              'selected_cases': sorted({p['case'] for p in pairs}),
+              'independent_iswa_probe': 'REQUESTED' if probe_services else 'NOT_REPEATED',
               'comparisons': []}
     write = lambda: h['_write'](directory/'results.json', report, redact)
     console = sys.stdout
     try:
-        pairs = build_pairs(h)
-        probe_iswa(directory)
+        if probe_services:
+            probe_iswa(directory)
         # SuperMAG: real authenticated tool call, in a separate session.
         pairs.append({'id': 'supermag_authenticated', 'case': 'service_check', 'variant': 'authenticated',
                       'setup': [], 'prompt': 'Вызови fetch_supermag_data с data_type=indices за 2024-09-10 для SME/SML/SMU. Используй логин сессии, не выводи его. Укажи реальный handle, число строк либо реальную причину отказа.',
