@@ -737,13 +737,13 @@ def _resolve_export_folders(
             candidates: list[Path] = []
             if any(ch in text for ch in "*?["):
                 try:
-                    candidates = [
-                        p
-                        for p in _glob_case_insensitive(target, text)
-                        if p.is_file()
-                        and not _is_link_like(p)
-                        and _is_within(target, p)
-                    ]
+                    for p in _glob_case_insensitive(target, text):
+                        if _is_link_like(p) or not _is_within(target, p):
+                            continue
+                        if p.is_dir():
+                            candidates.extend(f for f in _walk_project(target, p) if f.is_file())
+                        elif p.is_file():
+                            candidates.append(p)
                 except (OSError, ValueError) as exc:
                     return None, _error(
                         "invalid_folder_pattern",

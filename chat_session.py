@@ -62,9 +62,11 @@ class Request:
     observed_baselines: dict = field(default_factory=dict)
     requested_formula: str | None = None
     baseline_hours: tuple[int, int] | None = None
+    no_derive: bool = False
+    required_operations: tuple[str, ...] = ()
 
     def should_use_facts(self, log: list[dict]) -> bool:
-        if self.routine or self.calculation_tools:
+        if self.routine or self.calculation_tools or self.required_operations:
             return True
         interpretation = re.search(r"проанализ|объясн|интерпрет|почему|\b(?:interpret|explain|analy[sz])", self.query, re.I)
         return not interpretation and any(
@@ -82,7 +84,7 @@ class Request:
         model-generated argument, or stored answer is used here.
         """
         if (not self.routine or not self.wants_stats or not self.components
-                or self.wants_plot or self.wants_derived or self.clarification):
+                or self.wants_plot or self.wants_derived or self.clarification or self.calculation_tools):
             return None
         if len(set(DATES.findall(self.query))) > 1:
             return None
@@ -102,6 +104,8 @@ class Request:
         return None
 
     def check_call(self, name: str, args: dict, store: Any) -> str | None:
+        if self.no_derive and name == 'calculate_derived_components':
+            return 'Повторный расчёт компонентов запрещён текущим запросом; используй готовую таблицу.'
         if name == "evaluate_custom_formula" and self.requested_formula:
             try:
                 expected = ast.dump(ast.parse(self.requested_formula, mode="eval"))
@@ -179,6 +183,9 @@ class Request:
 
     def missing(self, log: list[dict], store: Any) -> list[str]:
         missing = []
+        for tool in self.required_operations:
+            if not any(e.get('ok') and e.get('tool') == tool for e in log):
+                missing.append(f'выполнить {tool} и получить фактический результат')
         for tool in self.calculation_tools:
             if not any(e.get("ok") and e.get("tool") == tool and e.get("calculation") for e in log):
                 missing.append(f"выполнить {tool} и получить фактический результат")
@@ -228,6 +235,8 @@ class Request:
         for entry in log:
             if not entry.get("ok"):
                 continue
+            if entry.get('tool') in self.required_operations and entry.get('note'):
+                lines.append(f"- {entry['tool']}: {entry['note']}")
             calculation = entry.get("calculation")
             if calculation:
                 lines.append(f"- {entry['tool']}:")
@@ -361,7 +370,9 @@ class SessionMemory:
                 return request
         request.station = request.station or station
         request.no_fetch = bool(re.search(r"не\s+скачивай|без\s+(?:новой|повторной)\s+загруз|no\s+refetch", q))
-        request.wants_stats = bool(re.search(r"статист|медиан|\bstatistics\b|\bmedian\b", q))
+        outlier_text = re.sub(r'(?:а\s+)?не\s+поиск\s+выбросов|не\s+ищи\s+выбросы', '', q)
+        outliers = bool(re.search(r'выброс|detect_anomalies|sigma_threshold|\boutliers?\b', outlier_text))
+        request.wants_stats = bool(re.search(r"статист|медиан|\bstatistics\b|\bmedian\b", q)) and not outliers
         request.wants_plot = bool(re.search(r"постро|построй|график|сопостав|сравн|\bcompar|\bplot\b|\bchart\b", q))
         if same and not (request.wants_stats or request.wants_plot) and re.search(r"\b[XYZFHDI]\b", question):
             request.wants_stats = request.wants_stats or self.last_stats
@@ -371,16 +382,35 @@ class SessionMemory:
         stats_text = question[stats_start.end():] if stats_start else question
         stats_text = re.split(r"постро|график|\bplot\b", stats_text, maxsplit=1, flags=re.I)[0]
         request.components = tuple(dict.fromkeys(re.findall(r"\b(?:Dst|Kp|[XYZFHDI])\b", stats_text, re.I))) if request.wants_stats else ()
-        request.wants_derived = bool(re.search(r"\bh\s*[/,]\s*d\s*[/,]\s*i\b", q)) and not request.wants_stats
+        request.no_derive = bool(re.search(r'без\s+(?:повторного\s+)?расч[её]та\s+h\s*[/,]\s*d\s*[/,]\s*i|не\s+вызывай\s+calculate_derived_components|calculate_derived_components\s+не\s+вызывай', q))
+        request.wants_derived = bool(re.search(r"\bh\s*[/,]\s*d\s*[/,]\s*i\b", q)) and not request.wants_stats and not request.no_derive
         action_text = re.sub(r"не\s+(?:рассчитывай|вычисляй|считай|применяй|вызывай|используй)\b", "", q)
-        computing = bool(re.search(r"рассчита|вычисл|посчита|получи|найди|определ|примени|\b(?:calculate|compute|evaluate|apply|find)\b", action_text))
+        computing = bool(re.search(r"рассчита|вычисл|посчита|получи|найди|определ|примени|вызови|выполни|через|\b(?:calculate|compute|evaluate|apply|find|call|run)\b", action_text))
         required = [name for name in sorted(CALCULATION_TOOLS) if (computing or q.lstrip().startswith(name)) and re.search(r"\b" + name + r"\b", q)
                     and not re.search(r"не\s+(?:вызывай|используй|применяй|рассчитывай)\s+" + name + r"\b", q)]
         if computing and re.search(r"\bbaseline\b|базов\w*\s+лини", q) and not required:
             required.append("calculate_baseline")
         if request.wants_derived and "calculate_derived_components" not in required:
             required.append("calculate_derived_components")
-        metric = re.search(r"\bmetric\s*=\s*([a-z_]+)", q)
+        if request.no_derive:
+            required = [name for name in required if name != 'calculate_derived_components']
+        if outliers and 'detect_anomalies' not in required:
+            required.append('detect_anomalies')
+        operations = []
+        for name, pattern in (
+            ('export_project', r'экспортируй|экспортировать'),
+            ('list_projects', r'перечисли.*проект|список.*проект'),
+            ('get_noaa_space_weather_context', r'получи.*noaa'),
+            ('get_iswa_forecast', r'получи.*прогноз.*iswa'),
+        ):
+            if (computing and name in q) or re.search(pattern, q):
+                forbidden = re.search(r'не\s+(?:вызывай|используй)\s+' + name + r'|' + name + r'\s+не\s+вызывай', q)
+                if name == 'export_project' and re.search(r'не\s+экспортир', q):
+                    forbidden = True
+                if not forbidden:
+                    operations.append(name)
+        request.required_operations = tuple(operations)
+        metric = re.search(r"\bmetric\s*=\s*['\"]?([a-z_]+)", q)
         if metric:
             request.requested_metric = metric[1]
         baseline_mode = re.search(r"\bmode\s*=\s*(night|full)\b", q)

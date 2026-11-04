@@ -1904,6 +1904,8 @@ def _selection_plan(
     ]
 
     mandatory: list[str] = []
+    if re.search(r'\bh\s*[/,]\s*d\s*[/,]\s*i\b', text):
+        mandatory.extend(('fetch_observatory_data', 'calculate_derived_components'))
     # Exact registered names in the current request are explicit capabilities.
     # Do not lose calculate_derived_math inside a multi-step baseline request.
     mandatory.extend(name for name in TOOLS_BY_NAME if re.search(r"\b" + re.escape(name) + r"\b", text))
