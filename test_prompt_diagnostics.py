@@ -88,3 +88,19 @@ def test_launcher_pins_both_scripts_without_updating_agent_or_embedding_login():
         assert hashlib.sha256(subprocess.check_output(['git', 'show', commit+':tools/'+name], cwd=ROOT)).hexdigest() == digest
     assert 'git pull' not in source and 'load_brain(' not in source
     assert 'IgorCim' not in source.replace('https://raw.githubusercontent.com/IgorCim/', '')
+
+
+def test_remaining_launcher_pins_scripts_and_selects_only_unfinished_work():
+    import ast
+    import hashlib
+    import subprocess
+    source = (ROOT/'tools/kaggle_prompt_diagnostics_remaining.py').read_text(encoding='utf-8')
+    tree = ast.parse(source)
+    values = {n.targets[0].id: n.value for n in tree.body
+              if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)}
+    for commit, name, digest in ast.literal_eval(values['qa_files']):
+        assert hashlib.sha256(subprocess.check_output(['git', 'show', commit+':tools/'+name], cwd=ROOT)).hexdigest() == digest
+    assert ast.literal_eval(values['qa_remaining_cases']) == ['gic_after_deltas']
+    call = values['qa_diagnostic_result']
+    assert any(k.arg == 'probe_services' and ast.literal_eval(k.value) is False for k in call.keywords)
+    assert 'git pull' not in source and 'load_brain(' not in source
