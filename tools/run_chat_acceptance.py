@@ -324,7 +324,7 @@ def _verify_frozen_source(root):
             raise RuntimeError('SOURCE_MANIFEST изменился после загрузки brain. Перезапустите Python и ячейки 1–5.')
 
 
-def run_acceptance(brain, *, output_parent=None):
+def run_acceptance(brain, *, output_parent=None, plan=None):
     """Run live acceptance using the already-loaded real model. Never reload it."""
     import agent_core as ac
     if not isinstance(brain, ac.LlamaBrain) or isinstance(brain, ac.ScriptedBrain):
@@ -337,7 +337,7 @@ def run_acceptance(brain, *, output_parent=None):
         module = __import__(name)
         if Path(module.__file__).resolve().parent != ROOT:
             raise RuntimeError(f'Модуль {name} загружен из другого checkout. Нужен свежий Python.')
-    plan = build_plan()
+    plan = build_plan() if plan is None else plan
     _verify_frozen_source(ROOT)
     parent = Path(output_parent or ROOT/'verification').resolve()
     parent.mkdir(parents=True, exist_ok=True)

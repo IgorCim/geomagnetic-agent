@@ -155,7 +155,15 @@ def test_kaggle_cell_downloads_only_pinned_helper_reuses_brain_and_checks_hash(t
     cell = (Path(__file__).parent/'tools/kaggle_chat_acceptance.py').read_text(encoding='utf-8')
     compile(cell, 'kaggle-chat-acceptance', 'exec')
     monkeypatch.setattr(ac, '__file__', str(tmp_path/'agent_core.py'))
-    payload = b'changed' if bad_hash else source.read_bytes()
+    # The public launcher deliberately downloads a historical immutable runner,
+    # which is not necessarily the current checkout's runner.
+    pinned = Path(__file__).parent/'tests/qa_pins/3b8666c00127e241daaf15190e637ce325f0c9b8/run_chat_acceptance.py'
+    if pinned.is_file():
+        pinned_bytes = pinned.read_bytes()
+    else:
+        import subprocess
+        pinned_bytes = subprocess.check_output(['git', 'show', '3b8666c00127e241daaf15190e637ce325f0c9b8:tools/run_chat_acceptance.py'])
+    payload = b'changed' if bad_hash else pinned_bytes
     downloaded, calls = [], []
     def open_fixture(url, **kw):
         downloaded.append(url)

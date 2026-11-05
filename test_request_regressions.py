@@ -89,3 +89,72 @@ def test_export_glob_selecting_day_directories_keeps_their_files(tmp_path):
     assert error is None
     assert globbed == literal
     assert len(globbed) == 2
+
+
+@pytest.mark.parametrize('ending', ['без скачивания и повторного расчёта H/D/I',
+                                 'без загрузки и расчета H/D/I'])
+def test_coordinated_prohibition(ending):
+    r, store = request('Используй derived:irt:2024-09-10. Построй H ' + ending)
+    assert r.no_fetch and r.no_derive and not r.wants_derived
+    assert r.check_call('calculate_derived_components', {'df_descriptor': r.handle}, store)
+    assert r.check_call('fetch_observatory_data', {'station_code': 'IRT'}, store)
+    assert not r.check_call('plot_components', {'df_descriptor': r.handle, 'components': ['H']}, store)
+
+
+@pytest.mark.parametrize('text', ['Построй H из raw:irt:2024-09-10.',
+                                'Рассчитай H/D/I для raw:irt:2024-09-10 без загрузки.'])
+def test_no_implicit_ban_on_necessary_derivation(text):
+    r, store = request(text)
+    assert not r.no_derive
+    assert not r.check_call('calculate_derived_components', {'df_descriptor': r.handle}, store)
+
+
+@pytest.mark.parametrize('text,tool', [
+    ('Сгруппируй IRT, BOU и ABG по MLT на 2024-09-10T12:00:00Z, bin_hours=3.', 'group_stations_by_mlt'),
+    ('Через group_stations_by_mlt сгруппируй IRT и BOU.', 'group_stations_by_mlt'),
+    ('Через plot_overlay наложи H IRT и BOU за 2024-09-10, time_system=MLT.', 'plot_overlay'),
+])
+def test_coordinate_claim_is_not_execution(text, tool):
+    r, store = request(text)
+    assert tool in r.required_operations
+    result = ac.run_agent(text, brain=ac.ScriptedBrain([{'content': 'Готово: выдуманные группы и файл.'}] * 4),
+                          store=store, contract=r, verbose=False)
+    assert not result['ok']
+    assert 'выдуманные' not in result['text']
+
+
+def test_formula_result_is_allowed_only_after_successful_bound_computation():
+    r, store = request('Через evaluate_custom_formula вычисли выражение hypot(X,Y)-H для derived:irt:2024-09-10.')
+    args = {'df_descriptor': r.handle, 'formula': 'hypot(X,Y)-H'}
+    payload, _ = ac._handle_custom_formula(args, store)
+    result_handle = payload['frame_handle']
+    followup = {'df_descriptor': result_handle, 'components': ['FORMULA']}
+    assert r.check_call('get_statistics', followup, store)  # an old slot is not lineage
+    r.observe_result('evaluate_custom_formula', args, {'error': 'failed', 'frame_handle': result_handle})
+    assert r.check_call('get_statistics', followup, store)
+    r.observe_result('evaluate_custom_formula', args, payload)
+    assert not r.check_call('get_statistics', followup, store)
+    assert not r.check_call('plot_components', followup, store)
+    assert r.check_call('get_statistics', {'df_descriptor': 'raw:irt:2024-09-10'}, store)
+    other, _ = request(r.query)
+    assert other.check_call('get_statistics', followup, store)  # no cross-turn exemption
+
+
+def test_source_recovery_only_blocked_when_explicitly_forbidden():
+    base = 'Примени apply_physics_formula metric=substorm_onset к raw:irt:2024-09-10.'
+    r, store = request(base + ' Не подменяй источник.')
+    assert r.check_call('fetch_supermag_data', {'start_date': '2024-09-10'}, store)
+    r, store = request('Рассчитай substorm_onset за 2024-09-10. Если нужен SML, загрузи его из SuperMAG.')
+    assert not r.check_call('fetch_supermag_data', {'start_date': '2024-09-10'}, store)
+    store.put('idx:supermag:2024-09-10', store.get('raw:irt:2024-09-10').copy())
+    assert not r.check_call('apply_physics_formula', {'df_descriptor': 'idx:supermag:2024-09-10', 'metric': 'substorm_onset'}, store)
+
+
+def test_group_payload_is_preserved_in_grounded_answer():
+    from chat_session import capture_calculation
+    r, store = request('Сгруппируй IRT и BOU по MLT.')
+    payload = {'bins': {'00-03': ['BOU'], '18-21': ['IRT']}, 'bin_hours': 3, 'model': 'tilted_dipole'}
+    entry = {'tool': 'group_stations_by_mlt', 'ok': True, 'note': 'grouped 2 stations'}
+    capture_calculation(entry, entry['tool'], payload)
+    text = r.facts([entry], store)
+    assert '00-03' in text and 'BOU' in text and 'tilted_dipole' in text

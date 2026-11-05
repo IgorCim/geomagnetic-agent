@@ -30,6 +30,7 @@ def main() -> int:
         'tools/run_chat_acceptance.py', 'tools/kaggle_chat_acceptance.py', 'docs/LONG_CHAT.md',
         'tools/run_prompt_diagnostics.py', 'tools/kaggle_prompt_diagnostics.py',
         'tools/kaggle_prompt_diagnostics_remaining.py',
+        'tools/run_focused_review.py', 'tools/kaggle_focused_review.py',
         'docs/qa/ready_tool_cases.json', 'docs/qa/TOOL_RUNBOOK.md',
         'docs/qa/FORMULA_RUNBOOK.md', 'docs/qa/inventory.json',
     ]]

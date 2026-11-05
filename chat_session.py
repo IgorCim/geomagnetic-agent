@@ -24,6 +24,8 @@ CALCULATION_TOOLS = {"calculate_derived_components", "calculate_baseline", "calc
 
 def capture_calculation(entry: dict, name: str, payload: Any) -> None:
     """Preserve only known calculation-result fields, never model prose or credentials."""
+    if name == 'group_stations_by_mlt' and isinstance(payload, dict):
+        entry['coordinate_result'] = {k: payload[k] for k in ('bins', 'stations_mlt', 'bin_hours', 'model') if k in payload}
     if name not in CALCULATION_TOOLS or not isinstance(payload, dict):
         return
     keys = ("metric", "component", "computed", "definitions", "baseline", "mode", "window", "night_hours",
@@ -64,6 +66,8 @@ class Request:
     baseline_hours: tuple[int, int] | None = None
     no_derive: bool = False
     required_operations: tuple[str, ...] = ()
+    produced_handles: set[str] = field(default_factory=set)
+    no_source_substitution: bool = False
 
     def should_use_facts(self, log: list[dict]) -> bool:
         if self.routine or self.calculation_tools or self.required_operations:
@@ -73,6 +77,13 @@ class Request:
             e.get("tool") in CALCULATION_TOOLS or e.get("tool") == "get_statistics" for e in log)
 
     def observe_result(self, name: str, args: dict, payload: Any) -> None:
+        # Only a successful computation from a bound input establishes lineage.
+        # Existing same-day slots and model claims are not evidence of provenance.
+        if name in CALCULATION_TOOLS and isinstance(payload, dict) and not payload.get('error'):
+            source = str(args.get('df_descriptor') or '').lower()
+            produced = payload.get('frame_handle')
+            if self.handle and source in {self.handle, *self.produced_handles} and isinstance(produced, str):
+                self.produced_handles.add(produced.lower())
         if name == "calculate_baseline" and isinstance(payload, dict) and not payload.get("error") and payload.get("baseline") is not None:
             key = (str(args.get("df_descriptor", "")).lower(), str(args.get("component") or "H").upper())
             self.observed_baselines[key] = payload["baseline"]
@@ -150,6 +161,13 @@ class Request:
                         f"Передано components={actual!r}. Используй запрошенные компоненты, а не компоненты прошлых реплик.")
         if self.no_fetch and name in FETCH:
             return "Запрошено использование прежних данных без повторной загрузки."
+        if self.no_source_substitution and self.handle and name in FETCH:
+            source = self.handle.split(':')[1]
+            allowed = ('fetch_solar_wind' if source == 'omni' else
+                       'fetch_geomagnetic_indices' if source == 'kyoto' else
+                       'fetch_supermag_data' if source == 'supermag' else 'fetch_observatory_data')
+            if name != allowed:
+                return 'Запрещена подмена источника текущего запроса; сообщи ограничение исходных данных.'
         fetch_date = self.fetch_date or self.date
         if fetch_date and name in FETCH:
             for key in ("start_date", "end_date"):
@@ -177,7 +195,7 @@ class Request:
                 return f"Запрошена дата {self.date}; передан handle {canonical}."
             if self.station and family in {"raw", "derived", "anomalies"} and source != self.station:
                 return f"Запрошена станция {self.station}; передан handle {canonical}."
-            if self.handle and key == "df_descriptor" and canonical != self.handle:
+            if self.handle and key == "df_descriptor" and canonical not in {self.handle, *self.produced_handles}:
                 return f"Используй явный handle {self.handle}; подмена на {canonical} не разрешена."
         return None
 
@@ -237,6 +255,8 @@ class Request:
                 continue
             if entry.get('tool') in self.required_operations and entry.get('note'):
                 lines.append(f"- {entry['tool']}: {entry['note']}")
+                if entry.get('coordinate_result'):
+                    lines.append(f"  {entry['coordinate_result']}")
             calculation = entry.get("calculation")
             if calculation:
                 lines.append(f"- {entry['tool']}:")
@@ -369,11 +389,12 @@ class SessionMemory:
                 request.clarification = "Укажите существующую дату YYYY-MM-DD."
                 return request
         request.station = request.station or station
-        request.no_fetch = bool(re.search(r"не\s+скачивай|без\s+(?:новой|повторной)\s+загруз|no\s+refetch", q))
+        request.no_fetch = bool(re.search(r"не\s+скачивай|без\s+(?:(?:новой|повторной)\s+)?(?:загруз|скачивания)|no\s+refetch", q))
+        request.no_source_substitution = bool(re.search(r'не\s+(?:подменяй|меняй)\s+источник', q))
         outlier_text = re.sub(r'(?:а\s+)?не\s+поиск\s+выбросов|не\s+ищи\s+выбросы', '', q)
         outliers = bool(re.search(r'выброс|detect_anomalies|sigma_threshold|\boutliers?\b', outlier_text))
         request.wants_stats = bool(re.search(r"статист|медиан|\bstatistics\b|\bmedian\b", q)) and not outliers
-        request.wants_plot = bool(re.search(r"постро|построй|график|сопостав|сравн|\bcompar|\bplot\b|\bchart\b", q))
+        request.wants_plot = bool(re.search(r"постро|построй|график|сопостав|сравн|наложи|\bplot_overlay\b|\bcompar|\bplot\b|\bchart\b", q))
         if same and not (request.wants_stats or request.wants_plot) and re.search(r"\b[XYZFHDI]\b", question):
             request.wants_stats = request.wants_stats or self.last_stats
             request.wants_plot = request.wants_plot or self.last_plot
@@ -382,7 +403,7 @@ class SessionMemory:
         stats_text = question[stats_start.end():] if stats_start else question
         stats_text = re.split(r"постро|график|\bplot\b", stats_text, maxsplit=1, flags=re.I)[0]
         request.components = tuple(dict.fromkeys(re.findall(r"\b(?:Dst|Kp|[XYZFHDI])\b", stats_text, re.I))) if request.wants_stats else ()
-        request.no_derive = bool(re.search(r'без\s+(?:повторного\s+)?расч[её]та\s+h\s*[/,]\s*d\s*[/,]\s*i|не\s+вызывай\s+calculate_derived_components|calculate_derived_components\s+не\s+вызывай', q))
+        request.no_derive = bool(re.search(r'без\s+(?:(?:скачивания|загрузки)\s+и\s+)?(?:повторного\s+)?расч[её]та\s+h\s*[/,]\s*d\s*[/,]\s*i|не\s+вызывай\s+calculate_derived_components|calculate_derived_components\s+не\s+вызывай', q))
         request.wants_derived = bool(re.search(r"\bh\s*[/,]\s*d\s*[/,]\s*i\b", q)) and not request.wants_stats and not request.no_derive
         action_text = re.sub(r"не\s+(?:рассчитывай|вычисляй|считай|применяй|вызывай|используй)\b", "", q)
         computing = bool(re.search(r"рассчита|вычисл|посчита|получи|найди|определ|примени|вызови|выполни|через|\b(?:calculate|compute|evaluate|apply|find|call|run)\b", action_text))
@@ -402,6 +423,8 @@ class SessionMemory:
             ('list_projects', r'перечисли.*проект|список.*проект'),
             ('get_noaa_space_weather_context', r'получи.*noaa'),
             ('get_iswa_forecast', r'получи.*прогноз.*iswa'),
+            ('group_stations_by_mlt', r'сгруппируй.*mlt'),
+            ('plot_overlay', r'наложи'),
         ):
             if (computing and name in q) or re.search(pattern, q):
                 forbidden = re.search(r'не\s+(?:вызывай|используй)\s+' + name + r'|' + name + r'\s+не\s+вызывай', q)

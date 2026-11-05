@@ -6374,6 +6374,7 @@ def _handle_group_stations_by_mlt(args, store):
     res = gcoords.group_by_mlt(items, bin_hours)
     if isinstance(res, dict) and res.get('ok') is False:
         return res, 'grouping failed'
+    res['model'] = 'tilted_dipole'
     return res, f'grouped {len(items)} stations by MLT'
 
 
