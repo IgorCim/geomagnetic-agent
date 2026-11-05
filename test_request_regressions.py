@@ -158,3 +158,36 @@ def test_group_payload_is_preserved_in_grounded_answer():
     capture_calculation(entry, entry['tool'], payload)
     text = r.facts([entry], store)
     assert '00-03' in text and 'BOU' in text and 'tilted_dipole' in text
+
+
+@pytest.mark.parametrize('wording', ['get_statistics для колонки FORMULA', 'статистику FORMULA', 'медиану FORMULA'])
+def test_formula_then_statistics_requires_both_real_calls(wording):
+    from test_chat_session import call
+    query = ('Через evaluate_custom_formula вычисли выражение hypot(X,Y)-H для derived:irt:2024-09-10. '
+             f'Затем получи {wording} из фактически полученного handle.')
+    r, store = request(query)
+    assert r.components == ('FORMULA',)
+    formula_call = call('evaluate_custom_formula', df_descriptor=r.handle, formula='hypot(X,Y)-H')
+    result = ac.run_agent(query, brain=ac.ScriptedBrain([formula_call] + [{'content': 'Готово'}] * 4),
+                          store=store, contract=r, verbose=False)
+    assert not result['ok']
+    assert 'get_statistics' in result['text']
+    r, store = request(query)
+    # A pre-existing same-name result does not satisfy this new computation.
+    ac._handle_custom_formula({'df_descriptor': r.handle, 'formula': 'X+100'}, store)
+    result = ac.run_agent(query, brain=ac.ScriptedBrain([
+        call('get_statistics', df_descriptor='formula:irt:2024-09-10', components=['FORMULA']),
+        formula_call,
+        call('get_statistics', df_descriptor='formula:irt:2024-09-10', components=['FORMULA']),
+        {'content': 'Готово'},
+    ]), store=store, contract=r, verbose=False)
+    assert result['tool_calls'][0]['ok'] is False
+    stats = [e for e in result['tool_calls'] if e['tool'] == 'get_statistics' and e['ok']]
+    assert len(stats) == 1
+    assert stats[0]['statistics']['FORMULA']['median'] == 0
+    assert not r.missing(result['tool_calls'], store)
+
+
+def test_formula_summary_alone_does_not_require_separate_statistics():
+    r, _ = request('Через evaluate_custom_formula вычисли выражение hypot(X,Y)-H для derived:irt:2024-09-10. Укажи min/max/mean.')
+    assert not r.wants_stats

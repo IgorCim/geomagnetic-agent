@@ -67,6 +67,33 @@ exec(compile((Path(agent_core.__file__).resolve().parent / "tools/kaggle_focused
 
 ## Границы проверки
 
+Допроверка цепочки формула → статистика после живого прогона 72bf141:
+точное имя get_statistics теперь учитывается как обязательная статистика.
+Колонка FORMULA распознаётся в запросе, а статистика результата формулы должна
+ссылаться на результат успешного вычисления текущего запроса. Старый одноимённый
+slot не засчитывается. Формульный summary min/max/mean сам по себе не требует
+дополнительного get_statistics.
+
+Короткая ячейка после свежих ячеек 1–5 запускает только 8 сообщений группы
+05_formula_chain с собственной подготовкой и скачиванием ZIP:
+
+```python
+from pathlib import Path
+import agent_core
+
+QA_FOCUS_GROUPS = ["05_formula_chain"]
+qa_cell = Path(agent_core.__file__).resolve().parent / "tools/kaggle_focused_review.py"
+exec(compile(qa_cell.read_text(encoding="utf-8"), str(qa_cell), "exec"))
+```
+
+Ключевой результат RESULT-STATS — сначала успешный evaluate_custom_formula,
+затем успешный get_statistics по FORMULA полученного handle. Сам текст ответа
+или summary формулы не доказывает прохождение этого составного запроса.
+
+Проверка исправления: verification/20261105T072843Z — 1177 passed,
+1 skipped, 22 deselected. HTTP Gradio verification/20261105T072923Z_gradio —
+8 групп PASS. Это проверки с тестовой моделью; живой повтор Qwen ожидается.
+
 Локально: `verification/20261105T061546Z` — 1173 passed, 1 skipped,
 22 deselected; `verification/20261105T061731Z_gradio` — 8 групп HTTP PASS,
 включая скачивание HTML/ZIP и изоляцию сессий. AST-сравнение SYSTEM_PROMPT

@@ -218,6 +218,8 @@ class Request:
             if frame is None or not {"H", "D", "I"} <= set(frame.columns):
                 missing.append("рассчитать H/D/I в соответствующей derived-таблице")
         stats = [e for e in log if e.get("ok") and e.get("tool") == "get_statistics" and e.get("statistics")]
+        if self.requested_formula and 'FORMULA' in self.components:
+            stats = [e for e in stats if set(e.get('resolved_handles', [])) & self.produced_handles]
         if self.wants_stats:
             done = {c.casefold() for e in stats for c in e["statistics"]}
             if not stats or (self.components and not set(c.casefold() for c in self.components) <= done):
@@ -393,16 +395,17 @@ class SessionMemory:
         request.no_source_substitution = bool(re.search(r'не\s+(?:подменяй|меняй)\s+источник', q))
         outlier_text = re.sub(r'(?:а\s+)?не\s+поиск\s+выбросов|не\s+ищи\s+выбросы', '', q)
         outliers = bool(re.search(r'выброс|detect_anomalies|sigma_threshold|\boutliers?\b', outlier_text))
-        request.wants_stats = bool(re.search(r"статист|медиан|\bstatistics\b|\bmedian\b", q)) and not outliers
+        request.wants_stats = bool(re.search(r"статист|медиан|\bget_statistics\b|\bstatistics\b|\bmedian\b", q)) and not outliers
         request.wants_plot = bool(re.search(r"постро|построй|график|сопостав|сравн|наложи|\bplot_overlay\b|\bcompar|\bplot\b|\bchart\b", q))
         if same and not (request.wants_stats or request.wants_plot) and re.search(r"\b[XYZFHDI]\b", question):
             request.wants_stats = request.wants_stats or self.last_stats
             request.wants_plot = request.wants_plot or self.last_plot
             request.query += ("\nПолучи статистику." if request.wants_stats else "") + (" Построй график." if request.wants_plot else "")
-        stats_start = re.search(r"статист\w*|медиан\w*|\bstatistics\b|\bmedian\b", question, re.I)
+        stats_start = re.search(r"статист\w*|медиан\w*|\bget_statistics\b|\bstatistics\b|\bmedian\b", question, re.I)
         stats_text = question[stats_start.end():] if stats_start else question
         stats_text = re.split(r"постро|график|\bplot\b", stats_text, maxsplit=1, flags=re.I)[0]
-        request.components = tuple(dict.fromkeys(re.findall(r"\b(?:Dst|Kp|[XYZFHDI])\b", stats_text, re.I))) if request.wants_stats else ()
+        request.components = tuple(dict.fromkeys(re.findall(r"\b(?:FORMULA|Dst|Kp|[XYZFHDI])\b", stats_text, re.I))) if request.wants_stats else ()
+        request.components = tuple(c.upper() if c.casefold() == 'formula' else c for c in request.components)
         request.no_derive = bool(re.search(r'без\s+(?:(?:скачивания|загрузки)\s+и\s+)?(?:повторного\s+)?расч[её]та\s+h\s*[/,]\s*d\s*[/,]\s*i|не\s+вызывай\s+calculate_derived_components|calculate_derived_components\s+не\s+вызывай', q))
         request.wants_derived = bool(re.search(r"\bh\s*[/,]\s*d\s*[/,]\s*i\b", q)) and not request.wants_stats and not request.no_derive
         action_text = re.sub(r"не\s+(?:рассчитывай|вычисляй|считай|применяй|вызывай|используй)\b", "", q)
