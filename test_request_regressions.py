@@ -4,6 +4,42 @@ from chat_session import SessionMemory
 from test_chat_session import seed
 
 
+def test_export_three_charts_using_paths_reported_by_plot_tool(tmp_path, monkeypatch):
+    from zipfile import ZipFile
+    import project_store as ps
+
+    monkeypatch.setattr(ps, 'EXPORTS_ROOT', tmp_path / 'exports')
+    workspace = ps.Workspace(root=tmp_path / 'projects')
+    store = ac.FrameStore(workspace=workspace)
+    assert workspace.create('qa_zip_123')['ok']
+    raw = seed(store)
+    assert workspace.save('IRT', '2024-09-10', store.get(raw))['ok']
+
+    def render(frame, *, components, title, filename):
+        path = tmp_path / filename
+        path.write_text(f'<html>{components[0]}</html>', encoding='utf-8')
+        return str(path)
+
+    monkeypatch.setattr(ac.plotter, 'plot_components', render)
+    folders = {}
+    for folder, component in zip(('1', '2', '3'), ('X', 'Y', 'Z')):
+        chart, _ = ac._handle_plot_components({'df_descriptor': raw, 'components': [component]}, store)
+        folders[folder] = chart['project_chart_paths']
+
+    rejected, _ = ac._handle_export_project({'folders': {'1': [chart['path']]}}, store)
+    assert rejected['error'] == 'invalid_folder_pattern'
+    assert all(paths[0] in rejected['hint'] for paths in folders.values())
+
+    exported, _ = ac._handle_export_project({'archive_name': 'qa_zip_123', 'folders': folders}, store)
+    assert exported['ok']
+    with ZipFile(exported['path']) as archive:
+        html = [name for name in archive.namelist() if '/' in name and name.endswith('.html')]
+        assert sorted(name.split('/')[0] for name in html) == ['1', '2', '3']
+        for name in html:
+            component = {'1': 'X', '2': 'Y', '3': 'Z'}[name.split('/')[0]]
+            assert archive.read(name) == f'<html>{component}</html>'.encode()
+
+
 def request(text):
     store = ac.FrameStore()
     raw = seed(store)

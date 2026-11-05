@@ -4974,6 +4974,11 @@ def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[An
     payload = {"ok": True, "path": result, "components": components, "rows": int(len(frame))}
     if filed:
         payload["filed_into_project"] = filed
+        project_root = projects.project_dir(store.workspace.project, store.workspace.root)
+        if project_root is not None:
+            relative_paths = [Path(path).relative_to(project_root).as_posix() for path in filed]
+            payload["project_chart_paths"] = relative_paths
+            notes.append(f"Use these project-relative chart paths in export_project folders: {relative_paths}")
     return payload, "; ".join([*notes, f"Saved chart to {result}"])
 
 
@@ -5240,6 +5245,13 @@ def _handle_export_project(args: dict[str, Any], store: FrameStore) -> tuple[Any
             project=name,
         ), f"export_project failed: {exc}"
     if projects.is_error(result):
+        if result.get("error") in {"empty_export_folder", "invalid_folder_pattern"}:
+            paths = sorted({row["relative_path"] for row in projects.read_chart_index(name, root=store.workspace.root)
+                            if row.get("relative_path")})
+            result["hint"] = (
+                "Use exact project-relative chart paths in folders. Standalone plot paths cannot be exported. "
+                + (f"Project chart paths: {paths[:20]}" if paths else "No charts are filed in this project.")
+            )
         return result, f"export_project failed: {result['error']}"
     return {
         "ok": True,
