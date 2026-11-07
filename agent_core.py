@@ -3910,6 +3910,11 @@ def _handle_fetch(args: dict[str, Any], store: FrameStore) -> tuple[Any, str]:
     summary["publication_state"] = (result.attrs or {}).get("publication_state")
     summary["publication_states"] = (result.attrs or {}).get("publication_states")
     summary["source"] = (result.attrs or {}).get("source")
+    if store.workspace.project:
+        saved = store.workspace.save(station, start, result, kind="raw")
+        summary["project_save"] = saved
+        if projects.is_error(saved):
+            return saved, f"Data fetched as {slot!r}, but project save failed: {saved.get('error')}"
     return summary, f"Fetched {len(result)} rows for {station or args.get('station_code')} -> handle {slot!r}."
 
 

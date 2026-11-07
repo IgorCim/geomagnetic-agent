@@ -40,6 +40,59 @@ def _store(root, **kwargs):
     return ac.FrameStore(workspace=ps.Workspace(root=root, **kwargs))
 
 
+@pytest.mark.parametrize("existing", [False, True])
+def test_single_fetch_files_charts_for_custom_zip(root, tmp_path, monkeypatch, frame, existing):
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    monkeypatch.setattr(ac.loader, "fetch_observatory_data", lambda **kw: frame.copy())
+    monkeypatch.setattr(ps, "EXPORTS_ROOT", tmp_path / "exports")
+    if existing:
+        ps.create_project("qa_zip_123", root=root)
+    store = _store(root)
+    ac._handle_create_project({"name": "qa_zip_123"}, store)
+    result, _ = ac._handle_fetch({"station_code": "IRT", "start_date": "2024-09-10"}, store)
+    assert result["project_save"]["ok"]
+    folders = {}
+    for number, component in enumerate("XYZ", 1):
+        chart = tmp_path / f"{component}_INTERMAGNET.html"
+        chart.write_text(f"<html>{component}</html>", encoding="utf-8")
+        monkeypatch.setattr(ac.plotter, "plot_components", lambda *a, **kw: str(chart))
+        plotted, _ = ac._handle_plot_components(
+            {"df_descriptor": "raw:irt:2024-09-10", "components": [component]}, store)
+        assert plotted["ok"]
+        assert len(plotted["project_chart_paths"]) == 1
+        folders[str(number)] = plotted["project_chart_paths"]
+    exported, _ = ac._handle_export_project({"name": "qa_zip_123", "folders": folders}, store)
+    assert exported["ok"], exported
+    with zipfile.ZipFile(exported["path"]) as archive:
+        for number, component in enumerate("XYZ", 1):
+            members = [name for name in archive.namelist() if name.startswith(f"{number}/")]
+            assert len(members) == 1
+            assert archive.read(members[0]) == f"<html>{component}</html>".encode()
+
+
+def test_single_fetch_without_project_does_not_save(root, monkeypatch, frame):
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    monkeypatch.setattr(ac.loader, "fetch_observatory_data", lambda **kw: frame.copy())
+    store = _store(root)
+    monkeypatch.setattr(store.workspace, "save", lambda *a, **kw: pytest.fail("No project selected"))
+    result, _ = ac._handle_fetch({"station_code": "IRT", "start_date": "2024-09-10"}, store)
+    assert "project_save" not in result
+    assert store.resolve("raw:irt:2024-09-10")[0] is not None
+
+
+def test_single_fetch_project_save_failure_is_reported(root, monkeypatch, frame):
+    monkeypatch.setattr(ac, "OFFLINE", False)
+    monkeypatch.setattr(ac.loader, "fetch_observatory_data", lambda **kw: frame.copy())
+    store = _store(root)
+    ac._handle_create_project({"name": "save_failure"}, store)
+    failure = {"ok": False, "error": "write_failed"}
+    monkeypatch.setattr(store.workspace, "save", lambda *a, **kw: failure)
+    result, note = ac._handle_fetch({"station_code": "IRT", "start_date": "2024-09-10"}, store)
+    assert result == failure
+    assert "project save failed" in note
+    assert store.resolve("raw:irt:2024-09-10")[0] is not None
+
+
 # --------------------------------------------------------------------------- #
 # names are untrusted input
 # --------------------------------------------------------------------------- #
