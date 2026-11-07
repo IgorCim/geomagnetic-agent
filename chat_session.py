@@ -115,6 +115,18 @@ class Request:
         return None
 
     def check_call(self, name: str, args: dict, store: Any) -> str | None:
+        if name == 'export_project':
+            # Literal destination names are user constraints, including on retries.
+            # Do not let a failed custom export silently become a default export.
+            requested_folders = set(re.findall(
+                r'\b(?:папк[ауеи]|folder)\s+["«“\']([^"»”\']+)["»”\']',
+                self.query, re.I))
+            if requested_folders:
+                folders = args.get('folders')
+                if not isinstance(folders, dict) or not requested_folders.issubset(folders):
+                    return (f'Сохрани запрошенные папки в folders: {sorted(requested_folders)!r}. '
+                            'После ошибки нельзя заменять пользовательскую структуру обычным экспортом. '
+                            'Используй фактические project_chart_paths из результатов построения графиков.')
         if self.no_derive and name == 'calculate_derived_components':
             return 'Повторный расчёт компонентов запрещён текущим запросом; используй готовую таблицу.'
         if name == "evaluate_custom_formula" and self.requested_formula:

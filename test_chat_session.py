@@ -9,6 +9,20 @@ import gradio_app as ga
 from chat_session import SessionMemory
 
 
+@pytest.mark.parametrize('names', [('1', '2', '3'), ('Земля', 'Ветер')])
+def test_export_retry_cannot_drop_literal_destination_folders(names):
+    from chat_session import Request
+    query = 'Экспортируй проект. ' + ' '.join(f'В папку "{n}" положи график.' for n in names)
+    contract = Request(query)
+    store = ac.FrameStore()
+    assert contract.check_call('export_project', {}, store)
+    assert contract.check_call('export_project', {'folders': {'Графики': ['a.html']}}, store)
+    assert contract.check_call('export_project', {'folders': {names[0]: ['a.html']}}, store)
+    assert contract.check_call('export_project', {'folders': {n: ['a.html'] for n in names}}, store) is None
+    # Constraints end with the request; ordinary exports remain available.
+    assert Request('Экспортируй проект.').check_call('export_project', {}, store) is None
+
+
 def call(name, **args):
     import json
     return {"content": "<tool_call>" + json.dumps({"name": name, "arguments": args}) + "</tool_call>"}
