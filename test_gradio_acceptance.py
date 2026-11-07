@@ -10,6 +10,40 @@ import project_store as ps
 from test_handles_and_plots import _write_plot
 
 
+def test_manual_zip_does_not_overwrite_custom_archive(tmp_path, monkeypatch):
+    import zipfile
+    monkeypatch.setattr(ps, 'PROJECTS_ROOT', tmp_path / 'projects')
+    monkeypatch.setattr(ps, 'EXPORTS_ROOT', tmp_path / 'exports')
+    ps.create_project('custom')
+    root = ps.project_dir('custom')
+    for component in 'XYZ':
+        (root / f'{component}.html').write_text(f'<html>{component}</html>')
+    custom = ps.export_project('custom', folders={str(i): [f'{c}.html'] for i, c in enumerate('XYZ', 1)})
+    assert not ps.is_error(custom), custom
+    original = Path(custom['path']).read_bytes()
+    first = ga._make_zip('custom')['value']
+    second = ga._make_zip('custom')['value']
+    assert len({str(first), str(second), custom['path']}) == 3
+    assert Path(custom['path']).read_bytes() == original
+    with zipfile.ZipFile(custom['path']) as archive:
+        for i, c in enumerate('XYZ', 1):
+            assert archive.read(f'{i}/{c}.html') == f'<html>{c}</html>'.encode()
+
+
+def test_plot_tally_merges_recovered_requested_filename_only():
+    log = [
+        {'tool': 'plot_overlay', 'ok': False, 'arguments': {'filename': 'xy.html'}},
+        {'tool': 'plot_components', 'ok': True, 'arguments': {'filename': 'xy.html'}, 'plot': '/plots/xy_INTERMAGNET.html'},
+    ]
+    text = ac._with_plot_tally('', log)
+    assert 'Построено графиков: 1.' in text
+    assert 'Не построено' not in text
+    log.append({'tool': 'plot_components', 'ok': False, 'arguments': {'filename': 'z.html'}})
+    text = ac._with_plot_tally('', log)
+    assert '1 из 2' in text
+    assert 'z.html' in text
+
+
 def test_history_is_sent_to_model_but_routing_uses_only_current_question(monkeypatch):
     seen = {}
     def run(query, **kwargs):

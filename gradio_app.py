@@ -856,7 +856,9 @@ def _make_zip(name: str) -> Any:
     if not name:
         return gr.update(visible=False) if hasattr(gr, "update") else {"visible": False}
     try:
-        result = project_store.export_project(name)
+        # A manual full-project build must not overwrite an agent's custom ZIP.
+        from uuid import uuid4
+        result = project_store.export_project(name, archive_name=f"full_project_{uuid4().hex}.zip")
     except OSError as exc:
         gr.Info(f"Не удалось собрать архив: {exc}")
         return gr.update(value=None, visible=False)
@@ -977,7 +979,7 @@ def build_demo(brain: Any) -> gr.Blocks:
                 wrap=True,
             )
             with gr.Row():
-                build_zip = gr.Button("Собрать ZIP", scale=1)
+                build_zip = gr.Button("Создать отдельный ZIP всего проекта", scale=1)
             download = gr.DownloadButton(
                 label="Скачать проект (ZIP)", visible=False, scale=1
             )

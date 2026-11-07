@@ -2899,6 +2899,7 @@ def test_llm_planner_complex_query_offline_mock():
     assert set(tool_names) == set(tools)
 
 
+@pytest.mark.live_model
 def test_llm_planner_complex_query_real_model():
     """End-to-end with the Qwen brain. Skips locally (no model on disk).
 

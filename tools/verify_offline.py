@@ -46,7 +46,7 @@ def main() -> int:
     env.update(PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
     # A developer credential must not leak into a test request or its output.
     env.pop("SUPERMAG_LOGON", None)
-    command = [sys.executable, "-B", "-m", "pytest", "-q", "-m", "not network", "-p", "no:cacheprovider", f"--junitxml={output / 'pytest.xml'}"]
+    command = [sys.executable, "-B", "-m", "pytest", "-q", "-m", "not network and not live_model", "-p", "no:cacheprovider", f"--junitxml={output / 'pytest.xml'}"]
     with tempfile.TemporaryDirectory(prefix="geomag_verify_") as directory:
         checkout = Path(directory)
         for source in files:

@@ -131,10 +131,14 @@ def main() -> int:
                 assert "export_manifest.json" in bundle.namelist()
             checks.append("Create/select empty project, build ZIP through UI endpoint, download and validate ZIP")
             ps.save_artifact('http_fixture', 'IRT', '2024-09-10', fetch('IRT', '2024-09-10', '2024-09-10'), root=ps.PROJECTS_ROOT)
-            custom = ps.export_project('http_fixture', archive_name='http_custom', folders={'Stations': ['irt']})
+            custom = ps.export_project('http_fixture', folders={'Stations': ['irt']})
             assert not ps.is_error(custom), custom
+            custom_bytes = Path(custom['path']).read_bytes()
+            first.predict('http_fixture', api_name='/_make_zip')
+            assert Path(custom['path']).read_bytes() == custom_bytes, 'Manual ZIP build overwrote custom export'
+            checks.append('Manual full-project ZIP preserves an existing custom archive byte-for-byte')
             archive_list = first.predict('http_fixture', api_name='/_project_archives')
-            custom_file = next(item for item in archive_list if 'http_custom' in str(item))
+            custom_file = next(item for item in archive_list if Path(custom['path']).name in str(item))
             custom_bytes = requests.get(custom_file['url'], timeout=15)
             assert custom_bytes.status_code == 200
             with zipfile.ZipFile(io.BytesIO(custom_bytes.content)) as bundle:

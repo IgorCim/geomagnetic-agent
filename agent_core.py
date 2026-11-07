@@ -8754,9 +8754,18 @@ def _with_plot_tally(text: str, log: list[dict[str, Any]]) -> str:
             if entry.get("ok") and isinstance(entry.get("plot"), str) and entry["plot"]
         ]
     )
-    requested = _unique(
-        [_attempted_plot_name(entry) for entry in log if entry.get("tool") in PLOT_TOOLS]
-    )
+    # A successful tool records the actual canonical filename. Its requested
+    # filename is an alias for that same artifact, not an additional chart.
+    aliases = {}
+    for entry in log:
+        if entry.get('ok') and entry.get('plot') and isinstance(entry.get('arguments'), dict):
+            filename = entry['arguments'].get('filename')
+            if isinstance(filename, str) and filename.strip():
+                aliases[Path(filename.strip()).name] = Path(str(entry['plot'])).name
+    requested = _unique([
+        aliases.get(_attempted_plot_name(entry), _attempted_plot_name(entry))
+        for entry in log if entry.get("tool") in PLOT_TOOLS
+    ])
     if not built and not requested:
         return text
 
