@@ -336,6 +336,7 @@ def plot_components(
     filename: str | None = None,
     max_points: int = GL_THRESHOLD,
     include_plotlyjs: Any = True,
+    layout: str = "auto",
 ) -> str | dict[str, Any]:
     """Plot one or more components of a single time series.
 
@@ -393,7 +394,11 @@ def plot_components(
 
     units = [_column_unit(name) or "value" for name in names]
     distinct_units = list(dict.fromkeys(units))
-    mixed_units = len(distinct_units) > 1
+    if layout not in {"auto", "stacked", "overlay"}:
+        return {"ok": False, "error": "invalid_layout", "message": "Use auto, stacked or overlay."}
+    if layout == "overlay" and len(distinct_units) > 1:
+        return {"ok": False, "error": "mixed_units", "message": "A shared axis requires compatible units; use stacked."}
+    mixed_units = layout == "stacked" or (layout == "auto" and len(distinct_units) > 1)
 
     # H (nT), D (deg) and I (deg) on one axis makes D/I invisible next to a
     # 10 000 nT H trace, and it labels the axis "value".  When units differ,

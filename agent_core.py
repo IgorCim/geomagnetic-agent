@@ -776,11 +776,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "plot_components",
             "description": (
-                "Plot one or more components of a single time series as an interactive "
-                "Plotly HTML chart. Any real column is accepted, case-insensitively: "
-                "the standard X/Y/Z/F/H/D/I, derived columns such as 'dst_proxy', and "
-                "the Kyoto indices 'Dst'/'Kp' (frame 'idx:kyoto:<дата>'). Returns the "
-                "absolute path of the saved file."
+                "Plot components of ONE table to HTML. Accepts real columns case-insensitively, "
+                "including X/Y/Z/F/H/D/I, dst_proxy and Kyoto Dst/Kp. Returns the file path."
             ),
             "parameters": {
                 "type": "object",
@@ -795,6 +792,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "observatory frame."
                         ),
                     },
+                    "layout": {"type": "string", "enum": ["auto", "stacked", "overlay"], "description": "auto by units; stacked separate panels in one HTML; overlay shared axis."},
                     "title": {"type": "string", "description": "Chart title."},
                     "filename": {"type": "string", "description": "Output file name, .html."},
                 },
@@ -1904,6 +1902,10 @@ def _selection_plan(
     ]
 
     mandatory: list[str] = []
+    if re.search(r'\bintermagnet\b', text):
+        mandatory.append('fetch_observatory_data')
+    if re.search(r'налож|\boverlay\b|панел', text) and len(set(re.findall(r'\b[xyzhdif]\b', text))) > 1:
+        mandatory.append('plot_components')
     if re.search(r'\bh\s*[/,]\s*d\s*[/,]\s*i\b', text):
         mandatory.extend(('fetch_observatory_data', 'calculate_derived_components'))
     # Exact registered names in the current request are explicit capabilities.
@@ -4966,6 +4968,7 @@ def _handle_plot_components(args: dict[str, Any], store: FrameStore) -> tuple[An
         components=components,
         title=title,
         filename=filename,
+        **({'layout': args['layout']} if 'layout' in args else {}),
     )
     if plotter.is_error(result):
         return result, f"plot_components failed: {result.get('error')}"

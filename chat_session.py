@@ -115,6 +115,10 @@ class Request:
         return None
 
     def check_call(self, name: str, args: dict, store: Any) -> str | None:
+        if name == 'plot_overlay' and len(set(re.findall(r'\b[XYZHDIF]\b', self.query))) > 1:
+            return ('plot_overlay сравнивает одну компоненту разных станций. '
+                    'Для нескольких компонентов одной таблицы используй plot_components: '
+                    'layout=overlay для общей шкалы или layout=stacked для отдельных панелей.')
         if name == 'export_project':
             # Literal destination names are user constraints, including on retries.
             # Do not let a failed custom export silently become a default export.
@@ -439,7 +443,7 @@ class SessionMemory:
             ('get_noaa_space_weather_context', r'получи.*noaa'),
             ('get_iswa_forecast', r'получи.*прогноз.*iswa'),
             ('group_stations_by_mlt', r'сгруппируй.*mlt'),
-            ('plot_overlay', r'наложи'),
+            ('plot_overlay', r'\bplot_overlay\b'),
         ):
             if (computing and name in q) or re.search(pattern, q):
                 forbidden = re.search(r'не\s+(?:вызывай|используй)\s+' + name + r'|' + name + r'\s+не\s+вызывай', q)
