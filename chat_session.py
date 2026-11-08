@@ -42,6 +42,31 @@ def station_in(question: str) -> str | None:
     return codes[0] if len(set(codes)) == 1 else None
 
 
+def explicit_chart_pairs(question: str) -> set[tuple[str, str]]:
+    """Only expand an explicitly requested Cartesian product, never a date range."""
+    if not re.search(r'для каждой[^.!?\n]*пар|each[^.!?\n]*pair', question, re.I):
+        return set()
+    match = re.search(r'(?:Загрузи|Загрузить|Load)\s+INTERMAGNET\s+([^.!?\n]+)', question, re.I)
+    if not match:
+        return set()
+    clause = match[1]
+    if re.search(r'\bс\s+\d{4}-|\bfrom\b|\.\.|\d{2}\s*[–—]\s*\d{4}', clause, re.I):
+        return set()
+    stations = {c.lower() for c in re.findall(r'\b[A-Z]{3}\b', clause) if c not in EXCLUDE_CODES}
+    days = set(DATES.findall(clause))
+    return {(s, d) for s in stations for d in days}
+
+
+def chart_source_pairs(paths) -> set[tuple[str, str]]:
+    """Canonical project source paths, not model-authored output filenames."""
+    pairs = set()
+    for path in paths:
+        parts = str(path).replace('\\', '/').split('/')
+        if len(parts) >= 3 and DATES.fullmatch(parts[1]) and parts[-1].lower().endswith('.html'):
+            pairs.add((parts[0].lower(), parts[1]))
+    return pairs
+
+
 @dataclass
 class Request:
     query: str
@@ -120,6 +145,20 @@ class Request:
                     'Для нескольких компонентов одной таблицы используй plot_components: '
                     'layout=overlay для общей шкалы или layout=stacked для отдельных панелей.')
         if name == 'export_project':
+            expected = explicit_chart_pairs(self.query)
+            if expected:
+                import project_store as ps
+                project = store.workspace.resolve(args.get('name'))
+                if project and args.get('folders'):
+                    root = ps.project_dir(project, store.workspace.root)
+                    mapping, error = ps._resolve_export_folders(root, args['folders'], args.get('folder_layout', 'auto'))
+                    if not error:
+                        actual = chart_source_pairs(p.relative_to(root).as_posix() for _, _, p in mapping)
+                        absent = sorted(expected - actual)
+                        if absent:
+                            return (f'В выбранных графиках отсутствуют запрошенные пары станция-дата: {absent}. '
+                                    'Получи данные и отдельные графики этих пар, затем включи их фактические пути в экспорт. '
+                                    'Повтор файла другого дня не заменяет отсутствующий график.')
             # Literal destination names are user constraints, including on retries.
             # Do not let a failed custom export silently become a default export.
             requested_folders = set(re.findall(
@@ -222,6 +261,12 @@ class Request:
 
     def missing(self, log: list[dict], store: Any) -> list[str]:
         missing = []
+        expected = explicit_chart_pairs(self.query)
+        exports = [e['export_result'] for e in log if e.get('ok') and e.get('export_result')]
+        if expected and exports:
+            absent = expected - chart_source_pairs(exports[-1].get('source_files', {}).values())
+            if absent:
+                missing.append(f'включить в архив графики запрошенных пар: {sorted(absent)}')
         for tool in self.required_operations:
             if not any(e.get('ok') and e.get('tool') == tool for e in log):
                 missing.append(f'выполнить {tool} и получить фактический результат')

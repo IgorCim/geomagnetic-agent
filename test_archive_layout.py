@@ -9,6 +9,7 @@ import pytest
 import project_store as ps
 import agent_core as ac
 from chat_session import SessionMemory
+from chat_session import Request, explicit_chart_pairs
 from test_chat_session import seed
 
 
@@ -31,6 +32,26 @@ def project(tmp_path, monkeypatch):
 
 def export(ws, folders, **kwargs):
     return ps.export_project(ws.project, root=ws.root, folders=folders, **kwargs)
+
+
+def test_explicit_pair_export_rejects_duplicate_day_without_banning_reuse(project):
+    ws, root, sources = project
+    query = ('Загрузи INTERMAGNET IRT и BOU за 2024-09-10 и 2024-09-11. '
+             'Для каждой из четырёх пар станция-дата построй отдельный HTML-график X.')
+    request = Request(query)
+    store = ac.FrameStore(workspace=ws)
+    folders = {'Обзор': [sources[0], sources[2]], 'Обзор/Детали': [sources[2]]}
+    assert request.check_call('export_project', {'folders': folders}, store)
+    for station, day in [('bou', '2024-09-10'), ('irt', '2024-09-11')]:
+        relative = f'{station}/{day}/X.html'
+        p = root / relative
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('chart')
+        folders['Обзор'].append(relative)
+    assert request.check_call('export_project', {'folders': folders}, store) is None
+    assert Request('Положи один график в две папки').check_call('export_project', {'folders': folders}, store) is None
+    assert not explicit_chart_pairs('Загрузи INTERMAGNET IRT с 2024-09-10 по 2024-09-11. Для каждой пары построй график.')
+    assert not explicit_chart_pairs('Загрузи INTERMAGNET IRT и BOU за 2024-09-10 и 2024-09-11.')
 
 
 def test_handler_exact_files_go_directly_to_numbered_folders(project):

@@ -978,8 +978,10 @@ def build_demo(brain: Any) -> gr.Blocks:
                 interactive=False,
                 wrap=True,
             )
-            with gr.Row():
-                build_zip = gr.Button("Создать отдельный ZIP всего проекта", scale=1)
+            gr.Markdown("**Готовый архив из ответа скачивается по имени в списке ниже.** "
+                        "Дополнительная сборка для этого не нужна.")
+            with gr.Accordion("Дополнительно: отдельный полный архив проекта", open=False):
+                build_zip = gr.Button("Создать дополнительный полный ZIP (без структуры из запроса)", scale=1)
             download = gr.DownloadButton(
                 label="Скачать проект (ZIP)", visible=False, scale=1
             )
