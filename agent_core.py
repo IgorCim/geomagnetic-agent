@@ -451,16 +451,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "folders": {
                         "type": "object",
                         "description": (
-                            "Optional custom folder view, only when the user explicitly "
-                            "asks for named folders. Keys are folder names; values are "
-                            "lists of project-relative paths, directories or globs. "
-                            "Canonical chart filenames are preserved inside them."
+                            "Folders (A/B, '.'=root) to project_chart_paths, dirs or globs."
                         ),
                         "additionalProperties": {
                             "type": "array",
                             "items": {"type": "string"},
                         },
                     },
+                    "folder_layout": {"type": "string", "enum": ["auto", "direct", "tree"],
+                                      "description": "auto(default): files directly, dirs/globs as tree; direct: all directly; tree: source paths."},
                     "sort_by": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -5242,6 +5241,7 @@ def _handle_export_project(args: dict[str, Any], store: FrameStore) -> tuple[Any
             root=store.workspace.root,
             archive_name=args.get("archive_name"),
             folders=args.get("folders"),
+            folder_layout=args.get("folder_layout", "auto"),
             sort_by=args.get("sort_by"),
             source_order=args.get("source_order"),
             include_index=args.get("include_index", True),
@@ -5253,6 +5253,7 @@ def _handle_export_project(args: dict[str, Any], store: FrameStore) -> tuple[Any
             project=name,
         ), f"export_project failed: {exc}"
     if projects.is_error(result):
+        result['project'] = name
         if result.get("error") in {"empty_export_folder", "invalid_folder_pattern"}:
             paths = sorted({row["relative_path"] for row in projects.read_chart_index(name, root=store.workspace.root)
                             if row.get("relative_path")})
@@ -5271,6 +5272,8 @@ def _handle_export_project(args: dict[str, Any], store: FrameStore) -> tuple[Any
         "files": result["files"],
         "charts": result["charts"],
         "folders": result["folders"],
+        "source_files": result.get("source_files", {}),
+        "archive_members": result.get("archive_members", []),
         "index": result["index"],
         "tree": store.workspace.tree_markdown(name),
     }, f"Exported project {result['project']!r} to {result['path']} ({result['size']})."
@@ -8155,6 +8158,8 @@ def run_agent(
                 if name == "get_statistics" and isinstance(payload, dict):
                     entry["statistics"] = {k: v for k, v in payload.items()
                                            if isinstance(v, dict) and "median" in v and "count" in v}
+                if name == 'export_project' and isinstance(payload, dict):
+                    entry['export_result'] = {k: payload[k] for k in ('project', 'path', 'filename', 'folders', 'source_files') if k in payload}
             # Keep every live handle, not just the active one. A wind fetch is
             # auxiliary and never becomes active, yet a second coupling metric
             # needs its exact name; the registry is what carries it to the next
@@ -8878,6 +8883,32 @@ def run_recovered(text: str, log: list[dict[str, Any]]) -> bool:
     return bool(_ANSWERED_RE.search(text or ""))
 
 
+def _export_failure_recovered(entry: dict[str, Any], later: list[dict[str, Any]]) -> bool:
+    """Recognise only a successful retry of the same named custom archive.
+
+    Other projects, lost destination folders, and a generic success claim do
+    not clear an export failure. Original diagnostics stay in tool_calls.
+    """
+    if entry.get('tool') != 'export_project' or entry.get('error') not in {
+        'empty_export_folder', 'invalid_folder_pattern', 'invalid_folder_name', 'archive_path_conflict'
+    }:
+        return False
+    args = entry.get('arguments') or {}
+    folders = args.get('folders')
+    project = entry.get('project') or args.get('name')
+    if not project or not isinstance(folders, dict) or not folders:
+        return False
+    archive = projects._archive_filename(args.get('archive_name'), f'{project}.zip')
+    for success in later:
+        result = success.get('export_result') or {}
+        if (success.get('tool') == 'export_project' and success.get('ok')
+                and result.get('project') == project and result.get('filename') == archive
+                and isinstance(result.get('folders'), dict)
+                and set(result['folders']) == set(folders) and result.get('source_files')):
+            return True
+    return False
+
+
 def _with_tool_failures(text: str, log: list[dict[str, Any]]) -> str:
     """Append any unrecovered tool failure to the final answer.
 
@@ -8892,6 +8923,11 @@ def _with_tool_failures(text: str, log: list[dict[str, Any]]) -> str:
     """
     text = _with_plot_tally(text, log)
     failures = _failure_entries(log)
+    recovered_exports = [entry for i, entry in enumerate(log) if entry in failures
+                         and _export_failure_recovered(entry, log[i + 1:])]
+    if recovered_exports:
+        failures = [entry for entry in failures if entry not in recovered_exports]
+        text += '\n\nЭкспорт выполнен после исправления параметров; промежуточные отказы сохранены в журнале.'
     if not failures:
         return text
     if run_recovered(text, log):

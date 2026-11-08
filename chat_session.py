@@ -127,7 +127,12 @@ class Request:
                 self.query, re.I))
             if requested_folders:
                 folders = args.get('folders')
-                if not isinstance(folders, dict) or not requested_folders.issubset(folders):
+                top_level = bool(re.search(r'верхнего\s+уровня|top[- ]level', self.query, re.I))
+                present = isinstance(folders, dict) and all(any(
+                    key == wanted or key.startswith(wanted + '/')
+                    or (not top_level and wanted in key.split('/'))
+                    for key in folders if isinstance(key, str)) for wanted in requested_folders)
+                if not present:
                     return (f'Сохрани запрошенные папки в folders: {sorted(requested_folders)!r}. '
                             'После ошибки нельзя заменять пользовательскую структуру обычным экспортом. '
                             'Используй фактические project_chart_paths из результатов построения графиков.')
@@ -275,6 +280,13 @@ class Request:
                 lines.append(f"- {entry['tool']}: {entry['note']}")
                 if entry.get('coordinate_result'):
                     lines.append(f"  {entry['coordinate_result']}")
+            exported = entry.get('export_result')
+            if exported:
+                members = list((exported.get('source_files') or {}).keys())
+                lines.append(f"- ZIP: `{exported.get('filename')}`; файлы внутри архива:")
+                lines.extend(f"  - `{member}`" for member in members[:30])
+                if len(members) > 30:
+                    lines.append(f"  Ещё {len(members) - 30} файлов; полный список в export_manifest.json.")
             calculation = entry.get("calculation")
             if calculation:
                 lines.append(f"- {entry['tool']}:")
@@ -357,7 +369,7 @@ class SessionMemory:
         days = list(dict.fromkeys(DATES.findall(question)))
         station = station_in(question)
         first = bool(re.search(r"перв\w*\s+(?:день|дн[яюе]|дат\w*)|first\s+day", q))
-        same = bool(re.search(r"тех\s+же\s+данн|того\s+же\s+дня|same\s+(?:day|data)", q))
+        same = bool(re.search(r"тех\s+же\s+данн|того\s+же\s+дня|(?:той|этой)\s+же\s+таблиц|same\s+(?:day|data|table)", q))
         correct = bool(re.search(r"корректн\w*\s+handle|правильн\w*\s+handle", q))
         if first and not days:
             candidates = ([h for h in self.ground if h.split(":")[1] == station]

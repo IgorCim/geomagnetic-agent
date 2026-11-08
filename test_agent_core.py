@@ -2901,10 +2901,10 @@ def test_llm_planner_complex_query_offline_mock():
 
 @pytest.mark.live_model
 def test_llm_planner_complex_query_real_model():
-    """End-to-end with the Qwen brain. Skips locally (no model on disk).
+    """Live planning shape only: the original placeholder query has no data oracle.
 
-    Must run in Kaggle: load_brain downloads ~5 GB, which is banned in local
-    runs unless GEOMAG_OFFLINE is not set.
+    A compact matrix is the intended plan; the old >10-step assertion penalised
+    that architecture. This does not execute invented dates or approve science.
     """
     if not ac.model_is_downloaded():
         pytest.skip("model not on disk; runs in Kaggle")
@@ -2917,11 +2917,32 @@ def test_llm_planner_complex_query_real_model():
         "всех 26 станций и построй графики; объедини всё в архив"
     )
     state = planner.plan(query)
-    tool_names = [t.tool_name for t in state.tasks]
-    assert len(state.tasks) > 10, f"expected a real plan, got {len(state.tasks)}"
-    assert "create_project" in tool_names
-    assert "fetch_observatory_data" in tool_names
-    assert "plot_components" in tool_names
+    _assert_bulk_plan_shape(state)
+
+
+def _assert_bulk_plan_shape(state):
+    tools = [task.tool_name for task in state.tasks]
+    assert tools.count('create_task_matrix') == 1, tools
+    assert tools.count('process_matrix_batch') == 1, tools
+    assert tools.index('create_task_matrix') < tools.index('process_matrix_batch'), tools
+    matrix = state.tasks[tools.index('create_task_matrix')].tool_args
+    batch = state.tasks[tools.index('process_matrix_batch')].tool_args
+    actions = set(matrix.get('actions', []))
+    assert actions & {'fetch', 'fetch_observatory_data'}, matrix
+    assert actions & {'plot', 'plot_components'}, matrix
+    assert batch.get('run_until_complete') is True, batch
+    assert all(tool in ac.TOOLS_BY_NAME for tool in tools), tools
+
+
+def test_bulk_plan_oracle_accepts_compact_plan_and_rejects_incomplete():
+    from types import SimpleNamespace as NS
+    create = NS(tool_name='create_task_matrix', tool_args={'actions': ['fetch_observatory_data', 'plot_components']})
+    process = NS(tool_name='process_matrix_batch', tool_args={'run_until_complete': True})
+    _assert_bulk_plan_shape(NS(tasks=[create, process]))
+    for tasks in ([create], [process, create], [create, create, process],
+                  [create, NS(tool_name='process_matrix_batch', tool_args={})]):
+        with pytest.raises(AssertionError):
+            _assert_bulk_plan_shape(NS(tasks=tasks))
 
 
 class _FetchThenPlotBrain:

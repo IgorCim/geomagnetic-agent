@@ -678,6 +678,7 @@ def _glob_case_insensitive(target: Path, text: str) -> list[Path]:
 def _resolve_export_folders(
     target: Path,
     folders: Any,
+    folder_layout: str = "tree",
 ) -> tuple[list[tuple[str, str, Path]] | None, dict[str, Any] | None]:
     """Resolve ``{folder: [path/glob, ...]}`` into concrete archive members."""
     if not isinstance(folders, dict) or not folders:
@@ -686,10 +687,23 @@ def _resolve_export_folders(
             "folders must be a non-empty object: {folder_name: [paths or globs]}.",
         )
     mapping: list[tuple[str, str, Path]] = []
+    if folder_layout not in {"tree", "direct", "auto"}:
+        return None, _error("invalid_folder_layout", "Use auto, direct or tree.")
     seen_folders: set[str] = set()
     seen_members: set[str] = set()
     for raw_name, raw_patterns in folders.items():
-        folder = _safe_export_component(raw_name)
+        text_name = str(raw_name or "").strip().replace('\\', '/')
+        parts = text_name.split('/')
+        safe_parts = []
+        for part in parts:
+            safe = _safe_export_component(part)
+            # Folder labels are user-visible: preserve ordinary Unicode names
+            # and internal spaces. Archive/HTML filename policy is unchanged.
+            if safe and all(ch.isalnum() or ch in ' -_.' for ch in part) and not part.endswith((' ', '.')):
+                safe = part
+            safe_parts.append(safe)
+        folder = ('.' if text_name == '.' else
+                  '/'.join(safe_parts) if all(safe_parts) else None)
         if folder is None:
             return None, _error(
                 "invalid_folder_name",
@@ -700,7 +714,8 @@ def _resolve_export_folders(
                 "duplicate_folder_name",
                 f"Folder name {folder!r} is used more than once (case-insensitive).",
             )
-        if folder.casefold() in {name.casefold() for name in _ROOT_METADATA_NAMES}:
+        reserved_roots = {name.casefold() for name in _ROOT_METADATA_NAMES} | {'_plotly'}
+        if folder.split('/')[0].casefold() in reserved_roots or parts[0].casefold() in reserved_roots:
             return None, _error(
                 "reserved_folder_name",
                 f"Folder name {folder!r} is reserved for archive metadata.",
@@ -735,6 +750,7 @@ def _resolve_export_folders(
                     f"Path/glob {pattern!r} in folder {folder!r} escapes the project.",
                 )
             candidates: list[Path] = []
+            exact_file = False
             if any(ch in text for ch in "*?["):
                 try:
                     for p in _glob_case_insensitive(target, text):
@@ -767,16 +783,22 @@ def _resolve_export_folders(
                     and _is_within(target, candidate)
                 ):
                     candidates = [candidate]
+                    exact_file = True
+            if not candidates:
+                return None, _error('empty_export_folder', f'Folder {folder!r}: no files matched {text!r}.', patterns=[text])
             for path in candidates:
                 try:
                     relative = path.resolve().relative_to(target.resolve()).as_posix()
                 except (OSError, ValueError):
                     continue
+                # De-duplicate by source, never by basename (different days may
+                # have identical chart filenames).
                 member = f"{folder}/{relative}"
                 if member in seen_members:
                     continue
                 seen_members.add(member)
-                mapping.append((folder, relative, path))
+                destination = path.name if folder_layout == 'direct' or (folder_layout == 'auto' and exact_file) else relative
+                mapping.append((folder, destination, path))
                 matches += 1
         if not matches:
             return None, _error(
@@ -784,7 +806,36 @@ def _resolve_export_folders(
                 f"Folder {folder!r} matched no files.",
                 patterns=patterns,
             )
+    # Resolve flattened filename collisions deterministically, independent of
+    # input order. The model chooses folders; code alone chooses filenames.
+    groups: dict[str, list[int]] = {}
+    for index, (folder, relative, path) in enumerate(mapping):
+        groups.setdefault(_archive_member(folder, relative).casefold(), []).append(index)
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+        for index in indexes:
+            folder, relative, path = mapping[index]
+            source = path.resolve().relative_to(target.resolve()).as_posix()
+            suffix = hashlib.sha256(source.encode('utf-8')).hexdigest()[:12]
+            destination = Path(relative)
+            mapping[index] = (folder, destination.with_name(f'{destination.stem}__{suffix}{destination.suffix}').as_posix(), path)
+    members = [_archive_member(folder, relative).casefold() for folder, relative, _ in mapping]
+    reserved = {name.casefold() for name in _ROOT_METADATA_NAMES} | {'_plotly'}
+    if len(members) != len(set(members)):
+        return None, _error('archive_path_conflict', 'Archive members collide; choose different destination folders.')
+    files = set(members) | reserved
+    directories = {folder.casefold() for folder, _, _ in mapping if folder != '.'}
+    for member in members + list(directories):
+        parts = member.split('/')
+        if (member in reserved or any('/'.join(parts[:i]) in files for i in range(1, len(parts)))
+                or (member in directories and member in files)):
+            return None, _error('archive_path_conflict', f'A file conflicts with an archive folder or metadata: {member}')
     return mapping, None
+
+
+def _archive_member(folder: str, relative: str) -> str:
+    return relative if folder == '.' else f'{folder}/{relative}'
 
 
 def project_manifest(
@@ -1084,6 +1135,7 @@ def export_project(
     source_order: Sequence[str] | None = None,
     include_index: bool = True,
     compact: bool = False,
+    folder_layout: str = "tree",
 ) -> dict[str, Any]:
     """Zip a project and return where the archive is.
 
@@ -1177,7 +1229,7 @@ def export_project(
     mapping: list[tuple[str, str, Path]] | None = None
     folder_counts: dict[str, int] = {}
     if folders is not None:
-        mapping, error = _resolve_export_folders(target, folders)
+        mapping, error = _resolve_export_folders(target, folders, folder_layout)
         if error is not None:
             return error
         assert mapping is not None
@@ -1216,10 +1268,11 @@ def export_project(
         for folder, relative, path in mapping:
             if path.suffix.lower() != ".html" or relative in _ROOT_METADATA_NAMES:
                 continue
-            chart = chart_by_relative.get(relative) or _fallback_chart_row(
+            source_relative = path.resolve().relative_to(target.resolve()).as_posix()
+            chart = chart_by_relative.get(source_relative) or _fallback_chart_row(
                 target, path
             )
-            index_rows.append(_index_row(chart, f"{folder}/{relative}", 0))
+            index_rows.append(_index_row({**chart, 'file': Path(relative).name}, _archive_member(folder, relative), 0))
     index_rows = sort_charts(index_rows, sort_by, source_order=source_order)
     for order, row in enumerate(index_rows, 1):
         row["order"] = order
@@ -1236,7 +1289,7 @@ def export_project(
             not in {_EXPORT_INDEX_CSV, _EXPORT_INDEX_HTML, _EXPORT_MANIFEST}
         ]
     else:
-        planned = [f"{folder}/{relative}" for folder, relative, _path in mapping]
+        planned = [_archive_member(folder, relative) for folder, relative, _path in mapping]
         for root_name in (_MANIFEST, CHARTS_INDEX):
             candidate = target / root_name
             if candidate.is_file():
@@ -1271,6 +1324,9 @@ def export_project(
             else {"layout": "canonical"}
         ),
         "compact": compact,
+        "folder_layout": folder_layout if mapping is not None else 'canonical',
+        "source_files": ({_archive_member(folder, relative): path.resolve().relative_to(target.resolve()).as_posix()
+                          for folder, relative, path in mapping} if mapping is not None else {}),
         "plotly_asset": _PLOTLY_ASSET if include_plotly_asset else None,
         "files": planned,
         "charts": index_rows,
@@ -1321,7 +1377,7 @@ def export_project(
                 write_member(archive, path, arcname)
         else:
             for folder, relative, path in mapping:
-                write_member(archive, path, f"{folder}/{relative}")
+                write_member(archive, path, _archive_member(folder, relative))
             for root_name in (_MANIFEST, CHARTS_INDEX):
                 candidate = target / root_name
                 if candidate.is_file():
@@ -1357,6 +1413,8 @@ def export_project(
         "size": _human(size),
         "files": len(written),
         "charts": len(index_rows),
+        "archive_members": planned,
+        "source_files": export_manifest['source_files'],
         "stations": sorted(stations),
         "dates": sorted(dates),
         "manifest": str(target / _MANIFEST),
