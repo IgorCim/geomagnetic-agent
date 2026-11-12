@@ -1,0 +1,11 @@
+f"[SELF-CORRECTION]: Инструмент '{name}' не существует. Выбери доступный."
+
+f"[SELF-CORRECTION]: Используй apply_physics_formula с metric='{metric}'."
+
+f"[SELF-CORRECTION]: '{name}' не существует. Используй {real}."
+
+f"[SELF-CORRECTION]: '{name}' не существует. "
+            f"Ближайший доступный инструмент: {match}."
+
+f"[SELF-CORRECTION]: Инструмент '{name}' не существует. "
+            f"Доступные сейчас: {shown}."

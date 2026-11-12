@@ -1,0 +1,1062 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "fetch_observatory_data",
+      "description": "Download one day of minute data for one INTERMAGNET observatory (three-letter IAGA code). Call this first, before any analysis. Returns df_descriptor 'raw:<STATION>:<date>'; reuse it verbatim.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "station_code": {
+            "type": "string",
+            "description": "Three-letter IAGA station code, e.g. IRT. Known: IRT=Иркутск, MOS=Москва, NVS=Новосибирск, SPG=Санкт-Петербург, YAK=Якутск, KHB=Хабаровск, MGD=Магадан, VLA=Владивосток, PET=Паратунка (Камчатка), ARS=Арти, BOX=Борок, TIK=Тикси"
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start date, YYYY-MM-DD."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End date, YYYY-MM-DD (inclusive)."
+          },
+          "data_type": {
+            "type": "string",
+            "enum": [
+              "definitive",
+              "quasi-def",
+              "adjusted",
+              "reported",
+              "best-avail",
+              "auto"
+            ],
+            "description": "Publication state. 'auto' walks a fallback chain. Default 'definitive'."
+          },
+          "samples_per_day": {
+            "type": "string",
+            "enum": [
+              "Minute",
+              "Second"
+            ],
+            "description": "Temporal resolution. Default 'Minute'."
+          }
+        },
+        "required": [
+          "station_code",
+          "start_date",
+          "end_date"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_project",
+      "description": "Start a named project. Every later artifact is filed under it as <station>/<date>/ with a manifest recording the observatory, the data version, the download time and the agent commit. Call this before fetch_many or export_project. Calling it again with the same name reuses the existing project rather than failing.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Short human-readable project name, e.g. 'Boreal storm 2024'. Letters, digits, spaces, '-' and '_' only; the name is normalised into a folder name."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "fetch_many",
+      "description": "Download one date range for SEVERAL observatories in one call. Use instead of repeating fetch_observatory_data. Stations share one download budget; each returns its own df_descriptor. A station that fails is listed under 'failed' while the rest still succeed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "stations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Three-letter IAGA codes."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start date, YYYY-MM-DD."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End date, YYYY-MM-DD (inclusive)."
+          },
+          "data_type": {
+            "type": "string",
+            "enum": [
+              "definitive",
+              "quasi-def",
+              "adjusted",
+              "reported",
+              "best-avail",
+              "auto"
+            ],
+            "description": "Publication state. 'auto' walks a fallback chain. Default 'definitive'."
+          },
+          "samples_per_day": {
+            "type": "string",
+            "enum": [
+              "Minute",
+              "Second"
+            ],
+            "description": "Temporal resolution. Default 'Minute'."
+          },
+          "max_downloads": {
+            "type": "integer",
+            "description": "Ceiling on downloads for this call, shared by all stations. Defaults to 8. Windows beyond the ceiling are refused and listed under 'refused' rather than fetched."
+          },
+          "project": {
+            "type": "string",
+            "description": "Project to file the data under. Defaults to the open project."
+          }
+        },
+        "required": [
+          "stations",
+          "start_date",
+          "end_date"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_projects",
+      "description": "List the projects currently on disk.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "export_project",
+      "description": "Zip a project: canonical tree, charts, manifests and a metadata index. Returns the archive path.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Project to export. Defaults to the open project."
+          },
+          "archive_name": {
+            "type": "string",
+            "description": "Optional ZIP name, only when the user explicitly asks; '.zip' is added if absent."
+          },
+          "folders": {
+            "type": "object",
+            "description": "Folders (A/B, '.'=root) to project_chart_paths, dirs or globs.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "folder_layout": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "direct",
+              "tree"
+            ],
+            "description": "auto(default): files directly, dirs/globs as tree; direct: all directly; tree: source paths."
+          },
+          "sort_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Index order, e.g. ['source','station','date'] or ['date','source']. Default station,date,components,source,file."
+          },
+          "source_order": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Custom source order for the index, e.g. ['OMNI','INTERMAGNET','KYOTO','SUPERMAG']."
+          },
+          "include_index": {
+            "type": "boolean",
+            "description": "Write index.csv and index.html. Default true."
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_task_matrix",
+      "description": "Plan a large batch job as ONE matrix grouped BY STATION: one task per station carrying all its event dates. Use INSTEAD of a long list of tool calls when the job spans many stations/dates (>~15 units). Then call process_matrix_batch once with run_until_complete=True.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Event dates, YYYY-MM-DD."
+          },
+          "stations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Three-letter IAGA codes."
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What to do for each (event, station) cell, in order. Words 'fetch', 'calc_HDI', 'plot' map to the handlers; full handler names also work. Default: fetch, calc_HDI, plot."
+          },
+          "project_name": {
+            "type": "string",
+            "description": "Project that stores the results and the matrix."
+          },
+          "shared_args": {
+            "type": "object",
+            "description": "Arguments shared by every cell. For plot_space_weather_comparison supply solar_wind_df_descriptor (required), ground_component (default H) and solar_wind_components (default Bz,V). The matrix supplies ground_df_descriptor and a unique filename per cell.",
+            "additionalProperties": true
+          },
+          "export_args": {
+            "type": "object",
+            "description": "Optional export_project arguments used by the automatic batch export: archive_name, folders, sort_by, source_order, include_index. Only set when the user explicitly asks for a custom archive/folder view.",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "events",
+          "stations",
+          "actions",
+          "project_name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "process_matrix_batch",
+      "description": "Execute the pending STATION tasks of a task matrix (read from the matrix_path create_task_matrix returned). run_until_complete=True finishes ALL pending stations in this one call, builds the project archive automatically, and returns a summary starting 'МАССОВАЯ ОБРАБОТКА ЗАВЕРШЕНА'; no separate export_project call is needed. False processes only batch_size stations (debugging).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "matrix_path": {
+            "type": "string",
+            "description": "The matrix_path returned by create_task_matrix."
+          },
+          "run_until_complete": {
+            "type": "boolean",
+            "description": "True = process every pending station to completion inside this one call (recommended). False = process only batch_size stations (debugging)."
+          },
+          "batch_size": {
+            "type": "integer",
+            "description": "Stations per call when run_until_complete=False. Default 5. Ignored when run_until_complete=True."
+          },
+          "export_args": {
+            "type": "object",
+            "description": "Optional export_project arguments for the automatic archive. Overrides export_args stored in the matrix.",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "matrix_path"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "calculate_derived_components",
+      "description": "Compute the horizontal field H, declination D and inclination I from the Cartesian components X/Y/Z. Use this whenever H is needed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df_descriptor": {
+            "type": "string",
+            "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "H",
+                "D",
+                "I"
+              ]
+            },
+            "description": "Subset to compute. Default all three."
+          }
+        },
+        "required": [
+          "df_descriptor"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_statistics",
+      "description": "Statistics (min/max/mean/median/std/count) for numeric frame columns, including Dst/Kp. Returns measured numbers.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df_descriptor": {
+            "type": "string",
+            "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Numeric columns, case-insensitive. H/D/I can be derived."
+          },
+          "digits": {
+            "type": "integer",
+            "description": "Decimal places. Default 2."
+          }
+        },
+        "required": [
+          "df_descriptor"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "detect_anomalies",
+      "description": "Flag samples that deviate from the series mean by more than N standard deviations. Use for outlier and disturbance screening.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df_descriptor": {
+            "type": "string",
+            "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+          },
+          "component": {
+            "type": "string",
+            "enum": [
+              "X",
+              "Y",
+              "Z",
+              "F",
+              "H",
+              "D",
+              "I"
+            ]
+          },
+          "sigma_threshold": {
+            "type": "number",
+            "description": "Threshold in sigmas. Default 3.0."
+          }
+        },
+        "required": [
+          "df_descriptor"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "calculate_derived_math",
+      "description": "Measure a component over time as a scalar you may quote: 'delta' (max-min variation), 'dH_dt' (rate of change in nT/min), or 'anomaly' (value minus baseline_value from calculate_baseline). Returns a new derived df_descriptor holding the series, plus the scalar.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df_descriptor": {
+            "type": "string",
+            "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "delta",
+              "anomaly",
+              "dH_dt"
+            ],
+            "description": "'delta' = max - min over the window; 'dH_dt' = rate of change in nT/min; 'anomaly' = value minus baseline_value."
+          },
+          "component": {
+            "type": "string",
+            "enum": [
+              "X",
+              "Y",
+              "Z",
+              "F",
+              "H",
+              "D",
+              "I"
+            ],
+            "description": "Component to measure. H is the usual choice."
+          },
+          "window": {
+            "type": "integer",
+            "description": "Optional block size in samples for metric='delta'. Omit it to get one variation for the whole day; set it to get the largest excursion within any block."
+          },
+          "baseline_value": {
+            "type": "number",
+            "description": "Required for metric='anomaly'. The quiet reference to subtract, e.g. the 'baseline' from calculate_baseline."
+          }
+        },
+        "required": [
+          "df_descriptor",
+          "metric"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "calculate_baseline",
+      "description": "Establish a reference level for a component. mode='night' takes the mean over the specified UTC window (00:00-04:00 by default). The window is not automatically selected for quietness and is not necessarily local night. Returns the baseline value; pass it to calculate_derived_math with metric='anomaly'.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df_descriptor": {
+            "type": "string",
+            "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+          },
+          "component": {
+            "type": "string",
+            "enum": [
+              "X",
+              "Y",
+              "Z",
+              "F",
+              "H",
+              "D",
+              "I"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "night",
+              "full"
+            ],
+            "description": "'night' = mean over the quiet night window (default). 'full' = mean over every sample, which includes the storm and so is a poor quiet reference."
+          },
+          "night_hours": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Night window as [start_hour, end_hour] UTC, default [0, 4]."
+          }
+        },
+        "required": [
+          "df_descriptor"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "evaluate_custom_formula",
+      "description": "Compute a custom arithmetic expression over a frame's columns; returns a new plottable series. Use for a quantity the built-in tools do not cover, e.g. 'sqrt(X**2 + Y**2) + Z/10'. Columns: D, F, H, I, X, Y, Z plus the frame's own numeric columns. Operators: + - * / % **. Functions: abs, acos, asin, atan, atan2, cos, degrees, exp, hypot, log, log10, maximum, minimum, power, radians, sign, sin, sqrt, tan, plus pi and e. The formula is parsed, never executed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df_descriptor": {
+            "type": "string",
+            "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+          },
+          "formula": {
+            "type": "string",
+            "description": "The expression, e.g. 'sqrt(X**2 + Y**2) + Z/10'. Column names must be upper case."
+          }
+        },
+        "required": [
+          "df_descriptor",
+          "formula"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "plot_components",
+      "description": "Plot components of ONE table to HTML. Accepts real columns case-insensitively, including X/Y/Z/F/H/D/I, dst_proxy and Kyoto Dst/Kp. Returns the file path.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df_descriptor": {
+            "type": "string",
+            "description": "A descriptor from a previous tool, copied EXACTLY from its 'frame_handle': a slot like 'raw:irt:2024-09-10' or a family name 'raw' / 'derived' / 'anomalies'. Never invent one; see 'available_handles' in the last result."
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "X",
+                "Y",
+                "Z",
+                "F",
+                "H",
+                "D",
+                "I",
+                "dst_proxy",
+                "Dst",
+                "Kp"
+              ]
+            },
+            "description": "Components/columns to plot, e.g. ['Dst','Kp'] for the Kyoto indices frame or ['H','dst_proxy'] for a derived observatory frame."
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "stacked",
+              "overlay"
+            ],
+            "description": "auto by units; stacked separate panels in one HTML; overlay shared axis."
+          },
+          "title": {
+            "type": "string",
+            "description": "Chart title."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Output file name, .html."
+          }
+        },
+        "required": [
+          "df_descriptor",
+          "components"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "plot_comparison",
+      "description": "Overlay two different days of one component on a shared time-of-day axis. Use it to compare, for example, a storm day against a quiet day. ЗАПРЕЩЕНО использовать для сравнения данных солнечного ветра и магнитного поля Земли: инструмент умеет только две даты одной компоненты одного типа данных. Для Земли vs космоса используй ТОЛЬКО plot_space_weather_comparison.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df1": {
+            "type": "string",
+            "description": "First day: a frame_handle copied from a previous tool result, e.g. 'raw:irt:2024-09-10'."
+          },
+          "df2": {
+            "type": "string",
+            "description": "Second day: a frame_handle from a *different* slot than df1, e.g. 'raw:irt:2024-09-11'."
+          },
+          "component": {
+            "type": "string",
+            "enum": [
+              "X",
+              "Y",
+              "Z",
+              "F",
+              "H",
+              "D",
+              "I",
+              "dst_proxy",
+              "Dst",
+              "Kp"
+            ],
+            "description": "Component to compare across the two frames; any real column, including the Kyoto indices 'Dst'/'Kp'."
+          },
+          "title": {
+            "type": "string",
+            "description": "Chart title."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Output file name, .html."
+          }
+        },
+        "required": [
+          "df1",
+          "df2",
+          "component"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_station_geomagnetic_coords",
+      "description": "Tilted-dipole geomagnetic coordinates (geomag_lat, geomag_lon) of one station. USE when the user asks how far north a station is in geomagnetic terms, or before comparing storm amplitudes across stations. DO NOT USE to get the station's geographic latitude/longitude, and do not call it for data download.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "station_code": {
+            "type": "string",
+            "description": "IAGA station code"
+          }
+        },
+        "required": [
+          "station_code"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "calculate_mlt",
+      "description": "Magnetic Local Time (MLT) of one station at a UTC instant; mlt_hours in [0,24), MLT=12 means magnetic noon. USE for 'what magnetic time is it at X'. DO NOT USE when the user wants longitude-based mean solar local time -- that is calculate_local_time; MLT and LT differ by the magnetic-vs-geographic longitude.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "station_code": {
+            "type": "string",
+            "description": "IAGA station code"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "ISO 8601 UTC timestamp"
+          }
+        },
+        "required": [
+          "station_code",
+          "timestamp"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "group_stations_by_mlt",
+      "description": "Group several stations into MLT bins at one UTC instant. USE to see which stations sit in the same magnetic-time sector. DO NOT USE for local/civil time, and do not call it once per station -- it takes the whole list.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "stations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IAGA station codes"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "ISO 8601 UTC timestamp"
+          },
+          "bin_hours": {
+            "type": "integer",
+            "description": "Bin width in hours (default 1)"
+          }
+        },
+        "required": [
+          "stations",
+          "timestamp"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "calculate_local_time",
+      "description": "Local mean solar time (LT): UTC + geographic longitude/15, wrapped to [0,24). Returns lt_hours, lt_hm and local_mean_solar_datetime. Not civil timezone time, not apparent solar time (no equation-of-time correction), not magnetic local time. USE for longitude-based local/solar time; magnetic local time uses calculate_mlt.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "station_code": {
+            "type": "string",
+            "description": "IAGA station code"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "ISO 8601 UTC timestamp"
+          }
+        },
+        "required": [
+          "station_code",
+          "timestamp"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "apply_physics_formula",
+      "description": "Apply a physics formula to a stored frame and return a derived frame with the new column. For solar-wind metrics, pass 'solar_wind_handle': the system aligns solar wind data with the ground station frame automatically.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "df_descriptor": {
+            "type": "string",
+            "description": "Handle of the ground station or indices frame, from 'frame_handle'."
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "ey_coupling",
+              "burton_coupling",
+              "akasofu_epsilon",
+              "peak_dhdt",
+              "substorm_onset",
+              "eej_index",
+              "dst_proxy",
+              "ssc_flag",
+              "sq_baseline",
+              "deltas",
+              "gic"
+            ],
+            "description": "Name of the metric to calculate. Available: ey_coupling, burton_coupling, akasofu_epsilon, peak_dhdt, substorm_onset, eej_index, dst_proxy, ssc_flag, sq_baseline, deltas, gic."
+          },
+          "solar_wind_handle": {
+            "type": "string",
+            "description": "Handle of solar wind frame. Required for: ey_coupling, burton_coupling, akasofu_epsilon."
+          },
+          "reference_handle": {
+            "type": "string",
+            "description": "Handle of reference station frame. Required for: eej_index."
+          },
+          "window_seconds": {
+            "type": "integer",
+            "description": "Window size in samples for 'peak_dhdt' (default 10 = 10 minutes on a 1-minute grid)."
+          }
+        },
+        "required": [
+          "df_descriptor",
+          "metric"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "calculate_eej_index",
+      "description": "Use for the equatorial electrojet, EEJ, or the H-difference between an equatorial and an off-equatorial station. Downloads BOTH stations for the date range, aligns them and returns H_equatorial - H_reference as a derived frame. Do NOT use apply_physics_formula for EEJ (one frame only). REQUIRED: 'equatorial_station', 'reference_station' (IAGA codes) and 'start_date'. Require an explicit justified pair; never call IRT equatorial. Raw H-difference is a proxy, not validated EEJ. Report missing data; never substitute another date/station.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "equatorial_station": {
+            "type": "string",
+            "description": "Three-letter IAGA code on the dip equator, e.g. IRT."
+          },
+          "reference_station": {
+            "type": "string",
+            "description": "Three-letter IAGA code 6-8 degrees away in latitude, e.g. ABG."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start date, YYYY-MM-DD."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End date, YYYY-MM-DD (inclusive). Defaults to start_date."
+          }
+        },
+        "required": [
+          "equatorial_station",
+          "reference_station",
+          "start_date"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "plot_overlay",
+      "description": "Draw ONE component from SEVERAL stations on ONE chart (per-station nT offset; x axis UT/LT/MLT; north-first; auto-fetches missing days). REQUIRED: 'stations' = LIST of IAGA codes, e.g. ['IRT'] (NOT a frame handle); 'dates' = list of YYYY-MM-DD, e.g. ['2024-09-12']; 'component' = one string, e.g. 'H'. 'df1'/'df2' DO NOT EXIST here. Correct call: {\"stations\": [\"IRT\"], \"dates\": [\"2024-09-12\"], \"component\": \"H\"}. Two days of one station → plot_comparison. Earth-vs-solar-wind → ONLY plot_space_weather_comparison.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "stations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "REQUIRED. List of IAGA station codes to overlay, e.g. ['IRT'] or ['IRT','API','BSL']. A list of codes, never a df1/df2 frame handle."
+          },
+          "dates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Dates as YYYY-MM-DD; one date shared by all stations, e.g. ['2024-09-12']."
+          },
+          "component": {
+            "type": "string",
+            "enum": [
+              "X",
+              "Y",
+              "Z",
+              "F",
+              "H",
+              "D",
+              "I"
+            ],
+            "description": "Single component to overlay, e.g. 'H'. Default 'H'."
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Alias for 'component': a list, e.g. ['H']. First entry is drawn; must be a frame column (X/Y/Z/F/H/D/I)."
+          },
+          "offsets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "nT shift per station, e.g. {'IRT': 0, 'API': 150}."
+          },
+          "time_system": {
+            "type": "string",
+            "enum": [
+              "UT",
+              "LT",
+              "MLT"
+            ],
+            "description": "X-axis time system, default UT."
+          },
+          "title": {
+            "type": "string",
+            "description": "Chart title."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Output file name, .html."
+          }
+        },
+        "required": [
+          "stations",
+          "dates"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "plot_space_weather_comparison",
+      "description": "КРИТИЧЕСКИ ВАЖНО: используй для сравнения Земли и космоса -- компонент Земли (H, dst_proxy) с солнечным ветром (Bz, V, By, Np). Dual-axis: GROUND (left) vs SOLAR-WIND (right); L1 aligned to the observatory clock. НЕ заменяй plot_overlay/plot_comparison -- они не смешивают Землю и ветер. Перед вызовом: (1) fetch_observatory_data (raw:<station>:<дата>); (2) apply_physics_formula(metric='dst_proxy'); (3) fetch_solar_wind (sw:omni:<дата>). ground_component: H, dst_proxy или dH_dt. НЕ 'Dst' — это глобальный индекс Kyoto, не компонент.\nEXAMPLE: {\"ground_df_descriptor\": \"derived:irt:2024-09-12\", \"solar_wind_df_descriptor\": \"sw:omni:2024-09-12\", \"ground_component\": \"H\", \"solar_wind_components\": [\"Bz\",\"V\"]}\nWARNING: NOT 'frame_handle', 'df1', 'df2', 'stations' -- use EXACTLY 'ground_df_descriptor' and 'solar_wind_df_descriptor'.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ground_df_descriptor": {
+            "type": "string",
+            "description": "Ground handle, e.g. 'raw:irt:2024-09-12' or a 'derived:...' frame with 'dst_proxy'."
+          },
+          "solar_wind_df_descriptor": {
+            "type": "string",
+            "description": "Handle from fetch_solar_wind, e.g. 'sw:omni:2024-09-12'."
+          },
+          "ground_component": {
+            "type": "string",
+            "description": "LEFT axis: 'H', 'dst_proxy' or 'dH_dt'. NOT 'Dst'."
+          },
+          "solar_wind_components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "RIGHT axis, e.g. ['Bz','V'] (also Bx, By, Np)."
+          },
+          "title": {
+            "type": "string",
+            "description": "Chart title."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Output file name, .html."
+          }
+        },
+        "required": [
+          "ground_df_descriptor",
+          "solar_wind_df_descriptor",
+          "ground_component",
+          "solar_wind_components"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "fetch_solar_wind",
+      "description": "Download L1 solar-wind data (NASA/OMNI, 1-minute: speed V, density Np, temperature T, IMF Bx/By/Bz in GSM) for a date range. USE this to find the CAUSE of a geomagnetic storm (southward Bz + fast V). Returns frame_handle 'sw:omni:<START_DATE>' to pass to apply_physics_formula (metric='ey_coupling'). DO NOT USE for observatory data.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "description": "Start date, YYYY-MM-DD (UTC)."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."
+          }
+        },
+        "required": [
+          "start_date"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "fetch_geomagnetic_indices",
+      "description": "Download geomagnetic activity indices (Kyoto WDC: hourly Dst, 3-hourly Kp) for a date range -- the storm SEVERITY record. USE this to VALIDATE a local proxy: compare the station's 'dst_proxy'/'dH_dt' against the official Dst and Kp. USE alongside fetch_solar_wind to describe a storm. Returns frame_handle 'idx:kyoto:<START_DATE>' whose plottable columns are 'Dst' (nT) and 'Kp' (0-9); draw them with plot_components. DO NOT USE for observatory magnetograms.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "description": "Start date, YYYY-MM-DD (UTC)."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."
+          }
+        },
+        "required": [
+          "start_date"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_noaa_space_weather_context",
+      "description": "Official NOAA SWPC layer: current geomagnetic alerts (G1-G5), the 3-day planetary Kp outlook, the GOES X-ray flare catalogue. Correlate these official figures with local observatory data and Kyoto indices. NOT for raw solar-wind measurements (V, Bz, ...): that is fetch_solar_wind. query_type picks one of 'alerts' | 'forecast' | 'solar_events'.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query_type": {
+            "type": "string",
+            "enum": [
+              "alerts",
+              "forecast",
+              "solar_events"
+            ],
+            "description": "'alerts' = active geomagnetic alerts/warnings (G1-G5); 'forecast' = 3-day Kp/G-scale forecast; 'solar_events' = X-ray flare catalogue for a date range."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start date, YYYY-MM-DD (UTC). Used by 'solar_events'."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End date, YYYY-MM-DD (UTC), inclusive. Defaults to start_date."
+          }
+        },
+        "required": [
+          "query_type"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "fetch_supermag_data",
+      "description": "Скачивает данные с базы SuperMAG. Используйте это для получения возмущенных компонент (dX, dY, dZ) с уже удаленной базовой линией, или для получения глобальных индексов суббурь (SME, SML, SMU), указав data_type='indices'. station_code НЕОБЯЗАТЕЛЕН: при data_type='indices' его передавать не нужно.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "station_code": {
+            "type": "string",
+            "description": "НЕОБЯЗАТЕЛЕН. Нужен только при data_type='sites' (напр. 'IRT'); при 'indices' игнорируется."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Начальная дата, YYYY-MM-DD (UTC)."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "Конечная дата, YYYY-MM-DD (UTC), включительно. Максимум 32 дня."
+          },
+          "data_type": {
+            "type": "string",
+            "enum": [
+              "sites",
+              "indices"
+            ],
+            "description": "'sites' = минутные данные станции dX/dY/dZ (базовая линия уже удалена); 'indices' = глобальные SME/SML/SMU, станция не нужна."
+          }
+        },
+        "required": [
+          "start_date"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_iswa_perturbation_map",
+      "description": "Карта наземных возмущений ISWA (WMS ground_mag_perturbation) — ДЕКОМИССИРОВАНА: NASA CCMC удалила публичный WMS-слой при миграции, инструмент вернёт service_decommissioned. SuperMAG SME/SML/SMU — временные ряды индексов, не замена пространственной карте.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "description": "Момент, ISO 8601 UTC, напр. '2024-09-12T12:00:00Z'."
+          },
+          "bbox": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "[min_lon, min_lat, max_lon, max_lat]; по умолчанию весь мир."
+          },
+          "width": {
+            "type": "integer",
+            "description": "Ширина PNG, px (по умолчанию 1024)."
+          },
+          "height": {
+            "type": "integer",
+            "description": "Высота PNG, px (по умолчанию 512)."
+          }
+        },
+        "required": [
+          "timestamp"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_iswa_forecast",
+      "description": "Прогноз Dst/Kp из ISWA (HAPI): Kp на 3-часовой сетке — наблюдённый/оценённый/предсказанный (поле kp_kind); Dst — nowcast Kyoto, вперёд не прогнозируется. Аргументов не требует.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  }
+]
