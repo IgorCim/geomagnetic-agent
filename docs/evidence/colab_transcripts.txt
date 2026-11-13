@@ -1,5 +1,5 @@
-ВИДЕО 1 — [ссылка появится после публикации]
-ВИДЕО 2 — [ссылка появится после публикации]
+ВИДЕО 1 — https://disk.yandex.ru/d/Gza4QU4eH-ZEwQ
+ВИДЕО 2 — https://drive.google.com/file/d/1a2O-9O9ultBbwAR9-vwg3Mk6oFJ2DwcT/view?usp=drivesdk
 
 ПОЛНЫЙ ПРОГОН
 Подготовка полного прогона в Colab…
